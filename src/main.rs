@@ -227,224 +227,256 @@ fn find_dir(name: &str, path: &Path) -> Result<Option<PathBuf>> {
     Ok(None)
 }
 
-fn parse_wit(path: &Path, world: Option<&str>) -> Result<(Resolve, WorldId)> {
-    let mut resolve = Resolve::default();
-    let pkg = if path.is_dir() {
-        resolve.push_dir(&path)?.0
-    } else {
-        let pkg = UnresolvedPackage::parse_file(path)?;
-        resolve.push(pkg, &Default::default())?
+fn generate_bindings((resolve, world): &(Resolve, WorldId)) -> Result<Bindings> {
+    // Generate a Python script which declares the types and the imports (which pass their arguments in an array to
+    // a low-level `call_import` function defined in Rust, which in turn marshals them using the canonical ABI and
+    // calls the real `call_import`) using a factored-out version of `wasmtime-py`'s `InterfaceGenerator`.
+    // `call_import` should take a `pyo3::Python` and a slice of `&PyAny`s.
+
+    // Then, build `Vec<String>`s for imports, exports, and types.  We'll refer to the functions and types by
+    // indexes into those arrays in the generated code below.
+
+    // Finally, generate Wasm functions for each import and export which lift to and lower from `&PyAny`s.  For
+    // exports, we start by loading the arguments into a stack-based array and passing control to Rust, which will
+    // call back with the Python GIL into a generated function which does argument lifting, then calls the Python
+    // function, and finally calls another generated function to do result lowering, returning the result back to
+    // the original function.
+
+    let mut gen = WorldBindgen {
+        resolve: &resolve,
+        types: Vec::new(),
+        type_map: HashMap::new(),
+        imports: Vec::new(),
+        exports: Vec::new(),
     };
-    let world = resolve.select_world(pkg, world.as_deref())?;
-    Ok((resolve, world))
+    gen.visit_items(&resolve.worlds[world].imports, Direction::Import)?;
+    gen.visit_items(&resolve.worlds[world].exports, Direction::Export)?;
 }
 
-fn visit_type_def(
-    resolve: &Resolve,
-    type_def: &wit_parser::TypeDef,
-    types: &mut Vec<Type>,
-    type_map: &mut HashMap<TypeId, usize>,
-) -> TypeDef {
-    TypeDef {
-        name: type_def.name.to_owned(),
-        kind: match &type_def.kind {
-            wit_parser::TypeDef::Record(record) => TypeDef::Record {
-                fields: record
-                    .fields
-                    .iter()
-                    .map(|field| {
-                        (
-                            field.name.to_owned(),
-                            visit_type(resolve, field.ty, types, type_map),
-                        )
-                    })
-                    .collect(),
-            },
-            wit_parser::TypeDef::Flags(flags) => TypeDef::Flags {
-                flags: flags
-                    .flags
-                    .iter()
-                    .map(|flag| flag.name().to_owned())
-                    .collect(),
-            },
-            wit_parser::TypeDef::Tuple(tuple) => TypeDef::Tuple {
-                types: record
-                    .types
-                    .iter()
-                    .map(|ty| visit_type(resolve, *ty, types, type_map))
-                    .collect(),
-            },
-            wit_parser::TypeDef::Variant(variant) => TypeDef::Variant {
-                cases: record
-                    .cases
-                    .iter()
-                    .map(|case| {
-                        (
-                            case.name.to_owned(),
-                            case.ty.map(|ty| visit_type(resolve, ty, types, type_map)),
-                        )
-                    })
-                    .collect(),
-            },
-            wit_parser::TypeDef::Enum(en) => TypeDef::Enum {
-                cases: record.cases.iter().map(|case| case.name.to_owned()),
-            },
-            wit_parser::TypeDef::Option(ty) => {
-                TypeDef::Option(visit_type(resolve, *ty, types, type_map))
-            }
-            wit_parser::TypeDef::Result(result) => TypeDef::Result {
-                ok: result.ok.map(|ty| visit_type(resolve, ty, types, type_map)),
-                err: result
-                    .err
-                    .map(|ty| visit_type(resolve, ty, types, type_map)),
-            },
-            wit_parser::TypeDef::Union(union) => TypeDef::Union {
-                cases: union
-                    .cases
-                    .iter()
-                    .map(|case| visit_type(resolve, case.ty, types, type_map))
-                    .collect(),
-            },
-            wit_parser::TypeDef::List(ty) => {
-                TypeDef::List(visit_type(resolve, *ty, types, type_map))
-            }
-            wit_parser::TypeDef::Future(ty) => {
-                TypeDef::Future(ty.map(|ty| visit_type(resolve, ty, types, type_map)))
-            }
-            wit_parser::TypeDef::Stream(stream) => TypeDef::Stream {
-                element: result
-                    .element
-                    .map(|ty| visit_type(resolve, ty, types, type_map)),
-                end: result
-                    .end
-                    .map(|ty| visit_type(resolve, ty, types, type_map)),
-            },
-            wit_parser::TypeDef::Type(ty) => {
-                TypeDef::Type(visit_type(resolve, *ty, types, type_map))
-            }
-            Unknown => unreachable!(),
-        },
-    }
-}
-
-fn visit_type(
-    resolve: &Resolve,
-    ty: wit_parser::Type,
-    types: &mut Vec<Type>,
-    type_map: &mut HashMap<TypeId, usize>,
-) -> Type {
-    match ty {
-        wit_parser::Type::Bool => Type::Bool,
-        wit_parser::Type::U8 => Type::U8,
-        wit_parser::Type::U16 => Type::U16,
-        wit_parser::Type::U32 => Type::U32,
-        wit_parser::Type::U64 => Type::U64,
-        wit_parser::Type::S8 => Type::S8,
-        wit_parser::Type::S16 => Type::S16,
-        wit_parser::Type::S32 => Type::S32,
-        wit_parser::Type::S64 => Type::S64,
-        wit_parser::Type::Float32 => Type::Float32,
-        wit_parser::Type::Float64 => Type::Float64,
-        wit_parser::Type::Char => Type::Char,
-        wit_parser::Type::String => Type::String,
-        wit_parser::Type::Id(id) => Type::Id(if let Some(index) = type_map.get(id) {
-            *index
-        } else {
-            let type_def = visit_type_def(resolve, &resolve.types[id], types, type_map);
-            types.push(type_def);
-            let n = types.len() - 1;
-            type_map.insert(*id, n);
-            n
-        }),
-    }
-}
-
-fn visit_params(
-    resolve: &Resolve,
-    params: &[(String, Type)],
-    types: &mut Vec<Type>,
-    type_map: &mut HashMap<TypeId, usize>,
-) -> Vec<(String, Type)> {
-    params
-        .iter()
-        .map(|(name, ty)| (name.to_owned(), visit_type(resolve, ty, types, type_map)))
-        .collect()
-}
-
-fn visit_results(
-    resolve: &Resolve,
-    results: &wit_parser::Results,
-    types: &mut Vec<Type>,
-    type_map: &mut HashMap<TypeId, usize>,
-) -> Results {
-    match results {
-        wit_parser::Results::Named(named) => {
-            Results::Named(visit_params(resolve, named, types, type_map))
-        }
-        wit_parser::Results::Anon(ty) => visit_type(resolve, ty, types, type_map),
-    }
-}
-
-fn visit_items(
-    resolve: &Resolve,
-    items: &IndexMap<String, WorldItem>,
-    types: &mut Vec<Type>,
-    type_map: &mut HashMap<TypeId, usize>,
-) -> Result<Vec<Function>> {
-    let mut funcs = Vec::new();
-    for (item_name, item) in items {
-        match item {
-            WorldItem::Interface(interface) => {
-                for (func_name, func) in &resolve.interfaces[interface].functions {
-                    funcs.push(Function {
-                        name: format!("{item_name}#{func_name}"),
-                        params: visit_params(resolve, &func.params, types, type_map)?,
-                        results: visit_results(resolve, &func.results, types, type_map)?,
-                    })
+impl WorldBindgen {
+    fn visit_items(
+        &mut self,
+        items: &IndexMap<String, WorldItem>,
+        direction: Direction,
+    ) -> Result<()> {
+        for (item_name, item) in items {
+            match item {
+                WorldItem::Interface(interface) => {
+                    for (func_name, func) in &resolve.interfaces[interface].functions {
+                        self.visit_func(
+                            &format!("{item_name}#{func_name}"),
+                            &func.params,
+                            &func.results,
+                            direction,
+                        );
+                    }
                 }
+
+                WorldItem::Function(func) => {
+                    self.visit_func(&func.name, &func.params, &func.results, direction)
+                }
+
+                WorldItem::Type(_) => bail!("type imports and exports not yet supported"),
             }
+        }
+        Ok(())
+    }
 
-            WorldItem::Function(func) => funcs.push(Function {
-                name: func.name.to_owned(),
-                params: visit_params(resolve, &func.params, types, type_map)?,
-                results: visit_results(resolve, &func.results, types, type_map)?,
-            }),
+    fn visit_func(
+        &mut self,
+        name: &str,
+        params: &[(String, Type)],
+        results: &Results,
+        direction: Direction,
+    ) {
+        match direction {
+            Direction::Import => {
+                let func = self.generate_import(params, results);
+                self.imports.push((name.to_owned(), func));
+            }
+            Direction::Export => {
+                let index = self.exports.len();
+                let entry = self.generate_export_entry(index, params, results);
+                let lift = self.generate_export_lift(params);
+                let lower = self.generate_export_lower(results);
+                let post_return = self.maybe_generate_export_post_return(results);
 
-            WorldItem::Type(_) => bail!("type imports and exports not yet supported"),
+                self.exports.push((
+                    name.to_owned(),
+                    Export {
+                        entry,
+                        lift,
+                        lower,
+                        post_return,
+                    },
+                ));
+            }
         }
     }
-    Ok(funcs)
-}
 
-fn summarize((resolve, world): &(Resolve, WorldId)) -> Result<Summary> {
-    // Generate a `Vec<Type>` and two `Vec<Function>`s of imports and exports, respectively, which reference the
-    // former.
+    fn generate_import(
+        &mut self,
+        index: usize,
+        params: &[(String, Type)],
+        results: &Results,
+    ) -> Function {
+        // Arg 0: py: &Python
+        // Args 1 and 2: input: &[&PyAny]
+        // Args 3 and 4: output: &mut [&PyAny]
+    }
 
-    let mut types = Vec::new();
-    let mut type_map = HashMap::new();
-    let imports = visit_items(
-        resolve,
-        &resolve.worlds[world].imports,
-        &mut types,
-        &mut type_map,
-    )?;
-    let exports = visit_items(
-        resolve,
-        &resolve.worlds[world].exports,
-        &mut types,
-        &mut type_map,
-    )?;
+    fn generate_export_entry(
+        &mut self,
+        index: usize,
+        params: &[(String, Type)],
+        results: &Results,
+    ) -> Function {
+        let params_flattened = self.flatten_all(params.iter().map(|(_, ty)| *ty));
+        let params_abi = self.record_abi(params.iter().map(|(_, ty)| *ty));
+        let results_flattened = self.flatten_all(results.iter().map(|ty| *ty));
+        let results_abi = self.results_abi(results.iter().map(|ty| *ty));
 
-    // Also generate a Python script which declares the types and the imports (which pass their arguments in an
-    // array to a low-level `call_import` function defined in Rust, which in turn marshals them using the canonical
-    // ABI and calls the real `call_import`).
+        let mut gen = FunctionBuilder::new(self);
+
+        let param_flat_count = if params_flattened.len() <= MAX_FLAT_PARAMS {
+            gen.globals
+                .push(gen.instructions.index_and_push(Ins::GlobalGet(0)));
+            gen.instructions.push(Ins::I32Const(params_abi.size));
+            gen.instructions.push(Ins::I32Sub);
+            gen.globals
+                .push(gen.instructions.index_and_push(Ins::GlobalSet(0)));
+
+            let mut load_index = 0;
+            let mut store_offset = 0;
+            for (_, ty) in params {
+                gen.globals
+                    .push(gen.instructions.index_and_push(Ins::GlobalGet(0)));
+
+                gen.store_copy(ty, &mut local_index, &mut store_offset);
+            }
+
+            gen.globals
+                .push(gen.instructions.index_and_push(Ins::GlobalGet(0)));
+
+            params_flattened.len()
+        } else {
+            gen.instructions.push(Ins::LocalGet(0));
+
+            1
+        };
+
+        if results_flattened.len() <= MAX_FLAT_PARAMS {
+            gen.globals
+                .push(gen.instructions.index_and_push(Ins::GlobalGet(0)));
+            gen.instructions.push(Ins::I32Const(results_abi.size));
+            gen.instructions.push(Ins::I32Sub);
+            gen.globals
+                .push(gen.instructions.index_and_push(Ins::GlobalSet(0)));
+
+            gen.globals
+                .push(gen.instructions.index_and_push(Ins::GlobalGet(0)));
+        } else {
+            gen.instructions.push(Ins::LocalGet(param_flat_count));
+        }
+
+        gen.calls.push((
+            Call::Export(index),
+            gen.instructions.index_and_push(Ins::Call(0)),
+        ));
+
+        if results_flattened.len() <= MAX_FLAT_PARAMS {
+            let mut load_offset = 0;
+            for (_, ty) in results {
+                gen.globals
+                    .push(gen.instructions.index_and_push(Ins::GlobalGet(0)));
+
+                gen.load_copy(ty, &mut local_offset);
+            }
+
+            gen.globals
+                .push(gen.instructions.index_and_push(Ins::GlobalGet(0)));
+            gen.instructions.push(Ins::I32Const(results_abi.size));
+            gen.instructions.push(Ins::I32Add);
+            gen.globals
+                .push(gen.instructions.index_and_push(Ins::GlobalSet(0)));
+        }
+
+        if params_flattened.len() <= MAX_FLAT_PARAMS {
+            gen.globals
+                .push(gen.instructions.index_and_push(Ins::GlobalGet(0)));
+            gen.instructions.push(Ins::I32Const(params_abi.size));
+            gen.instructions.push(Ins::I32Add);
+            gen.globals
+                .push(gen.instructions.index_and_push(Ins::GlobalSet(0)));
+        }
+    }
+
+    fn generate_export_lift(&mut self, params: &[(String, Type)]) -> Function {
+        // Arg 0: py: &Python
+        // Arg 1: input: &MyParams
+        // Args 2 and 3: output: &mut [&PyAny]
+        let mut gen = FunctionBuilder::new(self);
+
+        let mut load_offset = 0;
+        let mut store_offset = 0;
+        for (_, ty) in params {
+            let abi = self.abi(ty);
+            align(&mut load_offset, abi.align);
+
+            gen.instructions.push(Ins::LocalGet(1));
+
+            gen.load(ty, 0, load_offset);
+
+            gen.instructions.push(Ins::LocalGet(2));
+            gen.instructions.push(Ins::I32Store(MemArg {
+                offset: store_offset,
+                align: 2,
+                memory_index: 0,
+            }));
+
+            load_offset += abi.size;
+            store_offset += 4;
+        }
+
+        gen.build()
+    }
+
+    fn generate_export_lower(&mut self, results: &Results) -> Function {
+        // Arg 0: py: &Python
+        // Args 1 and 2: input: &[&PyAny]
+        // Arg 3: output: &mut MyResults
+        let mut gen = FunctionBuilder::new(self);
+
+        let mut load_offset = 0;
+        let mut store_offset = 0;
+        for (_, ty) in results {
+            let abi = self.abi(ty);
+            align(&mut store_offset, abi.align);
+
+            gen.instructions.push(Ins::LocalGet(1));
+            gen.instructions.push(Ins::I32Load(MemArg {
+                offset: load_offset,
+                align: 2,
+                memory_index: 0,
+            }));
+
+            gen.instructions.push(Ins::LocalGet(3));
+
+            gen.store(ty, 0, store_offset);
+
+            load_offset += abi.size;
+            store_offset += 4;
+        }
+
+        gen.build()
+    }
 }
 
 fn componentize(module: &[u8], (resolve, world): &(Resolve, WorldId)) -> Result<Vec<u8>> {
-    // Locate, remember, and remove low-level import (`call_import`) and export (`call_export`).
+    // Locate, remember, and remove low-level imports and exports.
     // Also, locate and remember stack pointer global.
 
-    // Generate and insert component imports, exports, and function table
+    // Insert component imports, exports, and function table
 
     // Generate and append component type custom section
 
