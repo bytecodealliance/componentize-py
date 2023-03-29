@@ -291,7 +291,8 @@ impl WorldBindgen {
     ) {
         match direction {
             Direction::Import => {
-                let func = self.generate_import(params, results);
+                let index = self.imports.len();
+                let func = self.generate_import(index, params, results);
                 self.imports.push((name.to_owned(), func));
             }
             Direction::Export => {
@@ -323,6 +324,105 @@ impl WorldBindgen {
         // Arg 0: py: &Python
         // Args 1 and 2: input: &[&PyAny]
         // Args 3 and 4: output: &mut [&PyAny]
+
+        let params_flattened = self.flatten_all(params.iter().map(|(_, ty)| *ty));
+        let params_abi = self.record_abi(params.iter().map(|(_, ty)| *ty));
+        let results_flattened = self.flatten_all(results.iter().map(|ty| *ty));
+        let results_abi = self.results_abi(results.iter().map(|ty| *ty));
+
+        let mut gen = FunctionBuilder::new(self);
+
+        if params_flattened.len() <= MAX_FLAT_PARAMS {
+            let mut load_offset = 0;
+            for (_, ty) in params {
+                gen.push(Ins::LocalGet(1));
+                gen.push(Ins::I32Load(MemArg {
+                    offset: load_offset,
+                    align: 2,
+                    memory_index: 0,
+                }));
+
+                gen.lower(ty);
+
+                load_offset += 4;
+            }
+        } else {
+            gen.push_stack(params_abi.size);
+
+            let mut store_offset = 0;
+            for (_, ty) in params {
+                let abi = self.abi(ty);
+                align(&mut store_offset, abi.align);
+
+                gen.stack();
+
+                gen.push(Ins::LocalGet(1));
+                gen.push(Ins::I32Load(MemArg {
+                    offset: load_offset,
+                    align: 2,
+                    memory_index: 0,
+                }));
+
+                gen.store(ty, store_offset);
+
+                store_offset += abi.size;
+            }
+
+            gen.stack();
+        }
+
+        if results_flattened.len() > MAX_FLAT_RESULTS {
+            gen.push_stack(results_abi.size);
+
+            gen.stack();
+        }
+
+        gen.call(Call::Import(index));
+
+        if results_flattened.len() <= MAX_FLAT_RESULTS {
+            let mut lift_index = 0;
+            let mut store_offset = 0;
+            for ty in results {
+                gen.lift(ty, lift_index);
+
+                gen.push(Ins::LocalGet(3));
+                gen.push(Ins::I32Store(MemArg {
+                    offset: store_offset,
+                    align: 2,
+                    memory_index: 0,
+                }));
+
+                lift_index += self.abi(ty).flat_count;
+                store_offset += 4;
+            }
+        } else {
+            let mut load_offset = 0;
+            let mut store_offset = 0;
+            for ty in results {
+                let abi = self.abi(ty);
+                align(&mut load_offset, abi.align);
+
+                gen.stack();
+
+                gen.load(ty, load_offset);
+
+                gen.push(Ins::LocalGet(3));
+                gen.push(Ins::I32Store(MemArg {
+                    offset: store_offset,
+                    align: 2,
+                    memory_index: 0,
+                }));
+
+                load_index += abi.size;
+                store_offset += 4;
+            }
+
+            gen.pop_stack(results_abi.size);
+        }
+
+        if params_flattened.len() > MAX_FLAT_PARAMS {
+            gen.pop_stack(params_abi.size);
+        }
     }
 
     fn generate_export_entry(
@@ -339,75 +439,59 @@ impl WorldBindgen {
         let mut gen = FunctionBuilder::new(self);
 
         let param_flat_count = if params_flattened.len() <= MAX_FLAT_PARAMS {
-            gen.globals
-                .push(gen.instructions.index_and_push(Ins::GlobalGet(0)));
-            gen.instructions.push(Ins::I32Const(params_abi.size));
-            gen.instructions.push(Ins::I32Sub);
-            gen.globals
-                .push(gen.instructions.index_and_push(Ins::GlobalSet(0)));
+            gen.push_stack(params_abi.size);
 
-            let mut load_index = 0;
+            let mut local_index = 0;
             let mut store_offset = 0;
             for (_, ty) in params {
-                gen.globals
-                    .push(gen.instructions.index_and_push(Ins::GlobalGet(0)));
+                let abi = self.abi(ty);
+                align(&mut store_offset, abi.align);
 
-                gen.store_copy(ty, &mut local_index, &mut store_offset);
+                gen.stack();
+
+                gen.store_copy(ty, local_index, store_offset);
+
+                local_index += abi.flat_count;
+                store_offset += abi.size;
             }
 
-            gen.globals
-                .push(gen.instructions.index_and_push(Ins::GlobalGet(0)));
+            gen.stack();
 
             params_flattened.len()
         } else {
-            gen.instructions.push(Ins::LocalGet(0));
+            gen.push(Ins::LocalGet(0));
 
             1
         };
 
-        if results_flattened.len() <= MAX_FLAT_PARAMS {
-            gen.globals
-                .push(gen.instructions.index_and_push(Ins::GlobalGet(0)));
-            gen.instructions.push(Ins::I32Const(results_abi.size));
-            gen.instructions.push(Ins::I32Sub);
-            gen.globals
-                .push(gen.instructions.index_and_push(Ins::GlobalSet(0)));
+        if results_flattened.len() <= MAX_FLAT_RESULTS {
+            gen.push_stack(results_abi.size);
 
-            gen.globals
-                .push(gen.instructions.index_and_push(Ins::GlobalGet(0)));
+            gen.stack();
         } else {
-            gen.instructions.push(Ins::LocalGet(param_flat_count));
+            gen.push(Ins::LocalGet(param_flat_count));
         }
 
-        gen.calls.push((
-            Call::Export(index),
-            gen.instructions.index_and_push(Ins::Call(0)),
-        ));
+        gen.call(Call::Export(index));
 
-        if results_flattened.len() <= MAX_FLAT_PARAMS {
+        if results_flattened.len() <= MAX_FLAT_RESULTS {
             let mut load_offset = 0;
             for (_, ty) in results {
-                gen.globals
-                    .push(gen.instructions.index_and_push(Ins::GlobalGet(0)));
+                let abi = self.abi(ty);
+                align(&mut local_offset, abi.align);
 
-                gen.load_copy(ty, &mut local_offset);
+                gen.stack();
+
+                gen.load_copy(ty, local_offset);
+
+                local_offset += abi.size;
             }
 
-            gen.globals
-                .push(gen.instructions.index_and_push(Ins::GlobalGet(0)));
-            gen.instructions.push(Ins::I32Const(results_abi.size));
-            gen.instructions.push(Ins::I32Add);
-            gen.globals
-                .push(gen.instructions.index_and_push(Ins::GlobalSet(0)));
+            gen.pop_stack(results_abi.size);
         }
 
         if params_flattened.len() <= MAX_FLAT_PARAMS {
-            gen.globals
-                .push(gen.instructions.index_and_push(Ins::GlobalGet(0)));
-            gen.instructions.push(Ins::I32Const(params_abi.size));
-            gen.instructions.push(Ins::I32Add);
-            gen.globals
-                .push(gen.instructions.index_and_push(Ins::GlobalSet(0)));
+            gen.pop_stack(params_abi.size);
         }
     }
 
@@ -415,6 +499,7 @@ impl WorldBindgen {
         // Arg 0: py: &Python
         // Arg 1: input: &MyParams
         // Args 2 and 3: output: &mut [&PyAny]
+
         let mut gen = FunctionBuilder::new(self);
 
         let mut load_offset = 0;
@@ -423,12 +508,12 @@ impl WorldBindgen {
             let abi = self.abi(ty);
             align(&mut load_offset, abi.align);
 
-            gen.instructions.push(Ins::LocalGet(1));
+            gen.push(Ins::LocalGet(1));
 
             gen.load(ty, 0, load_offset);
 
-            gen.instructions.push(Ins::LocalGet(2));
-            gen.instructions.push(Ins::I32Store(MemArg {
+            gen.push(Ins::LocalGet(2));
+            gen.push(Ins::I32Store(MemArg {
                 offset: store_offset,
                 align: 2,
                 memory_index: 0,
@@ -445,6 +530,7 @@ impl WorldBindgen {
         // Arg 0: py: &Python
         // Args 1 and 2: input: &[&PyAny]
         // Arg 3: output: &mut MyResults
+
         let mut gen = FunctionBuilder::new(self);
 
         let mut load_offset = 0;
@@ -453,22 +539,81 @@ impl WorldBindgen {
             let abi = self.abi(ty);
             align(&mut store_offset, abi.align);
 
-            gen.instructions.push(Ins::LocalGet(1));
-            gen.instructions.push(Ins::I32Load(MemArg {
+            gen.push(Ins::LocalGet(1));
+            gen.push(Ins::I32Load(MemArg {
                 offset: load_offset,
                 align: 2,
                 memory_index: 0,
             }));
 
-            gen.instructions.push(Ins::LocalGet(3));
+            gen.push(Ins::LocalGet(3));
 
             gen.store(ty, 0, store_offset);
 
-            load_offset += abi.size;
-            store_offset += 4;
+            store_offset += abi.size;
+            load_offset += 4;
         }
 
         gen.build()
+    }
+
+    fn maybe_generate_export_post_return(&mut self, results: &Results) -> Option<Function> {
+        let results_flattened = self.flatten_all(results.iter().map(|ty| *ty));
+
+        if results_flattened.len() > MAX_FLAT_RESULTS {
+            // Arg 0: &mut MyResults
+            let results_abi = self.record_abi(results.iter().map(|ty| *ty));
+
+            let mut gen = FunctionBuilder::new(self);
+
+            let mut load_offset = 0;
+            for (_, ty) in results {
+                let abi = self.abi(ty);
+                align(&mut load_offset, abi.align);
+
+                gen.free_stored(ty, 0, load_offset);
+
+                load_offset += abi.size;
+                store_offset += 4;
+            }
+
+            gen.push(Ins::LocalGet(0));
+            gen.push(Ins::I32Const(results_abi.size));
+            gen.push(Ins::I32Const(results_abi.align));
+            gen.call(Call::Free);
+
+            Some(gen.build())
+        } else {
+            None
+        }
+    }
+}
+
+impl FunctionBindgen {
+    fn push_stack(&mut self, size: usize) {
+        self.stack_refs.push(self.push(Ins::GlobalGet(0)));
+        self.push(Ins::I32Const(align(size, 4)));
+        self.push(Ins::I32Sub);
+        self.stack_refs.push(self.push(Ins::GlobalSet(0)));
+    }
+
+    fn pop_stack(&mut self, size: usize) {
+        self.stack_refs.push(self.push(Ins::GlobalGet(0)));
+        self.push(Ins::I32Const(align(size, 4)));
+        self.push(Ins::I32Add);
+        self.stack_refs.push(self.push(Ins::GlobalSet(0)));
+    }
+
+    fn push(&mut self, instruction: Ins) -> usize {
+        gen.instructions.index_and_push(Ins::LocalGet(0))
+    }
+
+    fn call(&mut self, call: Call) {
+        self.func_refs.push((call, self.push(Ins::Call(0))));
+    }
+
+    fn stack(&mut self) {
+        gen.stack_refs.push(gen.push(Ins::GlobalGet(0)));
     }
 }
 
