@@ -24,6 +24,7 @@ const NATIVE_PATH_DELIMITER: char = ';';
 // Assume Wasm32
 // TODO: Wasm64 support
 const WORD_SIZE: usize = 4;
+const WORD_ALIGN: usize = 2; // as a power of two
 
 /// A utility to convert Python apps into Wasm components
 #[derive(Parser, Debug)]
@@ -325,11 +326,11 @@ impl WorldBindgen {
         params: &[(String, Type)],
         results: &Results,
     ) -> Function {
-        // Arg 0: py: &Python
+        // Arg 0: &Python
         let context = 0;
-        // Args 1 and 2: input: &[&PyAny]
+        // Args 1 and 2: &[&PyAny]
         let input = 1;
-        // Args 3 and 4: output: &mut [&PyAny]
+        // Args 3 and 4: &mut [&PyAny]
         let output = 3;
 
         let params_flattened = self.flatten_all(params.iter().map(|(_, ty)| *ty));
@@ -339,26 +340,37 @@ impl WorldBindgen {
 
         let mut gen = FunctionBuilder::new(self);
 
-        if params_flattened.len() <= MAX_FLAT_PARAMS {
+        let locals = if params_flattened.len() <= MAX_FLAT_PARAMS {
+            let locals = params_flattened
+                .iter()
+                .map(|ty| {
+                    let local = gen.push_local(ty);
+                    gen.push(Ins::LocalSet(local));
+                    local
+                })
+                .collect::<Vec<_>>();
+
             let mut load_offset = 0;
             for (_, ty) in params {
                 let value = self.push_local(CoreType::I32);
 
                 gen.push(Ins::LocalGet(context));
                 gen.push(Ins::LocalGet(input));
-                gen.push(Ins::I32Load(MemArg {
-                    offset: load_offset,
-                    align: 2,
-                    memory_index: 0,
-                }));
+                gen.push(Ins::I32Load(mem_arg(load_offset, WORD_ALIGN)));
                 gen.push(Ins::LocalSet(value));
 
                 gen.lower(ty, context, value);
+
+                for local in locals[lift_index..][..flat_count] {
+                    gen.push(Ins::LocalTee(local));
+                }
 
                 load_offset += WORD_SIZE;
 
                 self.pop_local(value);
             }
+
+            Some(locals)
         } else {
             gen.push_stack(params_abi.size);
 
@@ -376,22 +388,21 @@ impl WorldBindgen {
                 gen.push(Ins::LocalSet(destination));
 
                 gen.push(Ins::LocalGet(input));
-                gen.push(Ins::I32Load(MemArg {
-                    offset: load_offset,
-                    align: 2,
-                    memory_index: 0,
-                }));
+                gen.push(Ins::I32Load(mem_arg(load_offset, WORD_ALIGN)));
                 gen.push(Ins::LocalSet(value));
 
                 gen.store(ty, context, value, destination);
 
                 store_offset += abi.size;
 
+                self.pop_local(destination);
                 self.pop_local(value);
             }
 
             gen.get_stack();
-        }
+
+            None
+        };
 
         if results_flattened.len() > MAX_FLAT_RESULTS {
             gen.push_stack(results_abi.size);
@@ -428,9 +439,21 @@ impl WorldBindgen {
             gen.pop_stack(results_abi.size);
         }
 
-        todo!("free any memory allocated when lowering/storing params above");
+        if let Some(locals) = locals {
+            gen.free_lowered_record(params.iter().map(|(_, ty)| *ty), &locals);
 
-        if params_flattened.len() > MAX_FLAT_PARAMS {
+            for (local, ty) in locals.iter().zip(&params_flattened).rev() {
+                gen.pop_local(local, ty);
+            }
+        } else {
+            let value = self.push_local(CoreType::I32);
+
+            self.get_stack();
+            self.push(Ins::LocalSet(value));
+
+            gen.free_stored_record(params.iter().map(|(_, ty)| *ty), value);
+
+            self.pop_local(value, CoreType::I32);
             gen.pop_stack(params_abi.size);
         }
     }
@@ -451,19 +474,17 @@ impl WorldBindgen {
         let param_flat_count = if params_flattened.len() <= MAX_FLAT_PARAMS {
             gen.push_stack(params_abi.size);
 
-            let mut local_index = 0;
-            let mut store_offset = 0;
-            for (_, ty) in params {
-                let abi = self.abi(ty);
-                align(&mut store_offset, abi.align);
+            let destination = self.push_local(CoreType::I32);
+            gen.get_stack();
+            gen.push(Ins::LocalSet(destination));
 
-                gen.get_stack();
+            store_copy_record(
+                params.iter().map(|(_, ty)| *ty),
+                &(0..params_flattened.len()).collect::<Vec<_>>(),
+                destination,
+            );
 
-                gen.store_copy(ty, local_index, store_offset);
-
-                local_index += abi.flat_count;
-                store_offset += abi.size;
-            }
+            self.pop_local(destination);
 
             gen.get_stack();
 
@@ -485,17 +506,13 @@ impl WorldBindgen {
         gen.call(Call::Export(index));
 
         if results_flattened.len() <= MAX_FLAT_RESULTS {
-            let mut load_offset = 0;
-            for (_, ty) in results {
-                let abi = self.abi(ty);
-                align(&mut local_offset, abi.align);
+            let source = self.push_local(CoreType::I32);
+            gen.get_stack();
+            gen.push(Ins::LocalSet(source));
 
-                gen.get_stack();
+            self.load_copy_record(results.iter(), source);
 
-                gen.load_copy(ty, local_offset);
-
-                local_offset += abi.size;
-            }
+            self.pop_local(source);
 
             gen.pop_stack(results_abi.size);
         }
@@ -506,63 +523,36 @@ impl WorldBindgen {
     }
 
     fn generate_export_lift(&mut self, params: &[(String, Type)]) -> Function {
-        // Arg 0: py: &Python
-        // Arg 1: input: &MyParams
-        // Args 2 and 3: output: &mut [&PyAny]
+        // Arg 0: &Python
+        let context = 0;
+        // Arg 1: &MyParams
+        let source = 1;
+        // Args 2 and 3: &mut [&PyAny]
+        let destination = 2;
 
         let mut gen = FunctionBuilder::new(self);
 
-        let mut load_offset = 0;
-        let mut store_offset = 0;
-        for (_, ty) in params {
-            let abi = self.abi(ty);
-            align(&mut load_offset, abi.align);
-
-            gen.push(Ins::LocalGet(1));
-
-            gen.load(ty, 0, load_offset);
-
-            gen.push(Ins::LocalGet(2));
-            gen.push(Ins::I32Store(MemArg {
-                offset: store_offset,
-                align: 2,
-                memory_index: 0,
-            }));
-
-            load_offset += abi.size;
-            store_offset += WORD_SIZE;
-        }
+        gen.load_record(
+            params.iter().map(|(_, ty)| *ty),
+            context,
+            source,
+            destination,
+        );
 
         gen.build()
     }
 
     fn generate_export_lower(&mut self, results: &Results) -> Function {
-        // Arg 0: py: &Python
-        // Args 1 and 2: input: &[&PyAny]
-        // Arg 3: output: &mut MyResults
+        // Arg 0: &Python
+        let context = 0;
+        // Args 1 and 2: &[&PyAny]
+        let source = 1;
+        // Arg 3: &mut MyResults
+        let destination = 2;
 
         let mut gen = FunctionBuilder::new(self);
 
-        let mut load_offset = 0;
-        let mut store_offset = 0;
-        for (_, ty) in results {
-            let abi = self.abi(ty);
-            align(&mut store_offset, abi.align);
-
-            gen.push(Ins::LocalGet(1));
-            gen.push(Ins::I32Load(MemArg {
-                offset: load_offset,
-                align: 2,
-                memory_index: 0,
-            }));
-
-            gen.push(Ins::LocalGet(3));
-
-            gen.store(ty, 0, store_offset);
-
-            store_offset += abi.size;
-            load_offset += WORD_SIZE;
-        }
+        gen.store_record(results.iter(), context, source, destination);
 
         gen.build()
     }
@@ -572,28 +562,22 @@ impl WorldBindgen {
 
         if results_flattened.len() > MAX_FLAT_RESULTS {
             // Arg 0: &mut MyResults
+            let value = 0;
             let results_abi = self.record_abi(results.iter().map(|ty| *ty));
 
             let mut gen = FunctionBuilder::new(self);
 
-            let mut load_offset = 0;
-            for (_, ty) in results {
-                let abi = self.abi(ty);
-                align(&mut load_offset, abi.align);
+            gen.free_stored_record(results.iter(), value);
 
-                gen.free_stored(ty, 0, load_offset);
-
-                load_offset += abi.size;
-                store_offset += WORD_SIZE;
-            }
-
-            gen.push(Ins::LocalGet(0));
+            gen.push(Ins::LocalGet(value));
             gen.push(Ins::I32Const(results_abi.size));
             gen.push(Ins::I32Const(results_abi.align));
             gen.call(Call::Free);
 
             Some(gen.build())
         } else {
+            // As of this writing, no type involving heap allocation can fit into `MAX_FLAT_RESULTS`, so nothing to
+            // do.  We'll need to revisit this if `MAX_FLAT_RESULTS` changes or if new types are added.
             None
         }
     }
@@ -661,17 +645,9 @@ impl FunctionBindgen {
                 self.push_stack(WORD_SIZE * 2);
                 self.call(Call::LowerString);
                 self.stack();
-                self.push(Ins::I32Load(MemArg {
-                    offset: 0,
-                    align: 2,
-                    memory_index: 0,
-                }));
+                self.push(Ins::I32Load(mem_arg(0, WORD_ALIGN)));
                 self.stack();
-                self.push(Ins::I32Load(MemArg {
-                    offset: WORD_SIZE,
-                    align: 2,
-                    memory_index: 0,
-                }));
+                self.push(Ins::I32Load(mem_arg(WORD_SIZE, WORD_ALIGN)));
                 self.pop_stack(WORD_SIZE * 2);
             }
             Type::Id(id) => match self.gen.resolve.types[id].kind {
@@ -767,56 +743,32 @@ impl FunctionBindgen {
             Type::Bool | Type::U8 | Type::S8 => {
                 self.lower(ty, context, value);
                 self.push(Ins::LocalGet(destination));
-                self.push(Ins::I32Store8(MemArg {
-                    offset: 0,
-                    align: 0,
-                    memory_index: 0,
-                }));
+                self.push(Ins::I32Store8(mem_arg(0, 0)));
             }
             Type::U16 | Type::S16 => {
                 self.lower(ty, context, value);
                 self.push(Ins::LocalGet(destination));
-                self.push(Ins::I32Store16(MemArg {
-                    offset: 0,
-                    align: 1,
-                    memory_index: 0,
-                }));
+                self.push(Ins::I32Store16(mem_arg(0, 1)));
             }
             Type::U32 | Type::S32 | Type::Char => {
                 self.lower(ty, context, value);
                 self.push(Ins::LocalGet(destination));
-                self.push(Ins::I32Store(MemArg {
-                    offset: 0,
-                    align: 2,
-                    memory_index: 0,
-                }));
+                self.push(Ins::I32Store(mem_arg(0, 2)));
             }
             Type::U64 | Type::S64 => {
                 self.lower(ty, context, value);
                 self.push(Ins::LocalGet(destination));
-                self.push(Ins::I64Store(MemArg {
-                    offset: 0,
-                    align: 3,
-                    memory_index: 0,
-                }));
+                self.push(Ins::I64Store(mem_arg(0, 3)));
             }
             Type::Float32 => {
                 self.lower(ty, context, value);
                 self.push(Ins::LocalGet(destination));
-                self.push(Ins::F32Store(MemArg {
-                    offset: 0,
-                    align: 2,
-                    memory_index: 0,
-                }));
+                self.push(Ins::F32Store(mem_arg(0, 2)));
             }
             Type::Float64 => {
                 self.lower(ty, context, value);
                 self.push(Ins::LocalGet(destination));
-                self.push(Ins::F64Store(MemArg {
-                    offset: 0,
-                    align: 3,
-                    memory_index: 0,
-                }));
+                self.push(Ins::F64Store(mem_arg(0, 3)));
             }
             Type::String => {
                 self.push(Ins::LocalGet(context));
@@ -857,20 +809,99 @@ impl FunctionBindgen {
                 TypeDefKind::List(element_type) => {
                     self.lower(ty, context, value);
                     self.push(Ins::LocalGet(destination));
-                    self.push(Ins::I32Store(MemArg {
-                        offset: 4,
-                        align: 2,
-                        memory_index: 0,
-                    }));
+                    self.push(Ins::I32Store(mem_arg(WORD_SIZE, WORD_ALIGN)));
                     self.push(Ins::LocalGet(destination));
-                    self.push(Ins::I32Store(MemArg {
-                        offset: 0,
-                        align: 2,
-                        memory_index: 0,
-                    }));
+                    self.push(Ins::I32Store(mem_arg(0, WORD_ALIGN)));
                 }
                 _ => todo!(),
             },
+        }
+    }
+
+    fn store_copy(&mut self, ty: Type, source: &[u32], destination: u32) {
+        match ty {
+            Type::Bool | Type::U8 | Type::S8 => {
+                self.push(Ins::LocalGet(source[0]));
+                self.push(Ins::I32Store8(mem_arg(0, 0)));
+            }
+            Type::U16 | Type::S16 => {
+                self.push(Ins::LocalGet(source[0]));
+                self.push(Ins::I32Store16(mem_arg(0, 1)));
+            }
+            Type::U32 | Type::S32 | Type::Char => {
+                self.push(Ins::LocalGet(source[0]));
+                self.push(Ins::I32Store(mem_arg(0, 2)));
+            }
+            Type::U64 | Type::S64 => {
+                self.push(Ins::LocalGet(source[0]));
+                self.push(Ins::I64Store(mem_arg(0, 3)));
+            }
+            Type::Float32 => {
+                self.push(Ins::LocalGet(source[0]));
+                self.push(Ins::F32Store(mem_arg(0, 2)));
+            }
+            Type::Float64 => {
+                self.push(Ins::LocalGet(source[0]));
+                self.push(Ins::F64Store(mem_arg(0, 3)));
+            }
+            Type::String => {
+                self.push(Ins::LocalGet(source[0]));
+                self.push(Ins::LocalGet(destination));
+                self.push(Ins::I32Store(mem_arg(0, WORD_ALIGN)));
+                self.push(Ins::LocalGet(source[1]));
+                self.push(Ins::LocalGet(destination));
+                self.push(Ins::I32Store(mem_arg(WORD_SIZE, WORD_ALIGN)));
+            }
+            Type::Id(id) => match self.gen.resolve.types[id].kind {
+                TypeDefKind::Record(record) => {
+                    self.store_copy_record(
+                        record.fields.iter().map(|field| field.ty),
+                        source,
+                        destination,
+                    );
+                }
+                TypeDefKind::List(element_type) => {
+                    self.push(Ins::LocalGet(source[0]));
+                    self.push(Ins::LocalGet(destination));
+                    self.push(Ins::I32Store(mem_arg(0, WORD_ALIGN)));
+                    self.push(Ins::LocalGet(source[1]));
+                    self.push(Ins::LocalGet(destination));
+                    self.push(Ins::I32Store(mem_arg(WORD_SIZE, WORD_ALIGN)));
+                }
+                _ => todo!(),
+            },
+        }
+    }
+
+    fn store_copy_record(
+        &mut self,
+        types: impl IntoIterator<Item = Type>,
+        source: &[u32],
+        destination: u32,
+    ) {
+        let local_index = 0;
+        let mut store_offset = 0;
+        for field in &record.fields {
+            let abi = self.abi(ty);
+            align(&mut store_offset, abi.align);
+
+            let field_destination = self.push_local(CoreType::I32);
+
+            self.push(Ins::LocalGet(destination));
+            self.push(Ins::I32Const(store_offset));
+            self.push(Ins::I32Add);
+            self.push(Ins::LocalSet(field_destination));
+
+            self.store_copy(
+                field.ty,
+                source[local_index..][..abi.flat_count],
+                field_destination,
+            );
+
+            local_index += abi.flat_count;
+            store_offset += abi.size;
+
+            self.pop_local(field_destination, CoreType::I32);
         }
     }
 
@@ -911,26 +942,13 @@ impl FunctionBindgen {
             }
             Type::Id(id) => match self.gen.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
-                    self.push_stack(record.fields.len() * 4);
+                    self.push_stack(record.fields.len() * WORD_SIZE);
+                    let source = self.push_local(CoreType::I32);
 
-                    // TODO: deduplicate
-                    let mut lift_index = 0;
-                    let mut store_offset = 0;
-                    for field in &record.fields {
-                        let flat_count = self.abi(ty).flat_count;
+                    self.get_stack();
+                    self.push(Ins::LocalSet(source));
 
-                        self.lift(field.ty, context, &value[lift_index..][..flat_count]);
-
-                        self.get_stack();
-                        self.push(Ins::I32Store(MemArg {
-                            offset: store_offset,
-                            align: 2,
-                            memory_index: 0,
-                        }));
-
-                        lift_index += flat_count;
-                        store_offset += WORD_SIZE;
-                    }
+                    self.lift_record(record.fields.iter().map(|field| field.ty), context, source);
 
                     let name = self.name(&record.name);
 
@@ -939,17 +957,17 @@ impl FunctionBindgen {
                     self.push(Ins::I32Const(record.fields.len()));
                     self.call(Call::Init);
 
-                    self.pop_stack(record.fields.len() * 4);
+                    self.pop_local(source, CoreType::I32);
+                    self.pop_stack(record.fields.len() * WORD_SIZE);
                 }
                 TypeDefKind::List(ty) => {
-                    // TODO: optimize `list<u8>` (and others if appropriate)
+                    // TODO: optimize using bulk memory operation when list element is primitive
 
                     let source = value[0];
                     let length = value[1];
 
                     let abi = self.gen.abi(ty);
 
-                    let destination = self.push_local(CoreType::I32);
                     let index = self.push_local(CoreType::I32);
                     let element_source = self.push_local(CoreType::I32);
 
@@ -1001,16 +1019,34 @@ impl FunctionBindgen {
         }
     }
 
+    fn lift_record(
+        &mut self,
+        types: impl IntoIterator<Item = Type>,
+        context: u32,
+        source: &[u32],
+        destination: u32,
+    ) {
+        let mut lift_index = 0;
+        let mut store_offset = 0;
+        for field in &record.fields {
+            let flat_count = self.abi(ty).flat_count;
+
+            self.lift(field.ty, context, &source[lift_index..][..flat_count]);
+
+            self.push(Ins::LocalGet(destination));
+            self.push(Ins::I32Store(mem_arg(store_offset, WORD_ALIGN)));
+
+            lift_index += flat_count;
+            store_offset += WORD_SIZE;
+        }
+    }
+
     fn load(&mut self, ty: Type, context: u32, source: u32) {
         match ty {
             Type::Bool | Type::U8 | Type::S8 => {
                 let value = self.push_local(CoreType::I32);
                 self.push(Ins::LocalGet(source));
-                self.push(Ins::I32Load8(MemArg {
-                    offset: 0,
-                    align: 0,
-                    memory_index: 0,
-                }));
+                self.push(Ins::I32Load8(mem_arg(0, 0)));
                 self.push(Ins::LocalSet(value));
                 self.lift(ty, context, &[value]);
                 self.pop_local(value, CoreType::I32);
@@ -1018,11 +1054,7 @@ impl FunctionBindgen {
             Type::U16 | Type::S16 => {
                 let value = self.push_local(CoreType::I32);
                 self.push(Ins::LocalGet(source));
-                self.push(Ins::I32Load16(MemArg {
-                    offset: 0,
-                    align: 1,
-                    memory_index: 0,
-                }));
+                self.push(Ins::I32Load16(mem_arg(0, 1)));
                 self.push(Ins::LocalSet(value));
                 self.lift(ty, context, &[value]);
                 self.pop_local(value, CoreType::I32);
@@ -1030,11 +1062,7 @@ impl FunctionBindgen {
             Type::U32 | Type::S32 | Type::Char => {
                 let value = self.push_local(CoreType::I32);
                 self.push(Ins::LocalGet(source));
-                self.push(Ins::I32Load(MemArg {
-                    offset: 0,
-                    align: 2,
-                    memory_index: 0,
-                }));
+                self.push(Ins::I32Load(mem_arg(0, 2)));
                 self.push(Ins::LocalSet(value));
                 self.lift(ty, context, &[value]);
                 self.pop_local(value, CoreType::I32);
@@ -1042,11 +1070,7 @@ impl FunctionBindgen {
             Type::U64 | Type::S64 => {
                 let value = self.push_local(CoreType::I64);
                 self.push(Ins::LocalGet(source));
-                self.push(Ins::I64Load(MemArg {
-                    offset: 0,
-                    align: 3,
-                    memory_index: 0,
-                }));
+                self.push(Ins::I64Load(mem_arg(0, 3)));
                 self.push(Ins::LocalSet(value));
                 self.lift(ty, context, &[value]);
                 self.pop_local(value, CoreType::I64);
@@ -1054,23 +1078,15 @@ impl FunctionBindgen {
             Type::Float32 => {
                 let value = self.push_local(CoreType::F32);
                 self.push(Ins::LocalGet(source));
-                self.push(Ins::F32Load(MemArg {
-                    offset: 0,
-                    align: 2,
-                    memory_index: 0,
-                }));
+                self.push(Ins::F32Load(mem_arg(0, 2)));
                 self.push(Ins::LocalSet(value));
                 self.lift(ty, context, &[value]);
                 self.pop_local(value, CoreType::F32);
             }
             Type::Float64 => {
                 let value = self.push_local(CoreType::F64);
-                self.lower(ty, context, value);
-                self.push(Ins::F64Store(MemArg {
-                    offset: 0,
-                    align: 3,
-                    memory_index: 0,
-                }));
+                self.push(Ins::LocalGet(source));
+                self.push(Ins::F64Load(mem_arg(0, 3)));
                 self.push(Ins::LocalSet(value));
                 self.lift(ty, context, &[value]);
                 self.pop_local(value, CoreType::F64);
@@ -1078,22 +1094,14 @@ impl FunctionBindgen {
             Type::String => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(source));
-                self.push(Ins::I32Load(MemArg {
-                    offset: 0,
-                    align: 2,
-                    memory_index: 0,
-                }));
+                self.push(Ins::I32Load(mem_arg(0, WORD_ALIGN)));
                 self.push(Ins::LocalGet(source));
-                self.push(Ins::I32Load(MemArg {
-                    offset: 4,
-                    align: 2,
-                    memory_index: 0,
-                }));
+                self.push(Ins::I32Load(mem_arg(WORD_SIZE, WORD_ALIGN)));
                 self.call(Call::LiftString);
             }
             Type::Id(id) => match self.gen.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
-                    self.push_stack(record.fields.len() * 4);
+                    self.push_stack(record.fields.len() * WORD_SIZE);
                     let destination = self.push_local(CoreType::I32);
 
                     self.get_stack();
@@ -1114,26 +1122,18 @@ impl FunctionBindgen {
                     self.call(Call::Init);
 
                     self.pop_local(destination, CoreType::I32);
-                    self.pop_stack(record.fields.len() * 4);
+                    self.pop_stack(record.fields.len() * WORD_SIZE);
                 }
                 TypeDefKind::List(_) => {
                     let body = self.push_local(CoreType::I32);
                     let length = self.push_local(CoreType::I32);
 
                     self.push(Ins::LocalGet(source));
-                    self.push(Ins::I32Load(MemArg {
-                        offset: 0,
-                        align: 2,
-                        memory_index: 0,
-                    }));
+                    self.push(Ins::I32Load(mem_arg(0, WORD_ALIGN)));
                     self.push(Ins::LocalSet(body));
 
                     self.push(Ins::LocalGet(source));
-                    self.push(Ins::I32Load(MemArg {
-                        offset: 4,
-                        align: 2,
-                        memory_index: 0,
-                    }));
+                    self.push(Ins::I32Load(mem_arg(WORD_SIZE, WORD_ALIGN)));
                     self.push(Ins::LocalSet(length));
 
                     self.lift(ty, context, &[body, length]);
@@ -1169,11 +1169,7 @@ impl FunctionBindgen {
             self.load(ty, context, field_source);
 
             self.push(Inst::LocalGet(destination));
-            self.push(Ins::I32Store(MemArg {
-                offset: store_offset,
-                align: 2,
-                memory_index: 0,
-            }));
+            self.push(Ins::I32Store(mem_arg(store_offset, WORD_ALIGN)));
 
             load_offset += abi.size;
             store_offset += WORD_SIZE;
@@ -1182,30 +1178,248 @@ impl FunctionBindgen {
         }
     }
 
-    fn lift_record(
-        &mut self,
-        types: impl IntoIterator<Item = Type>,
-        context: u32,
-        source: &[u32],
-        destination: u32,
-    ) {
+    fn load_copy(&mut self, ty: Type, source: u32) {
+        match ty {
+            Type::Bool | Type::U8 | Type::S8 => {
+                self.push(Ins::LocalGet(source));
+                self.push(Ins::I32Load8(mem_arg(0, 0)));
+            }
+            Type::U16 | Type::S16 => {
+                self.push(Ins::LocalGet(source));
+                self.push(Ins::I32Load16(mem_arg(0, 1)));
+            }
+            Type::U32 | Type::S32 | Type::Char => {
+                self.push(Ins::LocalGet(source));
+                self.push(Ins::I32Load(mem_arg(0, 2)));
+            }
+            Type::U64 | Type::S64 => {
+                self.push(Ins::LocalGet(source));
+                self.push(Ins::I64Load(mem_arg(0, 3)));
+            }
+            Type::Float32 => {
+                self.push(Ins::LocalGet(source));
+                self.push(Ins::F32Load(mem_arg(0, 2)));
+            }
+            Type::Float64 => {
+                self.push(Ins::LocalGet(source));
+                self.push(Ins::F64Load(mem_arg(0, 3)));
+            }
+            Type::String => {
+                self.push(Ins::LocalGet(source));
+                self.push(Ins::I32Load(mem_arg(0, WORD_ALIGN)));
+                self.push(Ins::LocalGet(source));
+                self.push(Ins::I32Load(mem_arg(WORD_SIZE, WORD_ALIGN)));
+            }
+            Type::Id(id) => match self.gen.resolve.types[id].kind {
+                TypeDefKind::Record(record) => {
+                    self.load_copy_record(result.fields.iter().map(|field| field.ty), source);
+                }
+                TypeDefKind::List(_) => {
+                    self.push(Ins::LocalGet(source));
+                    self.push(Ins::I32Load(mem_arg(0, WORD_ALIGN)));
+                    self.push(Ins::LocalGet(source));
+                    self.push(Ins::I32Load(mem_arg(WORD_SIZE, WORD_ALIGN)));
+                }
+                _ => todo!(),
+            },
+        }
+    }
+
+    fn load_copy_record(&mut self, types: impl IntoIterator<Item = Type>, source: u32) {
+        let mut load_offset = 0;
+        for ty in types {
+            let field_source = self.push_local(CoreType::I32);
+
+            let abi = self.abi(ty);
+            align(&mut load_offset, abi.align);
+
+            self.push(Ins::LocalGet(source));
+            self.push(Ins::I32Const(load_offset));
+            self.push(Ins::I32Add);
+            self.load(Ins::LocalSet(field_source));
+
+            self.load_copy(ty, field_source);
+
+            load_offset += abi.size;
+
+            self.pop_local(field_source, CoreType::I32);
+        }
+    }
+
+    fn free_lowered(&mut self, ty: Type, value: &[u32]) {
+        match ty {
+            Type::Bool
+            | Type::U8
+            | Type::U16
+            | Type::U32
+            | Type::S8
+            | Type::S16
+            | Type::S32
+            | Type::Char
+            | Type::U64
+            | Type::S64
+            | Type::Float32
+            | Type::Float64 => {}
+
+            Type::String => {
+                self.push(Ins::LocalGet(value[0]));
+                self.push(Ins::LocalGet(value[1]));
+                self.push(Ins::I32Const(1));
+                self.call(Call::Free);
+            }
+
+            Type::Id(id) => match self.gen.resolve.types[id].kind {
+                TypeDefKind::Record(record) => {
+                    free_lowered_record(record.fields.iter().map(|field| field.ty), value);
+                }
+                TypeDefKind::List(ty) => {
+                    // TODO: optimize (i.e. no loop) when list element is primitive
+
+                    let pointer = value[0];
+                    let length = value[1];
+
+                    let abi = self.gen.abi(ty);
+
+                    let destination = self.push_local(CoreType::I32);
+                    let index = self.push_local(CoreType::I32);
+                    let element_pointer = self.push_local(CoreType::I32);
+
+                    self.push(Ins::LocalGet(context));
+                    self.call(Call::MakeList);
+                    self.push(Ins::LocalSet(destination));
+
+                    self.push(Ins::I32Const(0));
+                    self.push(Ins::LocalSet(index));
+
+                    let loop_ = self.push_block();
+                    self.push(Ins::Loop(BlockType::Empty));
+
+                    self.push(Ins::LocalGet(index));
+                    self.push(Ins::LocalGet(length));
+                    self.push(Ins::I32Ne);
+
+                    self.push(Ins::If(BlockType::Empty));
+
+                    self.push(Ins::LocalGet(pointer));
+                    self.push(Ins::LocalGet(index));
+                    self.push(Ins::I32Const(abi.size));
+                    self.push(Ins::I32Mul);
+                    self.push(Ins::I32Add);
+                    self.push(Ins::LocalSet(element_pointer));
+
+                    self.free_stored(ty, element_pointer);
+
+                    self.push(Ins::Br(loop_));
+
+                    self.push(Ins::End);
+
+                    self.push(Ins::End);
+                    self.pop_block(loop_);
+
+                    self.push(Ins::LocalGet(pointer));
+                    self.push(Ins::LocalGet(index));
+                    self.push(Ins::I32Const(abi.size));
+                    self.push(Ins::I32Mul);
+                    self.push(Ins::I32Const(abi.align));
+                    self.call(Call::Free);
+
+                    self.pop_local(element_pointer, CoreType::I32);
+                    self.pop_local(index, CoreType::I32);
+                }
+                _ => todo!(),
+            },
+        }
+    }
+
+    fn free_lowered_record(&mut self, types: impl IntoIterator<Item = Type>, value: &[u32]) {
         let mut lift_index = 0;
-        let mut store_offset = 0;
         for field in &record.fields {
             let flat_count = self.abi(ty).flat_count;
 
-            self.lift(field.ty, context, &source[lift_index..][..flat_count]);
-
-            self.push(Ins::LocalGet(destination));
-            self.push(Ins::I32Store(MemArg {
-                offset: store_offset,
-                align: 2,
-                memory_index: 0,
-            }));
+            self.free_lowered(field.ty, context, &source[lift_index..][..flat_count]);
 
             lift_index += flat_count;
-            store_offset += WORD_SIZE;
         }
+    }
+
+    fn free_stored(&mut self, ty: Type, value: u32) {
+        match ty {
+            Type::Bool
+            | Type::U8
+            | Type::U16
+            | Type::U32
+            | Type::S8
+            | Type::S16
+            | Type::S32
+            | Type::Char
+            | Type::U64
+            | Type::S64
+            | Type::Float32
+            | Type::Float64 => {}
+
+            Type::String => {
+                self.push(Ins::LocalGet(value));
+                self.push(Ins::I32Load(mem_arg(0, WORD_ALIGN)));
+                self.push(Ins::LocalGet(value));
+                self.push(Ins::I32Load(mem_arg(WORD_SIZE, WORD_ALIGN)));
+                self.push(Ins::I32Const(1));
+                self.call(Call::Free);
+            }
+
+            Type::Id(id) => match self.gen.resolve.types[id].kind {
+                TypeDefKind::Record(record) => {
+                    free_stored_record(record.fields.iter().map(|field| field.ty), value);
+                }
+                TypeDefKind::List(ty) => {
+                    let body = self.push_local(CoreType::I32);
+                    let length = self.push_local(CoreType::I32);
+
+                    self.push(Ins::LocalGet(value));
+                    self.push(Ins::I32Load(mem_arg(0, WORD_ALIGN)));
+                    self.push(Ins::LocalSet(body));
+
+                    self.push(Ins::LocalGet(value));
+                    self.push(Ins::I32Load(mem_arg(WORD_SIZE, WORD_ALIGN)));
+                    self.push(Ins::LocalSet(length));
+
+                    self.free_stored(ty, context, &[body, length]);
+
+                    self.pop_local(length, CoreType::I32);
+                    self.pop_local(list, CoreType::I32);
+                }
+                _ => todo!(),
+            },
+        }
+    }
+
+    fn free_stored_record(&mut self, types: impl IntoIterator<Item = Type>, value: u32) {
+        let mut load_offset = 0;
+        let mut store_offset = 0;
+        for ty in types {
+            let field_value = self.push_local(CoreType::I32);
+
+            let abi = self.abi(ty);
+            align(&mut load_offset, abi.align);
+
+            self.push(Ins::LocalGet(value));
+            self.push(Ins::I32Const(load_offset));
+            self.push(Ins::I32Add);
+            self.load(Ins::LocalSet(field_value));
+
+            self.free_stored(ty, field_source);
+
+            load_offset += abi.size;
+
+            self.pop_local(field_value, CoreType::I32);
+        }
+    }
+}
+
+fn mem_arg(offset: u64, align: u32) -> MemArg {
+    MemArg {
+        offset,
+        align,
+        memory_index: 0,
     }
 }
 
