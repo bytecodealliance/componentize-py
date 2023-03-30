@@ -237,6 +237,8 @@ fn generate_bindings((resolve, world): &(Resolve, WorldId)) -> Result<Bindings> 
     // a low-level `call_import` function defined in Rust, which in turn marshals them using the canonical ABI and
     // calls the real `call_import`) using a factored-out version of `wasmtime-py`'s `InterfaceGenerator`.
     // `call_import` should take a `pyo3::Python` and a slice of `&PyAny`s.
+    //
+    // Could hard-code this for binding testing!
 
     // Then, build `Vec<String>`s for imports, exports, and types.  We'll refer to the functions and types by
     // indexes into those arrays in the generated code below.
@@ -256,6 +258,23 @@ fn generate_bindings((resolve, world): &(Resolve, WorldId)) -> Result<Bindings> 
     };
     gen.visit_items(&resolve.worlds[world].imports, Direction::Import)?;
     gen.visit_items(&resolve.worlds[world].exports, Direction::Export)?;
+
+    // Use a single dispatch function and function table for imports, export lifts, and export lowers, since
+    // they'll all have the same core type.
+
+    // let dispatch = {
+    //     let mut gen = FunctionBindgen::new(gen);
+
+    //     gen.push(Ins::LocalGet(0));
+    //     gen.push(Ins::LocalGet(1));
+    //     gen.push(Ins::LocalGet(2));
+    //     gen.push(Ins::LocalGet(3));
+    //     gen.push(Ins::CallIndirect { ty: todo!(), table: todo!() });
+    // };
+
+    // Also, define a table init fuction which initializes the function table.
+
+    Ok(gen.build())
 }
 
 impl WorldBindgen {
@@ -326,12 +345,12 @@ impl WorldBindgen {
         params: &[(String, Type)],
         results: &Results,
     ) -> Function {
-        // Arg 0: &Python
+        // Arg 0: *const Python
         let context = 0;
-        // Args 1 and 2: &[&PyAny]
+        // Arg 1: *const &PyAny
         let input = 1;
-        // Args 3 and 4: &mut [&PyAny]
-        let output = 3;
+        // Arg 2: *mut &PyAny
+        let output = 2;
 
         let params_flattened = self.flatten_all(params.iter().map(|(_, ty)| *ty));
         let params_abi = self.record_abi(params.iter().map(|(_, ty)| *ty));
@@ -464,6 +483,8 @@ impl WorldBindgen {
         params: &[(String, Type)],
         results: &Results,
     ) -> Function {
+        gen.call(Call::InitFunctionTable);
+
         let params_flattened = self.flatten_all(params.iter().map(|(_, ty)| *ty));
         let params_abi = self.record_abi(params.iter().map(|(_, ty)| *ty));
         let results_flattened = self.flatten_all(results.iter().map(|ty| *ty));
@@ -523,11 +544,11 @@ impl WorldBindgen {
     }
 
     fn generate_export_lift(&mut self, params: &[(String, Type)]) -> Function {
-        // Arg 0: &Python
+        // Arg 0: *const Python
         let context = 0;
-        // Arg 1: &MyParams
+        // Arg 1: *const MyParams
         let source = 1;
-        // Args 2 and 3: &mut [&PyAny]
+        // Arg 2: *mut [&PyAny]
         let destination = 2;
 
         let mut gen = FunctionBuilder::new(self);
@@ -543,11 +564,11 @@ impl WorldBindgen {
     }
 
     fn generate_export_lower(&mut self, results: &Results) -> Function {
-        // Arg 0: &Python
+        // Arg 0: *const Python
         let context = 0;
-        // Args 1 and 2: &[&PyAny]
+        // Arg 1: *const [&PyAny]
         let source = 1;
-        // Arg 3: &mut MyResults
+        // Arg 2: *mut MyResults
         let destination = 2;
 
         let mut gen = FunctionBuilder::new(self);
@@ -561,7 +582,7 @@ impl WorldBindgen {
         let results_flattened = self.flatten_all(results.iter().map(|ty| *ty));
 
         if results_flattened.len() > MAX_FLAT_RESULTS {
-            // Arg 0: &mut MyResults
+            // Arg 0: *mut MyResults
             let value = 0;
             let results_abi = self.record_abi(results.iter().map(|ty| *ty));
 
@@ -1430,6 +1451,231 @@ fn componentize(module: &[u8], (resolve, world): &(Resolve, WorldId)) -> Result<
     // Insert component imports, exports, and function table
 
     // Generate and append component type custom section
+
+    // First pass: find the stack pointer
+    let mut stack_pointer_index = None;
+    for payload in Parser::new(0).parse_all(module) {
+        match payload? {
+            Payload::CustomSection(section) if section.name() == "name" => {
+                let section = NameSectionReader::new(section.data(), section.data_offset());
+                for section in section {
+                    match section? {
+                        Name::Global(map) => {
+                            for naming in map {
+                                let naming = naming?;
+                                if naming == "__stack_pointer" {
+                                    stack_pointer_index = Some(naming.index);
+                                    break;
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                break;
+            }
+
+            _ => {}
+        }
+    }
+
+    todo!("link stack pointer references in `my_functions` with `stack_pointer_index`");
+
+    let mut my_imports = Vec::new();
+    let mut import_count = None;
+    let mut my_function_type_start_index = None;
+    let mut my_function_start_index = None;
+    let mut function_table_index = None;
+    let mut result = Module::new();
+    for payload in Parser::new(0).parse_all(module) {
+        match payload? {
+            Payload::TypeSection(reader) => {
+                let mut types = TypeSection::new();
+                let mut index = 0;
+                for wasmparser::Type::Func(ty) in types {
+                    let map = |&ty| IntoValType(ty).into();
+                    types.function(ty.params().iter().map(map), ty.params().iter().map(map));
+                    index += 1;
+                }
+                let my_function_type_start_index = Some(index);
+                for function in &mut my_functions {
+                    let map = |&ty| ty;
+                    types.function(
+                        function.params.iter().map(map),
+                        function.results.iter().map(map),
+                    );
+                    function.ty = index;
+                }
+                // dispatch function type:
+                types.function([ValType::I32, ValType::I32, ValType::I32, ValType::I32], []);
+                // init_table function type:
+                types.function([], []);
+                result.section(&types);
+            }
+
+            Payload::ImportSection(reader) => {
+                let mut imports = ImportSection::new();
+                let mut index = 0;
+                for import in reader {
+                    let import = import?;
+                    if import.module == "componentize-py" {
+                        if import.field == "dispatch" {
+                            match import.ty {
+                                TypeRef::Func(ty) if types[ty] == dispatch_type => {
+                                    dispatch_import_index = Some(index);
+                                }
+                                _ => bail!(
+                                    "componentize-py#dispatch has incorrect type: {:?}",
+                                    import.ty
+                                ),
+                            }
+                        } else {
+                            bail!(
+                                "componentize-py module import has unrecognized name: {}",
+                                import.field
+                            );
+                        }
+                    } else {
+                        imports.import(import.module, import.field, IntoEntityType(import.ty));
+                        index += 1;
+                    }
+                }
+                import_count = Some(index);
+                result.section(&imports);
+            }
+
+            Payload::FunctionSection(reader) => {
+                let mut functions = FunctionSection::new();
+                let mut index = import_count.unwrap();
+                for ty in reader {
+                    functions.function(ty?);
+                    index += 1;
+                }
+                my_function_start_index = Some(index);
+                for function in &my_functions {
+                    functions.function(function.ty);
+                }
+                // dispatch function:
+                functions.function(my_function_type_start_index.unwrap() + my_functions.len());
+                // init_table function:
+                functions.function(my_function_type_start_index.unwrap() + my_functions.len() + 1);
+                result.section(&functions);
+            }
+
+            Payload::TableSection(reader) => {
+                let mut tables = TableSection::new();
+                let mut index = 0;
+                for table in reader {
+                    result.table(IntoTableType(table?).into());
+                    index += 1;
+                }
+                function_table_index = Some(index);
+                result.table(TableType {
+                    element_type: RefType {
+                        nullable: true,
+                        heap_type: HeapType::TypedFunc(dispatch_type_index.unwrap()),
+                    },
+                    minimum: my_functions.len(),
+                    maximum: Some(my_functions.len()),
+                });
+                result.section(&tables);
+            }
+
+            Payload::ExportSection(reader) => {
+                let mut exports = ExportSection::new();
+                for export in reader {
+                    let export = export?;
+                    if let Some(item) = export_map.get_mut(export.name) {
+                        if let ExternalKind::Func = export.kind {
+                            item.func = export.index;
+                        } else {
+                            bail!("unexpected kind for {}: {:?}", export.name, export.kind);
+                        }
+                    } else {
+                        exports.export(
+                            export.name,
+                            IntoExportKind(export.kind).into(),
+                            export.index,
+                        );
+                    }
+                }
+                todo!("link calls in `my_functions` using `export_map` and `table_init` index");
+                result.section(&exports);
+            }
+
+            Payload::CodeSectionStart { count, .. } => {
+                code = Some((count, CodeSection::new()));
+            }
+
+            Payload::CodeSectionEntry(body) => {
+                let (count, section) = code.as_mut().unwrap();
+
+                let reader = body.get_binary_reader();
+                let mut locals = Vec::new();
+                for _ in 0..reader.read_var_u32()? {
+                    let count = reader.read_var_u32()?;
+                    let ty = reader.read()?;
+                    locals.push((count, ty));
+                }
+
+                let visitor = Visitor {
+                    old_dispatch_index: dispatch_import_index.unwrap(),
+                    new_dispatch_index: my_function_start_index.unwrap() + my_functions.len(),
+                    buffer: Vec::new(),
+                };
+                while !reader.eof() {
+                    reader.visit_operator(&mut visitor)?;
+                }
+
+                let function = Function::new(locals);
+                function.raw(visitor.buffer);
+                section.function(&function);
+
+                *count = (*count).checked_sub(1);
+                if *count == 0 {
+                    for function in &my_functions {
+                        let func = Function::new_with_locals_types(function.locals.clone());
+                        for instruction in &func.instructions {
+                            func.instruction(instruction);
+                        }
+                        section.function(&func);
+                    }
+
+                    let dispatch = Function::new([]);
+                    for local in 0..4 {
+                        dispatch.instruction(Ins::LocalGet(local));
+                    }
+                    dispatch.instruction(Ins::CallIndirect(local));
+                    section.function(&dispatch);
+
+                    let table_init = Function::new([]);
+                    let base = my_function_start_index.unwrap();
+                    let table = function_table_index.unwrap();
+                    for index in 0..my_functions.len() {
+                        table_init.instruction(Ins::RefFunc(base + index));
+                        table_init.instruction(Ins::I32Const(index));
+                        table_init.instruction(Ins::TableSet(table));
+                    }
+                    section.function(&table_init);
+
+                    result.section(section);
+                }
+            }
+
+            Payload::CustomSection(section) if section.name() == "name" => {
+                todo!("adjust existing names and add new names");
+            }
+
+            payload => {
+                if let Some((id, range)) = payload.as_section() {
+                    result.section(&RawSection {
+                        id,
+                        data: &module[range],
+                    });
+                }
+            }
+        }
+    }
 
     // Encode with WASI Preview 1 adapter
     Ok(ComponentEncoder::default()
