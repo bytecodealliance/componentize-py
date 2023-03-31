@@ -1444,18 +1444,197 @@ fn mem_arg(offset: u64, align: u32) -> MemArg {
     }
 }
 
-fn componentize(module: &[u8], (resolve, world): &(Resolve, WorldId)) -> Result<Vec<u8>> {
-    // Locate, remember, and remove low-level imports and exports.
-    // Also, locate and remember stack pointer global.
+enum FunctionKind {
+    Import,
+    Export,
+    ExportPostReturn,
+    ExportLift,
+    ExportLower,
+}
 
-    // Insert component imports, exports, and function table
+struct MyFunction<'a> {
+    kind: FunctionKind,
+    interface: Option<&'a str>,
+    name: &'a str,
+    params: &'a [(String, Type)],
+    results: &'a Results,
+}
 
-    // Generate and append component type custom section
+impl<'a> MyFunction<'a> {
+    fn internal_name(&self) -> String {
+        if let Some(interface) = self.interface {
+            format!("{}#{}", interface, self.name);
+        } else {
+            self.name.to_owned()
+        }
+    }
 
-    // First pass: find the stack pointer
+    fn core_type(&self, resolve: &Resolve) -> (Vec<ValType>, Vec<ValType>) {
+        match self.kind {
+            FunctionKind::Import | FunctionKind::Export => (
+                flatten_record_limit(
+                    resolve,
+                    self.params.iter().map(|(_, ty)| *ty),
+                    MAX_FLAT_PARAMS,
+                ),
+                flatten_record_limit(resolve, self.results.iter(), MAX_FLAT_RESULTS),
+            ),
+            FunctionKind::ExportPostReturn => (
+                flatten_record_limit(resolve, self.results.iter(), MAX_FLAT_RESULTS),
+                Vec::new(),
+            ),
+            FunctionKind::ExportLift | FunctionKind::ExportLower => (
+                vec![VecType::I32, VecType::I32, VecType::I32, VecType::I32],
+                Vec::new(),
+            ),
+        }
+    }
+
+    fn is_dispatchable(&self) -> bool {
+        match self.kind {
+            Function::Import | FunctionKind::ExportLift | FunctionKind::ExportLower => true,
+            FunctionKind::Export | FunctionKind::ExportPostReturn => false,
+        }
+    }
+
+    fn compile(&self, resolve: &Resolve) -> (Vec<ValType>, Vec<Ins>) {}
+}
+
+fn visit_function<'a>(
+    functions: &mut Vec<MyFunction<'a>>,
+    resolve: &'a Resolve,
+    interface: Option<&'a str>,
+    name: &'a str,
+    params: &'a [(String, Type)],
+    results: &'a Results,
+    direction: Direction,
+) {
+    let make = |kind| MyFunction {
+        kind,
+        interface,
+        name,
+        params,
+        results,
+    };
+
+    match direction {
+        Direction::Import => {
+            functions.push(make(FunctionKind::Import));
+        }
+        Direction::Export => {
+            functions.push(make(FunctionKind::Export));
+            functions.push(make(FunctionKind::ExportPostReturn));
+            functions.push(make(FunctionKind::ExportLift));
+            functions.push(make(FunctionKind::ExportLower));
+        }
+    }
+}
+
+fn visit_functions(
+    functions: &mut Vec<MyFunction>,
+    resolve: &Resolve,
+    items: &IndexMap<String, WorldItem>,
+    direction: Direction,
+) -> Result<()> {
+    for (item_name, item) in items {
+        match item {
+            WorldItem::Interface(interface) => {
+                let interface = &resolve.interfaces[interface];
+                for (func_name, func) in interface.functions {
+                    self.visit_function(
+                        functions,
+                        resolve,
+                        Some(&interface.name),
+                        func_name,
+                        &func.params,
+                        &func.results,
+                        direction,
+                    );
+                }
+            }
+
+            WorldItem::Function(func) => {
+                self.visit_func(
+                    functions,
+                    resolve,
+                    None,
+                    &func.name,
+                    &func.params,
+                    &func.results,
+                    direction,
+                );
+            }
+
+            WorldItem::Type(_) => bail!("type imports and exports not yet supported"),
+        }
+    }
+    Ok(())
+}
+
+fn componentize(module: &[u8], resolve: &Resolve, world: WorldId) -> Result<Vec<u8>> {
+    let mut my_functions = Vec::new();
+    visit_functions(
+        &mut my_functions,
+        &resolve,
+        &resolve.worlds[world].imports,
+        Direction::Import,
+    )?;
+    visit_functions(
+        &mut my_functions,
+        &resolve,
+        &resolve.worlds[world].exports,
+        Direction::Export,
+    )?;
+
+    // First pass: find and count stuff
+    let mut types = None;
+    let mut import_count = None;
+    let mut dispatch_import_index = None;
+    let mut dispatch_type_index = None;
+    let mut function_count = None;
+    let mut table_count = None;
+    let mut global_count = None;
     let mut stack_pointer_index = None;
     for payload in Parser::new(0).parse_all(module) {
         match payload? {
+            Payload::TypeSection(reader) => {
+                types = Some(reader.into_iter().collect::<Vec<_>>());
+            }
+            Payload::ImportSection(reader) => {
+                let count = 0;
+                for import in reader {
+                    let import = import?;
+                    if import.module == "componentize-py" {
+                        if import.field == "dispatch" {
+                            match import.ty {
+                                TypeRef::Func(ty) if types[ty] == dispatch_type => {
+                                    dispatch_import_index = Some(index);
+                                    dispatch_type_index = Some(ty);
+                                }
+                                _ => bail!(
+                                    "componentize-py#dispatch has incorrect type: {:?}",
+                                    import.ty
+                                ),
+                            }
+                        } else {
+                            bail!(
+                                "componentize-py module import has unrecognized name: {}",
+                                import.field
+                            );
+                        }
+                    }
+                }
+                import_count = Some(count)
+            }
+            Payload::FunctionSection(reader) => {
+                function_count = Some(reader.into_iter().count() + import_count.unwrap())
+            }
+            Payload::TableSection(reader) => {
+                table_count = Some(reader.into_iter().count());
+            }
+            Payload::GlobalSection(reader) => {
+                global_count = Some(reader.into_iter().count());
+            }
             Payload::CustomSection(section) if section.name() == "name" => {
                 let subsections = NameSectionReader::new(section.data(), section.data_offset());
                 for subsection in subsections {
@@ -1472,122 +1651,117 @@ fn componentize(module: &[u8], (resolve, world): &(Resolve, WorldId)) -> Result<
                         _ => {}
                     }
                 }
-                break;
             }
 
             _ => {}
         }
     }
 
-    let mut my_imports = Vec::new();
-    let mut import_count = None;
-    let mut my_function_type_start_index = None;
-    let mut my_function_start_index = None;
-    let mut dispatch_import_index = 0;
-    let mut function_table_index = None;
-    let mut table_init_index = None;
+    let old_import_count = import_count.unwrap();
+    let old_function_count = function_count.unwrap();
+    let new_import_count = my_functions
+        .iter()
+        .filter(|f| matches!(f, FunctionKind::Import(_)))
+        .count();
+    let dispatchable_function_count = my_functions.iter().filter(|f| f.is_dispatchable()).count();
+    let dispatch_type_index = dispatch_type_index.unwrap();
+
+    let remap = move |index| match index.cmp(dispatch_import_index) {
+        Ordering::Less => index,
+        Ordering::Equal => old_function_count + new_import_count - 1,
+        Ordering::Greater => {
+            if index < old_import_count {
+                index - 1
+            } else {
+                old_import_count + new_import_count - 1
+            }
+        }
+    };
+
+    let mut export_set = EXPORTS.iter().copied().collect::<HashSet<_>>();
+    let mut export_map = HashMap::new();
+
     let mut result = Module::new();
+    let mut code_entries_remaining = old_function_count - old_import_count;
+    let mut code_section = CodeSection::new();
+
     for payload in Parser::new(0).parse_all(module) {
         match payload? {
             Payload::TypeSection(reader) => {
                 let mut types = TypeSection::new();
-                let mut index = 0;
                 for wasmparser::Type::Func(ty) in types {
                     let map = |&ty| IntoValType(ty).into();
                     types.function(ty.params().iter().map(map), ty.params().iter().map(map));
-                    index += 1;
                 }
-                let my_function_type_start_index = Some(index);
-                for function in &mut my_functions {
-                    let map = |&ty| ty;
-                    types.function(
-                        function.params.iter().map(map),
-                        function.results.iter().map(map),
-                    );
-                    function.ty = index;
+                // TODO: should probably deduplicate these types:
+                for function in &my_functions {
+                    let (params, results) = function.core_type(resolve);
+                    types.function(params, results);
                 }
-                // dispatch function type:
-                types.function([ValType::I32, ValType::I32, ValType::I32, ValType::I32], []);
                 result.section(&types);
             }
 
             Payload::ImportSection(reader) => {
                 let mut imports = ImportSection::new();
-                let mut index = 0;
-                for import in reader {
+                for import in reader
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(index, import)| {
+                        (index == dispatch_import_index).then_some(import)
+                    })
+                {
                     let import = import?;
-                    if import.module == "componentize-py" {
-                        if import.field == "dispatch" {
-                            match import.ty {
-                                TypeRef::Func(ty) if types[ty] == dispatch_type => {
-                                    dispatch_import_index = Some(index);
-                                }
-                                _ => bail!(
-                                    "componentize-py#dispatch has incorrect type: {:?}",
-                                    import.ty
-                                ),
-                            }
-                        } else {
-                            bail!(
-                                "componentize-py module import has unrecognized name: {}",
-                                import.field
-                            );
-                        }
-                    } else {
-                        imports.import(import.module, import.field, IntoEntityType(import.ty));
-                        index += 1;
+                    imports.import(import.module, import.field, IntoEntityType(import.ty));
+                }
+                for (index, function) in my_functions.iter().enumerate() {
+                    if let FunctionKind::Import = function.kind {
+                        imports.import(
+                            function.interface.unwrap_or(&resolve.worlds[world].name),
+                            function.name,
+                            EntityType::Function(type_count + index),
+                        );
                     }
                 }
-                import_count = Some(index);
                 result.section(&imports);
             }
 
             Payload::FunctionSection(reader) => {
                 let mut functions = FunctionSection::new();
-                let mut index = import_count.unwrap();
                 for ty in reader {
                     functions.function(ty?);
-                    index += 1;
-                }
-                my_function_start_index = Some(index);
-                for function in &my_functions {
-                    functions.function(function.ty);
                 }
                 // dispatch function:
-                functions.function(my_function_type_start_index.unwrap() + my_functions.len());
+                functions.function(dispatch_type_index);
+                for index in 0..my_functions.len() {
+                    functions.function(old_type_count + index);
+                }
                 result.section(&functions);
             }
 
             Payload::TableSection(reader) => {
                 let mut tables = TableSection::new();
-                let mut index = 0;
                 for table in reader {
                     result.table(IntoTableType(table?).into());
-                    index += 1;
                 }
-                function_table_index = Some(index);
                 result.table(TableType {
                     element_type: RefType {
                         nullable: true,
-                        heap_type: HeapType::TypedFunc(dispatch_type_index.unwrap()),
+                        heap_type: HeapType::TypedFunc(dispatch_type_index),
                     },
-                    minimum: my_functions.len(),
-                    maximum: Some(my_functions.len()),
+                    minimum: dispatchable_function_count,
+                    maximum: Some(dispatchable_function_count),
                 });
                 result.section(&tables);
             }
 
             Payload::GlobalSection(reader) => {
                 let mut globals = GlobalSection::new();
-                let mut index = 0;
                 for global in reader {
                     globals.global(
                         IntoGlobalType(global.ty).into(),
                         &IntoConstExpr(global.init_expr).into(),
                     );
-                    index += 1;
                 }
-                table_init_index = Some(index);
                 globals.global(
                     GlobalType {
                         val_type: ValType::I32,
@@ -1602,31 +1776,41 @@ fn componentize(module: &[u8], (resolve, world): &(Resolve, WorldId)) -> Result<
                 let mut exports = ExportSection::new();
                 for export in reader {
                     let export = export?;
-                    if let Some(item) = export_map.get_mut(export.name) {
-                        if let ExternalKind::Func = export.kind {
-                            item.func = export.index;
+                    if let Some(name) = export.name.strip_prefix("componentize-py#") {
+                        if export_set.remove(name) {
+                            if let ExternalKind::Func = export.kind {
+                                export_map.insert(name, remap(export.index));
+                            } else {
+                                bail!("unexpected kind for {}: {:?}", export.name, export.kind);
+                            }
                         } else {
-                            bail!("unexpected kind for {}: {:?}", export.name, export.kind);
+                            bail!("duplicate or unrecognized export name: {}", export.name);
                         }
                     } else {
                         exports.export(
                             export.name,
                             IntoExportKind(export.kind).into(),
-                            export.index,
+                            remap(export.index),
                         );
                     }
                 }
-                todo!("compile functions using `symbol_map`");
+                for (index, function) in my_functions.enumerate() {
+                    if let FunctionKind::Export = function.kind {
+                        exports.export(
+                            if let Some(interface) = function.interface {
+                                &format!("{}#{}", interface, function.name)
+                            } else {
+                                function.name
+                            },
+                            ExportKind::Func,
+                            old_function_count + new_import_count + index,
+                        );
+                    }
+                }
                 result.section(&exports);
             }
 
-            Payload::CodeSectionStart { count, .. } => {
-                code = Some((count, CodeSection::new()));
-            }
-
             Payload::CodeSectionEntry(body) => {
-                let (count, section) = code.as_mut().unwrap();
-
                 let reader = body.get_binary_reader();
                 let mut locals = Vec::new();
                 for _ in 0..reader.read_var_u32()? {
@@ -1636,8 +1820,7 @@ fn componentize(module: &[u8], (resolve, world): &(Resolve, WorldId)) -> Result<
                 }
 
                 let visitor = Visitor {
-                    old_dispatch_index: dispatch_import_index.unwrap(),
-                    new_dispatch_index: my_function_start_index.unwrap() + my_functions.len(),
+                    remap,
                     buffer: Vec::new(),
                 };
                 while !reader.eof() {
@@ -1646,44 +1829,51 @@ fn componentize(module: &[u8], (resolve, world): &(Resolve, WorldId)) -> Result<
 
                 let function = Function::new(locals);
                 function.raw(visitor.buffer);
-                section.function(&function);
+                code_section.function(&function);
 
-                *count = (*count).checked_sub(1);
-                if *count == 0 {
+                *code_entries_remaining = (*code_entries_remaining).checked_sub(1);
+                if *code_entries_remaining == 0 {
                     for function in &my_functions {
-                        let func = Function::new_with_locals_types(function.locals.clone());
-                        for instruction in &func.instructions {
+                        let (locals, instructions) =
+                            function.compile(resolve, stack_pointer_index, &export_map);
+
+                        let func = Function::new_with_locals_types(locals);
+                        for instruction in &instructions {
                             func.instruction(instruction);
                         }
-                        section.function(&func);
+                        code_section.function(&func);
                     }
 
                     let dispatch = Function::new([]);
 
-                    let table_init_index = table_init_index.unwrap();
-                    dispatch.instruction(&Ins::GlobalGet(table_init_index));
+                    dispatch.instruction(&Ins::GlobalGet(table_count));
                     dispatch.instruction(&Ins::If(BlockType::Empty));
                     dispatch.instruction(&Ins::I32Const(0));
-                    dispatch.instruction(&Ins::GlobalSet(table_init_index));
+                    dispatch.instruction(&Ins::GlobalSet(table_count));
 
-                    let base = my_function_start_index.unwrap();
-                    let table = function_table_index.unwrap();
-                    for index in 0..my_functions.iter().filter(|f| f.is_dispatchable()).count() {
-                        dispatch.instruction(&Ins::RefFunc(base + index));
-                        dispatch.instruction(&Ins::I32Const(index));
-                        dispatch.instruction(&Ins::TableSet(table));
+                    let table_index = 0;
+                    for (index, function) in my_functions.iter().enumarate() {
+                        if function.is_dispatchable() {
+                            dispatch.instruction(&Ins::RefFunc(
+                                old_function_count + new_import_count + index,
+                            ));
+                            dispatch.instruction(&Ins::I32Const(table_index));
+                            dispatch.instruction(&Ins::TableSet(table));
+                            table_index += 1;
+                        }
                     }
 
                     dispatch.instruction(&Ins::End);
 
-                    for local in 0..4 {
+                    let dispatch_param_count = 4;
+                    for local in 0..dispatch_param_count {
                         dispatch.instruction(&Ins::LocalGet(local));
                     }
                     dispatch.instruction(&Ins::CallIndirect(local));
 
-                    section.function(&dispatch);
+                    code_section.function(&dispatch);
 
-                    result.section(section);
+                    result.section(&code_section);
                 }
             }
 
@@ -1691,24 +1881,13 @@ fn componentize(module: &[u8], (resolve, world): &(Resolve, WorldId)) -> Result<
                 let mut func_names = Vec::new();
                 let mut global_names = Vec::new();
 
-                let my_function_start_index = my_function_start_index.unwrap();
-                let old_dispatch_index = dispatch_import_index.unwrap();
-                let new_dispatch_index = my_function_start_index + my_functions.len();
-
                 let subsections = NameSectionReader::new(section.data(), section.data_offset());
                 for subsection in subsections {
                     match subsection? {
                         Name::Function(map) => {
                             for naming in map {
                                 let naming = naming?;
-                                function_names.push((
-                                    match naming.index.cmp(old_dispatch_index) {
-                                        Ordering::Less => naming.index,
-                                        Ordering::Equal => new_dispatch_index,
-                                        Ordering::Greater => naming.index - 1,
-                                    },
-                                    naming.name,
-                                ));
+                                function_names.push((remap(naming.index), naming.name));
                             }
                         }
                         Name::Global(map) => {
@@ -1721,12 +1900,31 @@ fn componentize(module: &[u8], (resolve, world): &(Resolve, WorldId)) -> Result<
                         _ => {}
                     }
                 }
+
                 global_names.push((table_init_index.unwrap(), "componentize-py#table_init"));
 
-                for (index, function) in my_functions.iter().enumerate() {
-                    function_names.push((my_function_start_index, &function.name));
+                function_names.push((
+                    old_function_count + new_import_count - 1,
+                    "componentize-py#dispatch",
+                ));
+
+                for (index, function) in my_functions
+                    .iter()
+                    .filter(|f| matches!(f.kind, FunctionKind::Import(_)))
+                    .enumerate()
+                {
+                    function_names.push((
+                        old_import_count - 1 + index,
+                        format!("{}-import", function.internal_name()),
+                    ));
                 }
-                function_names.push((new_dispatch_index, "componentize-py#dispatch"));
+
+                for (index, function) in my_functions.iter().enumerate() {
+                    function_names.push((
+                        old_function_count + new_import_count + index,
+                        function.internal_name(),
+                    ));
+                }
 
                 let mut data = Vec::new();
                 for (code, names) in [(0x01_u8, &function_names), (0x07_u8, &global_names)] {
@@ -1756,6 +1954,16 @@ fn componentize(module: &[u8], (resolve, world): &(Resolve, WorldId)) -> Result<
             }
         }
     }
+
+    result.section(&CustomSection {
+        name,
+        data: &metadata::encode(
+            &bindgen.resolve,
+            world,
+            wit_component::StringEncoding::UTF8,
+            None,
+        )?,
+    });
 
     // Encode with WASI Preview 1 adapter
     Ok(ComponentEncoder::default()
