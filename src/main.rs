@@ -1457,13 +1457,13 @@ fn componentize(module: &[u8], (resolve, world): &(Resolve, WorldId)) -> Result<
     for payload in Parser::new(0).parse_all(module) {
         match payload? {
             Payload::CustomSection(section) if section.name() == "name" => {
-                let section = NameSectionReader::new(section.data(), section.data_offset());
-                for section in section {
-                    match section? {
+                let subsections = NameSectionReader::new(section.data(), section.data_offset());
+                for subsection in subsections {
+                    match subsection? {
                         Name::Global(map) => {
                             for naming in map {
                                 let naming = naming?;
-                                if naming == "__stack_pointer" {
+                                if naming.name == "__stack_pointer" {
                                     stack_pointer_index = Some(naming.index);
                                     break;
                                 }
@@ -1479,13 +1479,13 @@ fn componentize(module: &[u8], (resolve, world): &(Resolve, WorldId)) -> Result<
         }
     }
 
-    todo!("link stack pointer references in `my_functions` with `stack_pointer_index`");
-
     let mut my_imports = Vec::new();
     let mut import_count = None;
     let mut my_function_type_start_index = None;
     let mut my_function_start_index = None;
+    let mut dispatch_import_index = 0;
     let mut function_table_index = None;
+    let mut table_init_index = None;
     let mut result = Module::new();
     for payload in Parser::new(0).parse_all(module) {
         match payload? {
@@ -1508,8 +1508,6 @@ fn componentize(module: &[u8], (resolve, world): &(Resolve, WorldId)) -> Result<
                 }
                 // dispatch function type:
                 types.function([ValType::I32, ValType::I32, ValType::I32, ValType::I32], []);
-                // init_table function type:
-                types.function([], []);
                 result.section(&types);
             }
 
@@ -1557,8 +1555,6 @@ fn componentize(module: &[u8], (resolve, world): &(Resolve, WorldId)) -> Result<
                 }
                 // dispatch function:
                 functions.function(my_function_type_start_index.unwrap() + my_functions.len());
-                // init_table function:
-                functions.function(my_function_type_start_index.unwrap() + my_functions.len() + 1);
                 result.section(&functions);
             }
 
@@ -1581,6 +1577,27 @@ fn componentize(module: &[u8], (resolve, world): &(Resolve, WorldId)) -> Result<
                 result.section(&tables);
             }
 
+            Payload::GlobalSection(reader) => {
+                let mut globals = GlobalSection::new();
+                let mut index = 0;
+                for global in reader {
+                    globals.global(
+                        IntoGlobalType(global.ty).into(),
+                        &IntoConstExpr(global.init_expr).into(),
+                    );
+                    index += 1;
+                }
+                table_init_index = Some(index);
+                globals.global(
+                    GlobalType {
+                        val_type: ValType::I32,
+                        mutable: true,
+                    },
+                    &ConstExpr::i32_const(0),
+                );
+                result.section(&globals);
+            }
+
             Payload::ExportSection(reader) => {
                 let mut exports = ExportSection::new();
                 for export in reader {
@@ -1599,7 +1616,7 @@ fn componentize(module: &[u8], (resolve, world): &(Resolve, WorldId)) -> Result<
                         );
                     }
                 }
-                todo!("link calls in `my_functions` using `export_map` and `table_init` index");
+                todo!("compile functions using `symbol_map`");
                 result.section(&exports);
             }
 
@@ -1642,28 +1659,91 @@ fn componentize(module: &[u8], (resolve, world): &(Resolve, WorldId)) -> Result<
                     }
 
                     let dispatch = Function::new([]);
-                    for local in 0..4 {
-                        dispatch.instruction(Ins::LocalGet(local));
-                    }
-                    dispatch.instruction(Ins::CallIndirect(local));
-                    section.function(&dispatch);
 
-                    let table_init = Function::new([]);
+                    let table_init_index = table_init_index.unwrap();
+                    dispatch.instruction(&Ins::GlobalGet(table_init_index));
+                    dispatch.instruction(&Ins::If(BlockType::Empty));
+                    dispatch.instruction(&Ins::I32Const(0));
+                    dispatch.instruction(&Ins::GlobalSet(table_init_index));
+
                     let base = my_function_start_index.unwrap();
                     let table = function_table_index.unwrap();
-                    for index in 0..my_functions.len() {
-                        table_init.instruction(Ins::RefFunc(base + index));
-                        table_init.instruction(Ins::I32Const(index));
-                        table_init.instruction(Ins::TableSet(table));
+                    for index in 0..my_functions.iter().filter(|f| f.is_dispatchable()).count() {
+                        dispatch.instruction(&Ins::RefFunc(base + index));
+                        dispatch.instruction(&Ins::I32Const(index));
+                        dispatch.instruction(&Ins::TableSet(table));
                     }
-                    section.function(&table_init);
+
+                    dispatch.instruction(&Ins::End);
+
+                    for local in 0..4 {
+                        dispatch.instruction(&Ins::LocalGet(local));
+                    }
+                    dispatch.instruction(&Ins::CallIndirect(local));
+
+                    section.function(&dispatch);
 
                     result.section(section);
                 }
             }
 
             Payload::CustomSection(section) if section.name() == "name" => {
-                todo!("adjust existing names and add new names");
+                let mut func_names = Vec::new();
+                let mut global_names = Vec::new();
+
+                let my_function_start_index = my_function_start_index.unwrap();
+                let old_dispatch_index = dispatch_import_index.unwrap();
+                let new_dispatch_index = my_function_start_index + my_functions.len();
+
+                let subsections = NameSectionReader::new(section.data(), section.data_offset());
+                for subsection in subsections {
+                    match subsection? {
+                        Name::Function(map) => {
+                            for naming in map {
+                                let naming = naming?;
+                                function_names.push((
+                                    match naming.index.cmp(old_dispatch_index) {
+                                        Ordering::Less => naming.index,
+                                        Ordering::Equal => new_dispatch_index,
+                                        Ordering::Greater => naming.index - 1,
+                                    },
+                                    naming.name,
+                                ));
+                            }
+                        }
+                        Name::Global(map) => {
+                            for naming in map {
+                                let naming = naming?;
+                                global_names.push((naming.index, naming.name));
+                            }
+                        }
+                        // TODO: do we want to copy over other names as well?
+                        _ => {}
+                    }
+                }
+                global_names.push((table_init_index.unwrap(), "componentize-py#table_init"));
+
+                for (index, function) in my_functions.iter().enumerate() {
+                    function_names.push((my_function_start_index, &function.name));
+                }
+                function_names.push((new_dispatch_index, "componentize-py#dispatch"));
+
+                let mut data = Vec::new();
+                for (code, names) in [(0x01_u8, &function_names), (0x07_u8, &global_names)] {
+                    let mut subsection = Vec::new();
+                    names.len().encode(&mut subsection);
+                    for (index, name) in names {
+                        index.encode(&mut subsection);
+                        name.encode(&mut subsection);
+                    }
+                    section.push(code);
+                    subsection.encode(&mut data);
+                }
+
+                result.section(&CustomSection {
+                    name: "name",
+                    data: &data,
+                });
             }
 
             payload => {
@@ -1680,7 +1760,7 @@ fn componentize(module: &[u8], (resolve, world): &(Resolve, WorldId)) -> Result<
     // Encode with WASI Preview 1 adapter
     Ok(ComponentEncoder::default()
         .validate(true)
-        .module(&module)?
+        .module(&result.encode())?
         .adapter(
             "wasi_snapshot_preview1",
             &zstd::decode_all(Cursor::new(include_bytes!(concat!(
