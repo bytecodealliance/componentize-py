@@ -105,10 +105,9 @@ fn main() -> Result<()> {
             "/runtime.wasm.zst"
         ))))?)?;
 
-        let component = componentize(
-            &module,
-            &parse_wit(&options.wit_path, options.wit_world.as_deref())?,
-        )?;
+        let (resolve, world) = parse_wit(&options.wit_path, options.wit_world.as_deref())?;
+        let summary = summarize(&resolve, world)?;
+        let component = componentize(&module, &resolve, world, &summary.names)?;
 
         fs::write(&options.output, component)?;
     } else {
@@ -144,7 +143,8 @@ fn main() -> Result<()> {
         let mut stdout = tempfile::tempfile()?;
         let mut stderr = tempfile::tempfile()?;
 
-        let summary = summarize(&parse_wit(&options.wit_path, options.wit_world.as_deref())?)?;
+        let (resolve, world) = parse_wit(&options.wit_path, options.wit_world.as_deref())?;
+        let summary = summarize(&resolve, world)?;
         bincode::serialize_into(&mut stdin, &summary)?;
         stdin.rewind()?;
 
@@ -335,8 +335,8 @@ impl<'a> FunctionBindgen<'a> {
 
                 store_offset += abi.size;
 
-                self.pop_local(destination);
-                self.pop_local(value);
+                self.pop_local(destination, ValType::I32);
+                self.pop_local(value, ValType::I32);
             }
 
             self.get_stack();
@@ -417,7 +417,7 @@ impl<'a> FunctionBindgen<'a> {
                 destination,
             );
 
-            self.pop_local(destination);
+            self.pop_local(destination, ValType::I32);
 
             self.get_stack();
 
@@ -445,7 +445,7 @@ impl<'a> FunctionBindgen<'a> {
 
             self.load_copy_record(self.results.types(), source);
 
-            self.pop_local(source);
+            self.pop_local(source, ValType::I32);
 
             self.pop_stack(self.results_abi.size);
         }
@@ -720,7 +720,7 @@ impl<'a> FunctionBindgen<'a> {
                 self.push(Ins::LocalGet(destination));
                 self.call(Call::LowerString);
             }
-            Type::Id(id) => match self.gen.resolve.types[id].kind {
+            Type::Id(id) => match self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
                     let mut store_offset = 0;
                     for field in &record.fields {
@@ -796,7 +796,7 @@ impl<'a> FunctionBindgen<'a> {
                 self.push(Ins::LocalGet(destination));
                 self.push(Ins::I32Store(mem_arg(WORD_SIZE, WORD_ALIGN)));
             }
-            Type::Id(id) => match self.gen.resolve.types[id].kind {
+            Type::Id(id) => match self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
                     self.store_copy_record(
                         record.fields.iter().map(|field| field.ty),
@@ -884,7 +884,7 @@ impl<'a> FunctionBindgen<'a> {
                 self.push(Ins::LocalGet(value[1]));
                 self.call(Call::LiftString);
             }
-            Type::Id(id) => match self.gen.resolve.types[id].kind {
+            Type::Id(id) => match self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
                     self.push_stack(record.fields.len() * WORD_SIZE);
                     let source = self.push_local(ValType::I32);
@@ -894,7 +894,11 @@ impl<'a> FunctionBindgen<'a> {
 
                     self.lift_record(record.fields.iter().map(|field| field.ty), context, source);
 
-                    let name = self.name(&record.name);
+                    let name = self.name(
+                        &self.resolve.types[id]
+                            .name
+                            .expect("todo: support anonymous records"),
+                    );
 
                     self.push(Ins::I32Const(name));
                     self.get_stack();
@@ -910,7 +914,7 @@ impl<'a> FunctionBindgen<'a> {
                     let source = value[0];
                     let length = value[1];
 
-                    let abi = self.gen.abi(ty);
+                    let abi = abi(self.resolve, ty);
 
                     let index = self.push_local(ValType::I32);
                     let element_source = self.push_local(ValType::I32);
@@ -956,7 +960,6 @@ impl<'a> FunctionBindgen<'a> {
 
                     self.pop_local(element_source, ValType::I32);
                     self.pop_local(index, ValType::I32);
-                    self.pop_local(destination, ValType::I32);
                 }
                 _ => todo!(),
             },
@@ -1043,7 +1046,7 @@ impl<'a> FunctionBindgen<'a> {
                 self.push(Ins::I32Load(mem_arg(WORD_SIZE, WORD_ALIGN)));
                 self.call(Call::LiftString);
             }
-            Type::Id(id) => match self.gen.resolve.types[id].kind {
+            Type::Id(id) => match self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
                     self.push_stack(record.fields.len() * WORD_SIZE);
                     let destination = self.push_local(ValType::I32);
@@ -1058,7 +1061,11 @@ impl<'a> FunctionBindgen<'a> {
                         destination,
                     );
 
-                    let name = self.name(&record.name);
+                    let name = self.name(
+                        &self.resolve.types[id]
+                            .name
+                            .expect("todo: support anonymous records"),
+                    );
 
                     self.push(Ins::I32Const(name));
                     self.get_stack();
@@ -1083,7 +1090,7 @@ impl<'a> FunctionBindgen<'a> {
                     self.lift(ty, context, &[body, length]);
 
                     self.pop_local(length, ValType::I32);
-                    self.pop_local(list, ValType::I32);
+                    self.pop_local(body, ValType::I32);
                 }
                 _ => todo!(),
             },
@@ -1154,7 +1161,7 @@ impl<'a> FunctionBindgen<'a> {
                 self.push(Ins::LocalGet(source));
                 self.push(Ins::I32Load(mem_arg(WORD_SIZE, WORD_ALIGN)));
             }
-            Type::Id(id) => match self.gen.resolve.types[id].kind {
+            Type::Id(id) => match self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
                     self.load_copy_record(result.fields.iter().map(|field| field.ty), source);
                 }
@@ -1212,7 +1219,7 @@ impl<'a> FunctionBindgen<'a> {
                 self.call(Call::Free);
             }
 
-            Type::Id(id) => match self.gen.resolve.types[id].kind {
+            Type::Id(id) => match self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
                     free_lowered_record(record.fields.iter().map(|field| field.ty), value);
                 }
@@ -1222,7 +1229,7 @@ impl<'a> FunctionBindgen<'a> {
                     let pointer = value[0];
                     let length = value[1];
 
-                    let abi = self.gen.abi(ty);
+                    let abi = abi(self.resolve, ty);
 
                     let destination = self.push_local(ValType::I32);
                     let index = self.push_local(ValType::I32);
@@ -1269,6 +1276,7 @@ impl<'a> FunctionBindgen<'a> {
 
                     self.pop_local(element_pointer, ValType::I32);
                     self.pop_local(index, ValType::I32);
+                    self.pop_local(destination, ValType::I32);
                 }
                 _ => todo!(),
             },
@@ -1310,7 +1318,7 @@ impl<'a> FunctionBindgen<'a> {
                 self.call(Call::Free);
             }
 
-            Type::Id(id) => match self.gen.resolve.types[id].kind {
+            Type::Id(id) => match self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
                     free_stored_record(record.fields.iter().map(|field| field.ty), value);
                 }
@@ -1329,7 +1337,7 @@ impl<'a> FunctionBindgen<'a> {
                     self.free_stored(ty, context, &[body, length]);
 
                     self.pop_local(length, ValType::I32);
-                    self.pop_local(list, ValType::I32);
+                    self.pop_local(body, ValType::I32);
                 }
                 _ => todo!(),
             },
@@ -1497,7 +1505,12 @@ fn visit_functions(
     Ok(())
 }
 
-fn componentize(module: &[u8], resolve: &Resolve, world: WorldId) -> Result<Vec<u8>> {
+fn componentize(
+    module: &[u8],
+    resolve: &Resolve,
+    world: WorldId,
+    summary: &Summary,
+) -> Result<Vec<u8>> {
     // First pass: find and count stuff
     let mut types = None;
     let mut import_count = None;
@@ -1775,7 +1788,7 @@ fn componentize(module: &[u8], resolve: &Resolve, world: WorldId) -> Result<Vec<
                             resolve,
                             stack_pointer_index,
                             &export_map,
-                            &mut names,
+                            summary,
                             function.params,
                             function.results,
                         );
