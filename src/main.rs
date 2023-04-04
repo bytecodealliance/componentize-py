@@ -243,7 +243,7 @@ macro_rules! declare_enum {
 
 declare_enum! {
     Link {
-        Export,
+        Dispatch,
         Free,
         LowerI32,
         LowerI64,
@@ -263,6 +263,81 @@ declare_enum! {
         MakeList,
         ListAppend
     } LINK_LIST
+}
+
+struct Abi {
+    size: usize,
+    align: usize,
+    flattened: Vec<ValType>,
+}
+
+fn record_abi(resolve: &Resolve, types: impl IntoIterator<Item = Type>) -> Abi {
+    let mut size = 0;
+    let mut align = 1;
+    let flattened = Vec::new();
+    for ty in types {
+        let abi = abi(self.resolve, ty);
+        align(&mut size, abi.align);
+        size += abi.size;
+        flattened.extend(abi.flattened);
+    }
+
+    Abi {
+        size,
+        align,
+        flattened,
+    }
+}
+
+fn abi(resolve: &Resolve, ty: Type) -> Abi {
+    match ty {
+        Type::Bool | Type::U8 | Type::S8 => Abi {
+            size: 1,
+            align: 1,
+            flattened: vec![ValType::I32],
+        },
+        Type::U16 | Type::S16 => Abi {
+            size: 2,
+            align: 2,
+            flattened: vec![ValType::I32],
+        },
+        Type::U32 | Type::S32 | Type::Char => Abi {
+            size: 4,
+            align: 4,
+            flattened: vec![ValType::I32],
+        },
+        Type::U64 | Type::S64 => Abi {
+            size: 8,
+            align: 8,
+            flattened: vec![ValType::I64],
+        },
+        Type::Float32 => Abi {
+            size: 4,
+            align: 4,
+            flattened: vec![ValType::F32],
+        },
+        Type::Float64 => Abi {
+            size: 8,
+            align: 8,
+            flattened: vec![ValType::F64],
+        },
+        Type::String => Abi {
+            size: 8,
+            align: 4,
+            flattened: vec![ValType::I32, ValType::I32],
+        },
+        Type::Id(id) => match self.resolve.types[id].kind {
+            TypeDefKind::Record(record) => {
+                record_abi(resolve, record.fields.iter().map(|field| field.ty))
+            }
+            TypeDefKind::List(element_type) => Abi {
+                size: 8,
+                align: 4,
+                flattened: vec![ValType::I32, ValType::I32],
+            },
+            _ => todo!(),
+        },
+    }
 }
 
 struct FunctionBindgen<'a> {
@@ -468,7 +543,7 @@ impl<'a> FunctionBindgen<'a> {
             self.push(Ins::LocalGet(param_flat_count));
         }
 
-        self.link_call(Link::Export);
+        self.link_call(Link::Dispatch);
 
         if self.results_abi.flattened.len() <= MAX_FLAT_RESULTS {
             let source = self.push_local(ValType::I32);
@@ -1563,6 +1638,105 @@ impl<'a> Summary<'a> {
     }
 }
 
+struct Visitor<F> {
+    remap: F,
+    buffer: Vec<u8>,
+}
+
+// Adapted from https://github.com/bytecodealliance/wasm-tools/blob/1e0052974277b3cce6c3703386e4e90291da2b24/crates/wit-component/src/gc.rs#L1118
+macro_rules! define_encode {
+    ($(@$p:ident $op:ident $({ $($arg:ident: $argty:ty),* })? => $visit:ident)*) => {
+        $(
+            #[allow(clippy::drop_copy)]
+            fn $visit(&mut self $(, $($arg: $argty),*)?)  {
+                #[allow(unused_imports)]
+                use wasm_encoder::Instruction::*;
+                $(
+                    $(
+                        let $arg = define_encode!(map self $arg $arg);
+                    )*
+                )?
+                let insn = define_encode!(mk $op $($($arg)*)?);
+                insn.encode(&mut self.buf);
+            }
+        )*
+    };
+
+    // No-payload instructions are named the same in wasmparser as they are in
+    // wasm-encoder
+    (mk $op:ident) => ($op);
+
+    // Instructions which need "special care" to map from wasmparser to
+    // wasm-encoder
+    (mk BrTable $arg:ident) => ({
+        BrTable($arg.0, $arg.1)
+    });
+    (mk CallIndirect $ty:ident $table:ident $table_byte:ident) => ({
+        drop($table_byte);
+        CallIndirect { ty: $ty, table: $table }
+    });
+    (mk ReturnCallIndirect $ty:ident $table:ident) => (
+        ReturnCallIndirect { ty: $ty, table: $table }
+    );
+    (mk MemorySize $mem:ident $mem_byte:ident) => ({
+        drop($mem_byte);
+        MemorySize($mem)
+    });
+    (mk MemoryGrow $mem:ident $mem_byte:ident) => ({
+        drop($mem_byte);
+        MemoryGrow($mem)
+    });
+    (mk I32Const $v:ident) => (I32Const($v));
+    (mk I64Const $v:ident) => (I64Const($v));
+    (mk F32Const $v:ident) => (F32Const(f32::from_bits($v.bits())));
+    (mk F64Const $v:ident) => (F64Const(f64::from_bits($v.bits())));
+    (mk V128Const $v:ident) => (V128Const($v.i128()));
+
+    // Catch-all for the translation of one payload argument which is typically
+    // represented as a tuple-enum in wasm-encoder.
+    (mk $op:ident $arg:ident) => ($op($arg));
+
+    // Catch-all of everything else where the wasmparser fields are simply
+    // translated to wasm-encoder fields.
+    (mk $op:ident $($arg:ident)*) => ($op { $($arg),* });
+
+    // Individual cases of mapping one argument type to another
+    (map $self:ident $arg:ident memarg) => {IntoMemArg($arg).into()};
+    (map $self:ident $arg:ident blockty) => {IntoBlockType($arg).into()};
+    (map $self:ident $arg:ident hty) => {IntoHeapType($arg).into()};
+    (map $self:ident $arg:ident tag_index) => {$arg};
+    (map $self:ident $arg:ident relative_depth) => {$arg};
+    (map $self:ident $arg:ident function_index) => {($self.remap)($arg)};
+    (map $self:ident $arg:ident global_index) => {$arg};
+    (map $self:ident $arg:ident mem) => {$arg};
+    (map $self:ident $arg:ident src_mem) => {$arg};
+    (map $self:ident $arg:ident dst_mem) => {$arg};
+    (map $self:ident $arg:ident table) => {$arg};
+    (map $self:ident $arg:ident table_index) => {$arg};
+    (map $self:ident $arg:ident src_table) => {$arg};
+    (map $self:ident $arg:ident dst_table) => {$arg};
+    (map $self:ident $arg:ident type_index) => {$arg};
+    (map $self:ident $arg:ident ty) => {IntoValType($arg).into()};
+    (map $self:ident $arg:ident local_index) => {$arg};
+    (map $self:ident $arg:ident lane) => {$arg};
+    (map $self:ident $arg:ident lanes) => {$arg};
+    (map $self:ident $arg:ident elem_index) => {$arg};
+    (map $self:ident $arg:ident data_index) => {$arg};
+    (map $self:ident $arg:ident table_byte) => {$arg};
+    (map $self:ident $arg:ident mem_byte) => {$arg};
+    (map $self:ident $arg:ident value) => {$arg};
+    (map $self:ident $arg:ident targets) => ((
+        $arg.targets().map(|i| i.unwrap()).collect::<Vec<_>>().into(),
+        $arg.default(),
+    ));
+}
+
+impl<'a, F: Fn(u32) -> u32> VisitOperator<'a> for Visitor<F> {
+    type Output = ();
+
+    wasmparser::for_each_operator!(define_encode);
+}
+
 fn componentize(
     module: &[u8],
     resolve: &Resolve,
@@ -1686,11 +1860,10 @@ fn componentize(
                     types.function(ty.params().iter().map(map), ty.params().iter().map(map));
                 }
                 // TODO: should probably deduplicate these types:
-                for (index, function) in summary
+                for function in summary
                     .functions
                     .iter()
                     .filter(|f| matches!(f.kind, FunctionKind::Import))
-                    .enumerate()
                 {
                     let (params, results) = function.canonical_core_type(resolve);
                     types.function(params, results);
