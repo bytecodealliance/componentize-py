@@ -1,4 +1,10 @@
-use std::{env, fs, path::PathBuf, process::Command};
+use std::{
+    env,
+    fmt::Write,
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 fn main() {
     let mut repo_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
@@ -45,19 +51,19 @@ fn maybe_make_cpython(repo_dir: &Path) {
     fs::create_dir_all(&cpython_wasi_dir).unwrap();
 
     run(Command::new("../../configure")
-        .current_dir(cpython_native_dir)
+        .current_dir(&cpython_native_dir)
         .arg(format!(
             "--prefix={}/install",
-            String::from_utf8(current_dir).unwrap()
+            cpython_native_dir.to_str().unwrap()
         )));
 
     run(Command::new("make").current_dir(cpython_native_dir));
 
-    let config_guess = run(Command::new("../../config.guess").current_dir(cpython_wasi_dir));
+    let config_guess = run(Command::new("../../config.guess").current_dir(&cpython_wasi_dir));
 
     run(Command::new("../../Tools/wasm/wasi-env")
         .env("CONFIG_SITE", "../../Tools/wasm/config.site-wasm32-wasi")
-        .current_dir(cpython_wasi_dir)
+        .current_dir(&cpython_wasi_dir)
         .args([
             "../../configure",
             "-C",
@@ -65,9 +71,9 @@ fn maybe_make_cpython(repo_dir: &Path) {
             &format!("--build={}", String::from_utf8(config_guess).unwrap()),
             &format!(
                 "--with-build-python={}/../build/python",
-                String::from_utf8(cpython_wasi_dir)
+                cpython_wasi_dir.to_str().unwrap()
             ),
-            &format!("--prefix={}/install", String::from_utf8(cpython_wasi_dir)),
+            &format!("--prefix={}/install", cpython_wasi_dir.to_str().unwrap()),
             "--disable-test-modules",
         ]));
 
@@ -81,7 +87,10 @@ fn run(command: &mut Command) -> Vec<u8> {
     if output.status.success() {
         output.stdout
     } else {
-        panic!("command failed: {}", String::from_utf8_lossy(output.stderr));
+        panic!(
+            "command failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }
 
@@ -89,20 +98,24 @@ fn make_pyo3_config(repo_dir: &Path) {
     let out_dir = env::var("OUT_DIR").unwrap();
     let mut cpython_wasi_dir = repo_dir.join("cpython/builddir/wasi");
     let mut cygpath = Command::new("cygpath");
-    cygpath.arg("-w").arg(cpython_wasi_dir);
+    cygpath.arg("-w").arg(&cpython_wasi_dir);
     if let Ok(output) = cygpath.output() {
         if output.status.success() {
-            cpython_wasi_dir = PathBuf::new(String::from_utf8(output.stdout).unwrap().trim());
+            cpython_wasi_dir = PathBuf::from(String::from_utf8(output.stdout).unwrap().trim());
         } else {
-            panic!("cygpath failed: {}", String::from_utf8_lossy(output.stderr));
+            panic!(
+                "cygpath failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
     }
 
-    let mut pyo3_config = fs::read_to_string("pyo3-config.txt");
+    let mut pyo3_config = fs::read_to_string("pyo3-config.txt").unwrap();
     writeln!(
         pyo3_config,
         "lib_dir={}",
         cpython_wasi_dir.to_str().unwrap()
-    );
-    fs::write(out_dir.join("pyo3-config.txt")).unwrap();
+    )
+    .unwrap();
+    fs::write(Path::new(&out_dir).join("pyo3-config.txt"), pyo3_config).unwrap();
 }

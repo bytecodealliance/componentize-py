@@ -7,6 +7,7 @@ use {
         fs::{self, File},
         io::{self, Write},
         path::{Path, PathBuf},
+        process::Command,
     },
     tar::Builder,
     zstd::Encoder,
@@ -48,6 +49,17 @@ fn stubs_for_clippy(out_dir: &Path) -> Result<()> {
         .do_finish()?;
     }
 
+    let wasi_adapter_path = out_dir.join("wasi_snapshot_preview1.wasm.zst");
+
+    if !wasi_adapter_path.exists() {
+        Builder::new(Encoder::new(
+            File::create(wasi_adapter_path)?,
+            ZSTD_COMPRESSION_LEVEL,
+        )?)
+        .into_inner()?
+        .do_finish()?;
+    }
+
     Ok(())
 }
 
@@ -59,7 +71,7 @@ fn package_runtime_and_core_library(out_dir: &Path) -> Result<()> {
         .current_dir("runtime")
         .arg("--release")
         .arg("--target=wasm32-wasi")
-        .env("CARGO_TARGET_DIR", &out_dir);
+        .env("CARGO_TARGET_DIR", out_dir);
 
     let status = cmd.status()?;
     assert!(status.success());

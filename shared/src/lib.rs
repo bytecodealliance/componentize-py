@@ -1,30 +1,32 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
-struct Function<'a> {
-    #[serde(with = "serde_bytes")]
-    interface: Option<&'a str>,
-    #[serde(with = "serde_bytes")]
-    name: &'a str,
+pub struct Function<'a> {
+    #[serde(borrow)]
+    pub interface: Option<&'a str>,
+    pub name: &'a str,
 }
 
 #[derive(Serialize, Deserialize)]
-enum Direction {
+pub enum Direction {
     Import,
     Export,
 }
 
 #[derive(Serialize, Deserialize)]
-struct Type<'a> {
-    direction: Direction,
-    #[serde(with = "serde_bytes")]
-    interface: &'a str,
-    #[serde(with = "serde_bytes")]
-    name: Option<&'a str>,
+pub struct Type<'a> {
+    pub direction: Direction,
+    pub interface: &'a str,
+    #[serde(borrow)]
+    pub name: Option<&'a str>,
+    #[serde(borrow)]
+    pub fields: Vec<&'a str>,
 }
 
 #[derive(Serialize, Deserialize)]
-struct Symbols<'a> {
-    exports: Vec<Function<'a>>,
-    types: Vec<Type<'a>>,
+pub struct Symbols<'a> {
+    #[serde(borrow)]
+    pub exports: Vec<Function<'a>>,
+    #[serde(borrow)]
+    pub types: Vec<Type<'a>>,
 }
