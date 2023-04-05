@@ -112,15 +112,28 @@ fn main() -> Result<()> {
     } else {
         let options = Options::parse();
 
-        let temp = tempfile::tempdir()?;
+        let stdlib = tempfile::tempdir()?;
 
         Archive::new(Decoder::new(Cursor::new(include_bytes!(concat!(
             env!("OUT_DIR"),
             "/python-lib.tar.zst"
         ))))?)
-        .unpack(temp.path())?;
+        .unpack(stdlib.path())?;
 
-        let mut python_path = options.python_path;
+        let generated_code = tempfile::tempdir()?;
+        let (resolve, world) = parse_wit(&options.wit_path, options.wit_world.as_deref())?;
+        let summary = Summary::try_new(resolve, world)?;
+        summary.generate_code(generated_code.path())?;
+
+        let mut python_path = format!(
+            "{}{NATIVE_PATH_DELIMITER}{}",
+            options.python_path,
+            generated_code
+                .path()
+                .to_str()
+                .context("non-UTF-8 temporary directory name")?
+        );
+
         if let Some(site_packages) = find_site_packages()? {
             python_path = format!(
                 "{python_path}{NATIVE_PATH_DELIMITER}{}",
@@ -142,8 +155,7 @@ fn main() -> Result<()> {
         let mut stdout = tempfile::tempfile()?;
         let mut stderr = tempfile::tempfile()?;
 
-        let (resolve, world) = parse_wit(&options.wit_path, options.wit_world.as_deref())?;
-        bincode::serialize_into(&mut stdin, &Summary::try_new(resolve, world)?)?;
+        bincode::serialize_into(&mut stdin, &summary.collect_symbols())?;
         stdin.rewind()?;
 
         let mut cmd = Command::new(env::args().next().unwrap());
@@ -152,7 +164,8 @@ fn main() -> Result<()> {
             .arg(&options.app_name)
             .arg(&options.wit_path)
             .arg(
-                temp.path()
+                stdlib
+                    .path()
                     .to_str()
                     .context("non-UTF-8 temporary directory name")?,
             )
@@ -1524,6 +1537,8 @@ struct Summary<'a> {
     resolve: &'a Resolve,
     functions: Vec<MyFunction<'a>>,
     types: IndexSet<TypeId>,
+    imported_interfaces: HashMap<InterfaceId, &'a str>,
+    exported_interfaces: HashMap<InterfaceId, &'a str>,
 }
 
 impl<'a> Summary<'a> {
@@ -1615,6 +1630,10 @@ impl<'a> Summary<'a> {
         for (item_name, item) in items {
             match item {
                 WorldItem::Interface(interface) => {
+                    match direction {
+                        Direction::Import => self.imported_interfaces.insert(interface, item_name),
+                        Direction::Export => self.exported_interfaces.insert(interface, item_name),
+                    }
                     let interface = &self.resolve.interfaces[interface];
                     for (func_name, func) in interface.functions {
                         self.visit_function(
@@ -1635,6 +1654,171 @@ impl<'a> Summary<'a> {
             }
         }
         Ok(())
+    }
+
+    fn collect_symbols(&self) -> Symbols<'a> {
+        let mut imports = Vec::new();
+        let mut exports = Vec::new();
+        for function in self.functions {
+            match function.kind {
+                FunctionKind::Import => imports.push(symbols::Function {
+                    interface: function.interface,
+                    name: function.name,
+                }),
+                FunctionKind::Export => exports.push(symbols::Function {
+                    interface: function.interface,
+                    name: function.name,
+                }),
+                _ => (),
+            }
+        }
+
+        let mut types = Vec::new();
+        for ty in self.types {
+            let ty = &self.resolve.types[ty];
+            if let TypeOwner::Interface(interface) = ty.owner {
+                let (direction, interface) =
+                    if let Some(name) = self.imported_interfaces.get(interface) {
+                        (Direction::Import, name)
+                    } else {
+                        (Direction::Export, self.exported_interfaces[interface])
+                    };
+
+                types.push(symbols::Type {
+                    direction,
+                    interface,
+                    name: ty.name.as_deref(),
+                });
+            } else {
+                todo!("handle types exported directly from a world");
+            };
+        }
+    }
+
+    fn generate_code(&self, path: &Path) -> Result<()> {
+        let mut interface_imports = HashMap::new();
+        let mut interface_exports = HashMap::new();
+        let mut world_imports = Vec::new();
+        for function in self.functions {
+            match function.kind {
+                FunctionKind::Import => {
+                    // todo: generate typings
+                    let snake = function.name.to_snake_case();
+                    let params = function
+                        .params
+                        .iter()
+                        .map(|(name, _)| name)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+
+                    let code = format!(
+                        "def {snake}({params}):\n    \
+                         return componentize_py.call_import([{params}])\n\n"
+                    );
+
+                    if let Some(interface) = function.interface {
+                        interface_imports.entry(interface).or_default().push(code);
+                    } else {
+                        world_imports.push(code);
+                    }
+                }
+                // todo: generate `Protocol` for each exported function
+                _ => (),
+            }
+        }
+
+        for (index, ty) in self.types.iter().enumerate() {
+            let ty = &self.resolve.types[ty];
+            if let TypeOwner::Interface(interface) = ty.owner {
+                // todo: generate `dataclass` with typings
+                let camel = || {
+                    if let Some(name) = ty.name {
+                        name.to_upper_camel_case()
+                    } else {
+                        format!("AnonymousType{index}")
+                    }
+                };
+
+                let code = match ty.kind {
+                    TypeDefKind::Record(record) => {
+                        let camel = camel();
+
+                        let snakes =
+                            || record.fields.iter().map(|field| field.name.to_snake_case());
+
+                        let params = iter::once("self".to_owned())
+                            .chain(snakes())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+
+                        let mut inits = snakes()
+                            .map(|snake| format!("self.{snake} = {snake}"))
+                            .collect::<Vec<_>>()
+                            .join("\n        ");
+
+                        if inits.is_empty() {
+                            inits = "pass".to_owned()
+                        }
+
+                        Some(format!(
+                            "class {camel}:\n    \
+                             def __init__({params}):\n        \
+                             {inits}\n\n"
+                        ))
+                    }
+                    TypeDefKind::List(_) => None,
+                    _ => todo!(),
+                };
+
+                if let Some(code) = code {
+                    if let Some(name) = self.imported_interfaces.get(interface) {
+                        interface_imports.entry(name).or_default().push(code)
+                    } else {
+                        interface_exports
+                            .entry(self.exported_interfaces[interface])
+                            .or_default()
+                            .push(code)
+                    }
+                }
+            } else {
+                todo!("handle types exported directly from a world");
+            };
+        }
+
+        if !interface_imports.is_empty() {
+            let dir = path.join("imports");
+            fs::create_dir_all(&dir)?;
+
+            for (name, code) in interface_imports {
+                let file = File::create(dir.join(name))?;
+                for code in code {
+                    file.write_all(code.as_bytes())?;
+                }
+            }
+
+            File::create(dir.join("__init__.py"))?;
+        }
+
+        if !interface_exports.is_empty() {
+            let dir = path.join("exports");
+            fs::create_dir_all(&dir)?;
+
+            for (name, code) in interface_exports {
+                let file = File::create(dir.join(name))?;
+                for code in code {
+                    file.write_all(code.as_bytes())?;
+                }
+            }
+
+            File::create(dir.join("__init__.py"))?;
+        }
+
+        if !world_imports.is_empty() {
+            let file = File::create(path.join("__init__.py"))?;
+            for code in world_imports {
+                file.write_all(code.as_bytes())?;
+            }
+        }
     }
 }
 
