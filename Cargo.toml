@@ -10,6 +10,7 @@ tar = "0.4.38"
 tempfile = "3.3.0"
 wizer = "1.6.0"
 zstd = "0.10.0"
+componentize-py-shared = { path = "../shared" }
 
 [build-dependencies]
 anyhow = "1.0.68"

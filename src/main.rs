@@ -521,8 +521,11 @@ impl<'a> FunctionBindgen<'a> {
         }
     }
 
-    fn compile_export(&mut self, index: u32) {
+    fn compile_export(&mut self, index: u32, lift: u32, lower: u32) {
         self.push(Ins::I32Const(index));
+        self.push(Ins::I32Const(lift));
+        self.push(Ins::I32Const(lower));
+        self.push(Ins::I32Const(self.params.types().count()));
 
         let param_flat_count = if self.params_abi.flattened.len() <= MAX_FLAT_PARAMS {
             self.push_stack(self.params_abi.size);
@@ -580,7 +583,7 @@ impl<'a> FunctionBindgen<'a> {
         let context = 0;
         // Arg 1: *const MyParams
         let source = 1;
-        // Arg 2: *mut [&PyAny]
+        // Arg 2: *mut &PyAny
         let destination = 2;
 
         self.load_record(self.params.types(), context, source, destination);
@@ -591,7 +594,7 @@ impl<'a> FunctionBindgen<'a> {
     fn compile_export_lower(&mut self) {
         // Arg 0: *const Python
         let context = 0;
-        // Arg 1: *const [&PyAny]
+        // Arg 1: *const &PyAny
         let source = 1;
         // Arg 2: *mut MyResults
         let destination = 2;
@@ -707,6 +710,7 @@ impl<'a> FunctionBindgen<'a> {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value));
                 self.push_stack(WORD_SIZE * 2);
+                self.stack();
                 self.link_call(Link::LowerString);
                 self.stack();
                 self.push(Ins::I32Load(mem_arg(0, WORD_ALIGN)));
@@ -1016,6 +1020,7 @@ impl<'a> FunctionBindgen<'a> {
 
                     self.lift_record(record.fields.iter().map(|field| field.ty), context, source);
 
+                    self.push(Ins::LocalGet(context));
                     self.push(Ins::I32Const(self.types.get_index_of(id).unwrap()));
                     self.get_stack();
                     self.push(Ins::I32Const(record.fields.len()));
@@ -1482,9 +1487,9 @@ fn mem_arg(offset: u64, align: u32) -> MemArg {
 enum FunctionKind {
     Import,
     Export,
-    ExportPostReturn,
     ExportLift,
     ExportLower,
+    ExportPostReturn,
 }
 
 struct MyFunction<'a> {
@@ -1514,12 +1519,12 @@ impl<'a> MyFunction<'a> {
     fn core_type(&self, resolve: &Resolve) -> (Vec<ValType>, Vec<ValType>) {
         match self.kind {
             FunctionKind::Export => self.canonical_core_type(resolve),
-            FunctionKind::ExportPostReturn => (
-                record_abi_limit(resolve, self.results.types(), MAX_FLAT_RESULTS).flattened,
-                Vec::new(),
-            ),
             FunctionKind::Import | FunctionKind::ExportLift | FunctionKind::ExportLower => (
                 vec![VecType::I32, VecType::I32, VecType::I32, VecType::I32],
+                Vec::new(),
+            ),
+            FunctionKind::ExportPostReturn => (
+                record_abi_limit(resolve, self.results.types(), MAX_FLAT_RESULTS).flattened,
                 Vec::new(),
             ),
         }
@@ -1614,10 +1619,12 @@ impl<'a> Summary<'a> {
                 self.functions.push(make(FunctionKind::Import));
             }
             Direction::Export => {
+                // NB: We rely on this order when compiling, so please don't change it:
+                // todo: make this less fragile
                 self.functions.push(make(FunctionKind::Export));
-                self.functions.push(make(FunctionKind::ExportPostReturn));
                 self.functions.push(make(FunctionKind::ExportLift));
                 self.functions.push(make(FunctionKind::ExportLower));
+                self.functions.push(make(FunctionKind::ExportPostReturn));
             }
         }
     }
@@ -1699,11 +1706,13 @@ impl<'a> Summary<'a> {
         let mut interface_imports = HashMap::new();
         let mut interface_exports = HashMap::new();
         let mut world_imports = Vec::new();
+        let mut index = 0;
         for function in self.functions {
             match function.kind {
                 FunctionKind::Import => {
                     // todo: generate typings
                     let snake = function.name.to_snake_case();
+
                     let params = function
                         .params
                         .iter()
@@ -1711,9 +1720,11 @@ impl<'a> Summary<'a> {
                         .collect::<Vec<_>>()
                         .join(", ");
 
+                    let result_count = function.results.types().count();
+
                     let code = format!(
                         "def {snake}({params}):\n    \
-                         return componentize_py.call_import([{params}])\n\n"
+                         return componentize_py.call_import({index}, [{params}], {result_count})\n\n"
                     );
 
                     if let Some(interface) = function.interface {
@@ -1724,6 +1735,10 @@ impl<'a> Summary<'a> {
                 }
                 // todo: generate `Protocol` for each exported function
                 _ => (),
+            }
+
+            if function.is_dispatchable() {
+                index += 1;
             }
         }
 
@@ -2211,6 +2226,7 @@ fn componentize(
                         .collect::<IndexSet<_>>();
 
                     let import_index = 0;
+                    let dispatch_index = 0;
                     for function in &summary.functions {
                         let gen = FunctionBindgen::new(
                             resolve,
@@ -2231,10 +2247,14 @@ fn componentize(
                                     .get_index_of(&(function.interface, function.name))
                                     .unwrap()
                                     .try_into()?,
+                                // next two `dispatch_index`es should be the lift and lower functions (see ordering
+                                // in `Summary::visit_function`):
+                                dispatch_index,
+                                dispatch_index + 1,
                             ),
+                            FunctionKind::ExportLift => function.compile_export_lift(),
+                            FunctionKind::ExportLower => function.compile_export_lower(),
                             FunctionKind::ExportPostReturn => gen.compile_export_post_return(),
-                            FunctionKind::Export => function.compile_export_lift(),
-                            FunctionKind::Export => function.compile_export_lower(),
                         };
 
                         let func = Function::new_with_locals_types(gen.local_types);
@@ -2242,6 +2262,10 @@ fn componentize(
                             func.instruction(instruction);
                         }
                         code_section.function(&func);
+
+                        if function.is_dispatchable() {
+                            dispatch_index += 1;
+                        }
                     }
 
                     let dispatch = Function::new([]);

@@ -25,7 +25,6 @@ struct Type<'a> {
 
 #[derive(Serialize, Deserialize)]
 struct Symbols<'a> {
-    imports: Vec<Function<'a>>,
     exports: Vec<Function<'a>>,
     types: Vec<Type<'a>>,
 }
