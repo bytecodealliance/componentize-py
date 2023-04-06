@@ -310,6 +310,7 @@ dependencies = [
  "anyhow",
  "bincode",
  "componentize-py-shared",
+ "heck 0.4.1",
  "once_cell",
  "pyo3",
 ]

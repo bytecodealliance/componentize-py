@@ -1,41 +1,80 @@
 #![deny(warnings)]
 
-use once_cell::sync::OnceCell;
+use {
+    anyhow::{Error, Result},
+    componentize_py_shared::{Direction, Symbols},
+    heck::{ToSnakeCase, ToUpperCamelCase},
+    once_cell::sync::OnceCell,
+    pyo3::{
+        exceptions::PyAssertionError,
+        types::{PyInt, PyList, PyMapping, PyModule},
+        Py, PyAny, PyErr, PyObject, PyResult, Python,
+    },
+    std::{
+        alloc::{self, Layout},
+        env,
+        ffi::c_void,
+        io::{self, Read},
+        mem::{self, MaybeUninit},
+        ops::Deref,
+        ptr,
+    },
+};
 
+static EXPORTS: OnceCell<Vec<PyObject>> = OnceCell::new();
+static TYPES: OnceCell<Vec<PyObject>> = OnceCell::new();
 static ENVIRON: OnceCell<Py<PyMapping>> = OnceCell::new();
+
+struct Anyhow(Error);
+
+impl From<Anyhow> for PyErr {
+    fn from(Anyhow(error): Anyhow) -> Self {
+        PyAssertionError::new_err(format!("{error:?}"))
+    }
+}
+
+impl<T: std::error::Error + Send + Sync + 'static> From<T> for Anyhow {
+    fn from(error: T) -> Self {
+        Self(error.into())
+    }
+}
 
 #[link(wasm_import_module = "componentize-py")]
 extern "C" {
     #[cfg_attr(target_arch = "wasm32", link_name = "dispatch")]
-    fn dispatch(context: *const Python, input: *const c_void, output: *mut c_void);
+    fn dispatch(context: *const Python, input: *const c_void, output: *mut c_void, index: u32);
 }
 
 #[pyo3::pyfunction]
 #[pyo3(pass_module)]
-fn call_import(
+fn call_import<'a>(
+    module: &'a PyModule,
     index: u32,
-    module: &PyModule,
     params: Vec<&PyAny>,
     result_count: usize,
-) -> PyResult<Vec<&PyAny>> {
-    let results = vec![MaybeUninit<&PyAny>::uninit(); result_count];
+) -> PyResult<Vec<&'a PyAny>> {
+    let results = vec![MaybeUninit::<&PyAny>::uninit(); result_count];
     unsafe {
         dispatch(
-            module.py().as_ptr(),
-            params.as_ptr(),
-            results.as_mut_ptr(),
+            &module.py(),
+            params.as_ptr() as _,
+            results.as_mut_ptr() as _,
             index,
         );
 
         // todo: is this sound, or do we need to `.into_iter().map(MaybeUninit::assume_init).collect()` instead?
-        mem::transmute::<Vec<MaybeUninit<&PyAny>>, Vec<&PyAny>>(results)
+        //
+        // todo also: turn `result::err` results into exceptions, either here or in the generated Python code
+        Ok(mem::transmute::<Vec<MaybeUninit<&PyAny>>, Vec<&PyAny>>(
+            results,
+        ))
     }
 }
 
 #[pyo3::pymodule]
 #[pyo3(name = "componentize_py")]
 fn componentize_py_module(_py: Python<'_>, module: &PyModule) -> PyResult<()> {
-    module.add_function(pyo3::wrap_pyfunction!(call_import, module)?)?;
+    module.add_function(pyo3::wrap_pyfunction!(call_import, module)?)
 }
 
 fn do_init() -> Result<()> {
@@ -48,11 +87,7 @@ fn do_init() -> Result<()> {
     pyo3::prepare_freethreaded_python();
 
     Python::with_gil(|py| {
-        let app = py.import(
-            env::var("SPIN_PYTHON_APP_NAME")
-                .map_err(Anyhow::from)?
-                .deref(),
-        )?;
+        let app = py.import(env::var("SPIN_PYTHON_APP_NAME")?.deref())?;
 
         // TODO: do name tweaking in componentize-py instead of here so we don't have to pull in the heck
         // dependency
@@ -67,12 +102,12 @@ fn do_init() -> Result<()> {
                                 "{}_{}",
                                 interface.to_snake_case(),
                                 function.name.to_snake_case()
-                            );
+                            )
                         } else {
-                            function.name.to_snake_case();
+                            function.name.to_snake_case()
                         };
 
-                        Ok(app.getattr(&full_name)?.into())
+                        Ok(app.getattr(full_name.as_str())?.into())
                     })
                     .collect::<PyResult<_>>()?,
             )
@@ -83,7 +118,7 @@ fn do_init() -> Result<()> {
                 symbols
                     .types
                     .iter()
-                    .enumarate()
+                    .enumerate()
                     .map(|(index, ty)| {
                         Ok(py
                             .import(match ty.direction {
@@ -91,11 +126,14 @@ fn do_init() -> Result<()> {
                                 Direction::Export => "exports",
                             })?
                             .getattr(ty.interface)?
-                            .getattr(&if let Some(name) = ty.name {
-                                ty.name.to_upper_camel_case()
-                            } else {
-                                format!("AnonymousType{index}");
-                            })?
+                            .getattr(
+                                if let Some(name) = ty.name {
+                                    name.to_upper_camel_case()
+                                } else {
+                                    format!("AnonymousType{index}")
+                                }
+                                .as_str(),
+                            )?
                             .into())
                     })
                     .collect::<PyResult<_>>()?,
@@ -127,16 +165,17 @@ pub extern "C" fn init() {
 
 #[export_name = "componentize-py#Dispatch"]
 pub extern "C" fn componentize_py_dispatch(
-    export: u32,
+    export: usize,
     lift: u32,
     lower: u32,
+    param_count: u32,
     params: *const c_void,
     results: *mut c_void,
 ) {
     Python::with_gil(|py| {
-        let params_lifted = vec![MaybeUninit<&PyAny>::uninit(); param_count];
+        let params_lifted = vec![MaybeUninit::<&PyAny>::uninit(); param_count.try_into().unwrap()];
         let params_lifted = unsafe {
-            dispatch(py.as_ptr(), params, params_lifted.as_mut_ptr(), lift);
+            dispatch(&py, params, params_lifted.as_mut_ptr() as _, lift);
 
             // todo: is this sound, or do we need to `.into_iter().map(MaybeUninit::assume_init).collect()` instead?
             mem::transmute::<Vec<MaybeUninit<&PyAny>>, Vec<&PyAny>>(params_lifted)
@@ -144,19 +183,23 @@ pub extern "C" fn componentize_py_dispatch(
 
         let environ = ENVIRON.get().unwrap().as_ref(py);
         for (k, v) in env::vars() {
-            environ.set_item(k, v)?;
+            environ.set_item(k, v).unwrap();
         }
 
-        let result = EXPORTS.get().unwrap()[export].call1(py, params_lifted);
+        // todo: if Python throws an error, and the return type is a `result`, can we convert here?  We might have
+        // to assert that the error is an instance of the `err` payload declared in the return type.
+        let result = EXPORTS.get().unwrap()[export]
+            .call1(py, params_lifted)
+            .unwrap();
 
         unsafe {
-            dispatch(py.as_ptr(), result.as_ref().as_ptr(), results, lower);
+            dispatch(&py, result.as_ref(py) as *const _ as _, results, lower);
         }
     });
 }
 
 #[export_name = "componentize-py#Free"]
-pub extern "C" fn componentize_py_free(ptr: *mut u8, size: u32, align: u32) {
+pub extern "C" fn componentize_py_free(ptr: *mut u8, size: usize, align: usize) {
     alloc::dealloc(ptr, Layout::from_size_align(size, align).unwrap())
 }
 
@@ -186,21 +229,21 @@ pub extern "C" fn componentize_py_lower_string(
     value: &PyAny,
     destination: *mut (*const u8, usize),
 ) {
-    let mut value = value.extract::<String>().into_bytes();
+    let mut value = value.extract::<String>().unwrap().into_bytes();
     let result = alloc::alloc(Layout::from_size_align(value.len(), 1).unwrap());
     unsafe {
-        ptr::copy_non_overlappping(value.as_ptr(), result, value.len());
+        ptr::copy_nonoverlappping(value.as_ptr(), result, value.len());
         destination.write((result, value.len()));
     }
 }
 
 #[export_name = "componentize-py#GetField"]
-pub extern "C" fn componentize_py_get_field(
-    _py: &Python,
+pub extern "C" fn componentize_py_get_field<'a>(
+    _py: &'a Python,
     value: &PyAny,
     ty: usize,
     field: usize,
-) -> &PyAny {
+) -> &'a PyAny {
     value.getattr(TYPES.get().unwrap()[ty].fields[field])
 }
 
@@ -220,39 +263,44 @@ pub extern "C" fn componentize_py_allocate(_py: &Python, size: usize, align: usi
 }
 
 #[export_name = "componentize-py#LiftI32"]
-pub extern "C" fn componentize_py_lift_i32(py: &Python, value: i32) -> &PyInt {
+pub extern "C" fn componentize_py_lift_i32<'a>(py: &'a Python, value: i32) -> &'a PyInt {
     value.to_py_object(py).as_ref(py)
 }
 
 #[export_name = "componentize-py#LiftI64"]
-pub extern "C" fn componentize_py_lift_i64(py: &Python, value: i64) -> &PyAny {
+pub extern "C" fn componentize_py_lift_i64<'a>(py: &'a Python, value: i64) -> &'a PyAny {
     value.to_py_object(py).as_ref(py)
 }
 
 #[export_name = "componentize-py#LiftF32"]
-pub extern "C" fn componentize_py_lift_f32(py: &Python, value: f32) -> &PyAny {
+pub extern "C" fn componentize_py_lift_f32<'a>(py: &'a Python, value: f32) -> &'a PyAny {
     value.to_py_object(py).as_ref(py)
 }
 
 #[export_name = "componentize-py#LiftF64"]
-pub extern "C" fn componentize_py_lift_f64(py: &Python, value: f64) -> &PyAny {
+pub extern "C" fn componentize_py_lift_f64<'a>(py: &'a Python, value: f64) -> &'a PyAny {
     value.to_py_object(py).as_ref(py)
 }
 
 #[export_name = "componentize-py#LiftString"]
-pub extern "C" fn componentize_py_lift_string(py: &Python, data: *const u8, len: usize) -> &PyAny {
-    value
-        .to_py_object(unsafe { str::from_utf8_unchecked(slice::from_raw_parts(data, len)) })
-        .as_ref(py)
+pub extern "C" fn componentize_py_lift_string<'a>(
+    py: &'a Python,
+    data: *const u8,
+    len: usize,
+) -> &'a PyAny {
+    PyStream::new(py, unsafe {
+        str::from_utf8_unchecked(slice::from_raw_parts(data, len))
+    })
+    .as_ref(py)
 }
 
 #[export_name = "componentize-py#Init"]
-pub extern "C" fn componentize_py_init(
-    py: &Python,
+pub extern "C" fn componentize_py_init<'a>(
+    py: &'a Python,
     ty: usize,
     data: *const &PyAny,
     len: usize,
-) -> &PyAny {
+) -> &'a PyAny {
     TYPES.get().unwrap()[ty]
         .ty
         .call1(py, unsafe { slice::from_raw_parts(data, len) })
@@ -260,15 +308,15 @@ pub extern "C" fn componentize_py_init(
 }
 
 #[export_name = "componentize-py#MakeList"]
-pub extern "C" fn componentize_py_make_list(py: &Python) -> &PyList {
+pub extern "C" fn componentize_py_make_list<'a>(py: &'a Python) -> &'a PyList {
     PyList::empty(py)
 }
 
 #[export_name = "componentize-py#ListAppend"]
-pub extern "C" fn componentize_py_list_append(
-    _py: &Python,
+pub extern "C" fn componentize_py_list_append<'a>(
+    _py: &'a Python,
     list: &PyList,
     element: &PyAny,
-) -> &PyList {
+) -> &'a PyList {
     list.append(element).unwrap()
 }
