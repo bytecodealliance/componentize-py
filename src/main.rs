@@ -4,6 +4,10 @@ use {
     anyhow::{bail, Context, Result},
     clap::Parser as _,
     componentize_py_shared::{self as symbols, Direction, Symbols},
+    convert::{
+        IntoBlockType, IntoEntityType, IntoExportKind, IntoGlobalType, IntoHeapType, IntoMemArg,
+        IntoTableType, IntoValType,
+    },
     heck::{ToSnakeCase, ToUpperCamelCase},
     indexmap::{IndexMap, IndexSet},
     std::{
@@ -25,7 +29,10 @@ use {
         ImportSection, Instruction as Ins, MemArg, Module, RawSection, RefType, TableSection,
         TableType, TypeSection, ValType,
     },
-    wasmparser::{ExternalKind, Name, NameSectionReader, Parser, Payload, TypeRef, VisitOperator},
+    wasmparser::{
+        BinaryReader, ExternalKind, Name, NameSectionReader, Parser, Payload, TypeRef,
+        VisitOperator,
+    },
     wit_component::{metadata, ComponentEncoder},
     wit_parser::{
         InterfaceId, Resolve, Results, Type, TypeDefKind, TypeId, TypeOwner, UnresolvedPackage,
@@ -34,6 +41,8 @@ use {
     wizer::Wizer,
     zstd::Decoder,
 };
+
+mod convert;
 
 #[cfg(unix)]
 const NATIVE_PATH_DELIMITER: char = ':';
@@ -278,7 +287,8 @@ fn parse_wit(path: &Path, world: Option<&str>) -> Result<(Resolve, WorldId)> {
         let pkg = UnresolvedPackage::parse_file(path)?;
         resolve.push(pkg, &Default::default())?
     };
-    Ok((resolve, resolve.select_world(pkg, world)?))
+    let world = resolve.select_world(pkg, world)?;
+    Ok((resolve, world))
 }
 
 trait Types {
@@ -287,7 +297,12 @@ trait Types {
 
 impl Types for &[(String, Type)] {
     fn types(&self) -> Box<dyn Iterator<Item = Type>> {
-        Box::new(self.iter().map(|(_, ty)| *ty))
+        Box::new(
+            self.iter()
+                .map(|(_, ty)| *ty)
+                .collect::<Vec<_>>()
+                .into_iter(),
+        )
     }
 }
 
@@ -349,7 +364,7 @@ struct Abi {
 fn record_abi(resolve: &Resolve, types: impl IntoIterator<Item = Type>) -> Abi {
     let mut size = 0_usize;
     let mut align_ = 1;
-    let flattened = Vec::new();
+    let mut flattened = Vec::new();
     for ty in types {
         let abi = abi(resolve, ty);
         size = align(size, abi.align);
@@ -410,11 +425,11 @@ fn abi(resolve: &Resolve, ty: Type) -> Abi {
             align: 4,
             flattened: vec![ValType::I32; 2],
         },
-        Type::Id(id) => match resolve.types[id].kind {
+        Type::Id(id) => match &resolve.types[id].kind {
             TypeDefKind::Record(record) => {
                 record_abi(resolve, record.fields.iter().map(|field| field.ty))
             }
-            TypeDefKind::List(element_type) => Abi {
+            TypeDefKind::List(_) => Abi {
                 size: 8,
                 align: 4,
                 flattened: vec![ValType::I32; 2],
@@ -435,6 +450,7 @@ struct FunctionBindgen<'a> {
     results_abi: Abi,
     local_types: Vec<ValType>,
     local_stack: Vec<bool>,
+    top_block: u32,
     instructions: Vec<Ins<'static>>,
 }
 
@@ -458,6 +474,7 @@ impl<'a> FunctionBindgen<'a> {
             results_abi: record_abi(resolve, results.types()),
             local_types: Vec::new(),
             local_stack: Vec::new(),
+            top_block: 0,
             instructions: Vec::new(),
         }
     }
@@ -474,6 +491,7 @@ impl<'a> FunctionBindgen<'a> {
             let locals = self
                 .params_abi
                 .flattened
+                .clone()
                 .iter()
                 .map(|ty| {
                     let local = self.push_local(*ty);
@@ -559,6 +577,7 @@ impl<'a> FunctionBindgen<'a> {
             let locals = self
                 .results_abi
                 .flattened
+                .clone()
                 .iter()
                 .map(|ty| {
                     let local = self.push_local(*ty);
@@ -569,7 +588,7 @@ impl<'a> FunctionBindgen<'a> {
 
             self.lift_record(self.results.types(), context, &locals, output);
 
-            for (local, ty) in locals.iter().zip(&self.results_abi.flattened).rev() {
+            for (local, ty) in locals.iter().zip(&self.results_abi.flattened.clone()).rev() {
                 self.pop_local(*local, *ty);
             }
         } else {
@@ -587,7 +606,7 @@ impl<'a> FunctionBindgen<'a> {
         if let Some(locals) = locals {
             self.free_lowered_record(self.params.types(), &locals);
 
-            for (local, ty) in locals.iter().zip(&self.params_abi.flattened).rev() {
+            for (local, ty) in locals.iter().zip(&self.params_abi.flattened.clone()).rev() {
                 self.pop_local(*local, *ty);
             }
         } else {
@@ -742,7 +761,7 @@ impl<'a> FunctionBindgen<'a> {
         self.push(Ins::GlobalSet(self.stack_pointer));
     }
 
-    fn push(&mut self, instruction: Ins) {
+    fn push(&mut self, instruction: Ins<'static>) {
         self.instructions.push(instruction)
     }
 
@@ -784,6 +803,16 @@ impl<'a> FunctionBindgen<'a> {
         while let Some(false) = self.local_stack.last() {
             self.local_stack.pop();
         }
+    }
+
+    fn push_block(&mut self) -> u32 {
+        self.top_block += 1;
+        self.top_block
+    }
+
+    fn pop_block(&mut self, block: u32) {
+        assert!(block == self.top_block);
+        self.top_block -= 1;
     }
 
     fn lower(&mut self, ty: Type, context: u32, value: u32) {
@@ -830,7 +859,7 @@ impl<'a> FunctionBindgen<'a> {
                 )));
                 self.pop_stack(WORD_SIZE * 2);
             }
-            Type::Id(id) => match self.resolve.types[id].kind {
+            Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
                     let type_index = self.types.get_index_of(&id).unwrap();
                     for (field_index, field) in record.fields.iter().enumerate() {
@@ -851,7 +880,7 @@ impl<'a> FunctionBindgen<'a> {
                 TypeDefKind::List(ty) => {
                     // TODO: optimize `list<u8>` (and others if appropriate)
 
-                    let abi = abi(self.resolve, ty);
+                    let abi = abi(self.resolve, *ty);
                     let length = self.push_local(ValType::I32);
                     let index = self.push_local(ValType::I32);
                     let destination = self.push_local(ValType::I32);
@@ -896,7 +925,7 @@ impl<'a> FunctionBindgen<'a> {
                     self.push(Ins::I32Add);
                     self.push(Ins::LocalSet(element_destination));
 
-                    self.store(ty, context, element_value, element_destination);
+                    self.store(*ty, context, element_value, element_destination);
 
                     self.push(Ins::Br(loop_));
 
@@ -957,12 +986,12 @@ impl<'a> FunctionBindgen<'a> {
                 self.push(Ins::LocalGet(destination));
                 self.link_call(Link::LowerString);
             }
-            Type::Id(id) => match self.resolve.types[id].kind {
+            Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
                     let type_index = self.types.get_index_of(&id).unwrap();
                     let mut store_offset = 0;
                     for (field_index, field) in record.fields.iter().enumerate() {
-                        let abi = abi(self.resolve, ty);
+                        let abi = abi(self.resolve, field.ty);
                         store_offset = align(store_offset, abi.align);
 
                         let field_value = self.push_local(ValType::I32);
@@ -988,7 +1017,7 @@ impl<'a> FunctionBindgen<'a> {
                         self.pop_local(field_value, ValType::I32);
                     }
                 }
-                TypeDefKind::List(element_type) => {
+                TypeDefKind::List(_) => {
                     self.lower(ty, context, value);
                     self.push(Ins::LocalGet(destination));
                     self.push(Ins::I32Store(mem_arg(
@@ -1040,7 +1069,7 @@ impl<'a> FunctionBindgen<'a> {
                     WORD_ALIGN.try_into().unwrap(),
                 )));
             }
-            Type::Id(id) => match self.resolve.types[id].kind {
+            Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
                     self.store_copy_record(
                         record.fields.iter().map(|field| field.ty),
@@ -1048,7 +1077,7 @@ impl<'a> FunctionBindgen<'a> {
                         destination,
                     );
                 }
-                TypeDefKind::List(element_type) => {
+                TypeDefKind::List(_) => {
                     self.push(Ins::LocalGet(source[0]));
                     self.push(Ins::LocalGet(destination));
                     self.push(Ins::I32Store(mem_arg(0, WORD_ALIGN.try_into().unwrap())));
@@ -1070,7 +1099,7 @@ impl<'a> FunctionBindgen<'a> {
         source: &[u32],
         destination: u32,
     ) {
-        let local_index = 0;
+        let mut local_index = 0;
         let mut store_offset = 0;
         for ty in types {
             let abi = abi(self.resolve, ty);
@@ -1131,7 +1160,7 @@ impl<'a> FunctionBindgen<'a> {
                 self.push(Ins::LocalGet(value[1]));
                 self.link_call(Link::LiftString);
             }
-            Type::Id(id) => match self.resolve.types[id].kind {
+            Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
                     self.push_stack(record.fields.len() * WORD_SIZE);
                     let destination = self.push_local(ValType::I32);
@@ -1163,7 +1192,7 @@ impl<'a> FunctionBindgen<'a> {
                     let source = value[0];
                     let length = value[1];
 
-                    let abi = abi(self.resolve, ty);
+                    let abi = abi(self.resolve, *ty);
 
                     let index = self.push_local(ValType::I32);
                     let element_source = self.push_local(ValType::I32);
@@ -1195,7 +1224,7 @@ impl<'a> FunctionBindgen<'a> {
                     self.push(Ins::LocalGet(context));
                     self.push(Ins::LocalGet(destination));
 
-                    self.load(ty, context, element_source);
+                    self.load(*ty, context, element_source);
 
                     self.link_call(Link::ListAppend);
 
@@ -1319,7 +1348,7 @@ impl<'a> FunctionBindgen<'a> {
                 )));
                 self.link_call(Link::LiftString);
             }
-            Type::Id(id) => match self.resolve.types[id].kind {
+            Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
                     self.push_stack(record.fields.len() * WORD_SIZE);
                     let destination = self.push_local(ValType::I32);
@@ -1447,7 +1476,7 @@ impl<'a> FunctionBindgen<'a> {
                     WORD_ALIGN.try_into().unwrap(),
                 )));
             }
-            Type::Id(id) => match self.resolve.types[id].kind {
+            Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
                     self.load_copy_record(record.fields.iter().map(|field| field.ty), source);
                 }
@@ -1508,7 +1537,7 @@ impl<'a> FunctionBindgen<'a> {
                 self.link_call(Link::Free);
             }
 
-            Type::Id(id) => match self.resolve.types[id].kind {
+            Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
                     self.free_lowered_record(record.fields.iter().map(|field| field.ty), value);
                 }
@@ -1518,7 +1547,7 @@ impl<'a> FunctionBindgen<'a> {
                     let pointer = value[0];
                     let length = value[1];
 
-                    let abi = abi(self.resolve, ty);
+                    let abi = abi(self.resolve, *ty);
 
                     let index = self.push_local(ValType::I32);
                     let element_pointer = self.push_local(ValType::I32);
@@ -1542,7 +1571,7 @@ impl<'a> FunctionBindgen<'a> {
                     self.push(Ins::I32Add);
                     self.push(Ins::LocalSet(element_pointer));
 
-                    self.free_stored(ty, element_pointer);
+                    self.free_stored(*ty, element_pointer);
 
                     self.push(Ins::Br(loop_));
 
@@ -1604,14 +1633,14 @@ impl<'a> FunctionBindgen<'a> {
                 self.link_call(Link::Free);
             }
 
-            Type::Id(id) => match self.resolve.types[id].kind {
+            Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
                     self.free_stored_record(record.fields.iter().map(|field| field.ty), value);
                 }
                 TypeDefKind::List(ty) => {
                     // TODO: optimize this for primitive element types
 
-                    let abi = abi(self.resolve, ty);
+                    let abi = abi(self.resolve, *ty);
 
                     let index = self.push_local(ValType::I32);
                     let body = self.push_local(ValType::I32);
@@ -1645,7 +1674,7 @@ impl<'a> FunctionBindgen<'a> {
                     self.push(Ins::I32Add);
                     self.push(Ins::LocalSet(element_value));
 
-                    self.free_stored(ty, element_value);
+                    self.free_stored(*ty, element_value);
 
                     self.push(Ins::Br(loop_));
 
@@ -1673,7 +1702,6 @@ impl<'a> FunctionBindgen<'a> {
 
     fn free_stored_record(&mut self, types: impl IntoIterator<Item = Type>, value: u32) {
         let mut load_offset = 0;
-        let mut store_offset = 0;
         for ty in types {
             let field_value = self.push_local(ValType::I32);
 
@@ -1794,7 +1822,7 @@ impl<'a> Summary<'a> {
             | Type::Float32
             | Type::Float64
             | Type::String => (),
-            Type::Id(id) => match self.resolve.types[id].kind {
+            Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
                     self.types.insert(id);
                     for field in &record.fields {
@@ -1802,7 +1830,7 @@ impl<'a> Summary<'a> {
                     }
                 }
                 TypeDefKind::List(ty) => {
-                    self.visit_type(ty);
+                    self.visit_type(*ty);
                 }
                 _ => todo!(),
             },
@@ -1867,7 +1895,7 @@ impl<'a> Summary<'a> {
                         Direction::Export => self.exported_interfaces.insert(*interface, item_name),
                     };
                     let interface = &self.resolve.interfaces[*interface];
-                    for (func_name, func) in interface.functions {
+                    for (func_name, func) in &interface.functions {
                         self.visit_function(
                             Some(item_name),
                             &func_name,
@@ -1890,7 +1918,7 @@ impl<'a> Summary<'a> {
 
     fn collect_symbols(&self) -> Symbols<'a> {
         let mut exports = Vec::new();
-        for function in self.functions {
+        for function in &self.functions {
             if let FunctionKind::Export = function.kind {
                 exports.push(symbols::Function {
                     interface: function.interface,
@@ -1900,8 +1928,8 @@ impl<'a> Summary<'a> {
         }
 
         let mut types = Vec::new();
-        for ty in self.types {
-            let ty = &self.resolve.types[ty];
+        for ty in &self.types {
+            let ty = &self.resolve.types[*ty];
             if let TypeOwner::Interface(interface) = ty.owner {
                 let (direction, interface) =
                     if let Some(name) = self.imported_interfaces.get(&interface) {
@@ -1914,7 +1942,7 @@ impl<'a> Summary<'a> {
                     direction,
                     interface,
                     name: ty.name.as_deref(),
-                    fields: match ty.kind {
+                    fields: match &ty.kind {
                         TypeDefKind::Record(record) => {
                             record.fields.iter().map(|f| f.name.as_str()).collect()
                         }
@@ -1935,7 +1963,7 @@ impl<'a> Summary<'a> {
         let mut interface_exports = HashMap::<_, Vec<_>>::new();
         let mut world_imports = Vec::new();
         let mut index = 0;
-        for function in self.functions {
+        for function in &self.functions {
             match function.kind {
                 FunctionKind::Import => {
                     // todo: generate typings
@@ -1975,14 +2003,14 @@ impl<'a> Summary<'a> {
             if let TypeOwner::Interface(interface) = ty.owner {
                 // todo: generate `dataclass` with typings
                 let camel = || {
-                    if let Some(name) = ty.name {
+                    if let Some(name) = &ty.name {
                         name.to_upper_camel_case()
                     } else {
                         format!("AnonymousType{index}")
                     }
                 };
 
-                let code = match ty.kind {
+                let code = match &ty.kind {
                     TypeDefKind::Record(record) => {
                         let camel = camel();
 
@@ -2033,7 +2061,7 @@ impl<'a> Summary<'a> {
             fs::create_dir_all(&dir)?;
 
             for (name, code) in interface_imports {
-                let file = File::create(dir.join(name))?;
+                let mut file = File::create(dir.join(name))?;
                 for code in code {
                     file.write_all(code.as_bytes())?;
                 }
@@ -2047,7 +2075,7 @@ impl<'a> Summary<'a> {
             fs::create_dir_all(&dir)?;
 
             for (name, code) in interface_exports {
-                let file = File::create(dir.join(name))?;
+                let mut file = File::create(dir.join(name))?;
                 for code in code {
                     file.write_all(code.as_bytes())?;
                 }
@@ -2057,7 +2085,7 @@ impl<'a> Summary<'a> {
         }
 
         if !world_imports.is_empty() {
-            let file = File::create(path.join("__init__.py"))?;
+            let mut file = File::create(path.join("__init__.py"))?;
             for code in world_imports {
                 file.write_all(code.as_bytes())?;
             }
@@ -2166,6 +2194,24 @@ impl<'a, F: Fn(u32) -> u32> VisitOperator<'a> for Visitor<F> {
     wasmparser::for_each_operator!(define_encode);
 }
 
+fn visit(mut reader: BinaryReader<'_>, remap: impl Fn(u32) -> u32) -> Result<Vec<u8>> {
+    let mut visitor = Visitor {
+        remap,
+        buffer: Vec::new(),
+    };
+    while !reader.eof() {
+        reader.visit_operator(&mut visitor)?;
+    }
+    Ok(visitor.buffer)
+}
+
+fn types_eq(
+    wasmparser::Type::Func(a): &wasmparser::Type,
+    wasmparser::Type::Func(b): &wasmparser::Type,
+) -> bool {
+    a == b
+}
+
 fn componentize(
     module: &[u8],
     resolve: &Resolve,
@@ -2189,14 +2235,17 @@ fn componentize(
                 types = Some(reader.into_iter().collect::<Result<Vec<_>, _>>()?);
             }
             Payload::ImportSection(reader) => {
-                let count = 0;
+                let mut count = 0;
                 for import in reader {
                     let import = import?;
                     if import.module == "componentize-py" {
                         if import.name == "dispatch" {
                             match import.ty {
                                 TypeRef::Func(ty)
-                                    if types.unwrap()[ty.try_into().unwrap()] == dispatch_type =>
+                                    if types_eq(
+                                        &types.as_ref().unwrap()[usize::try_from(ty).unwrap()],
+                                        &dispatch_type,
+                                    ) =>
                                 {
                                     dispatch_import_index = Some(count);
                                     dispatch_type_index = Some(ty);
@@ -2250,6 +2299,7 @@ fn componentize(
 
     let old_type_count = types.unwrap().len();
     let old_table_count = table_count.unwrap();
+    let old_global_count = global_count.unwrap();
     let old_import_count = import_count.unwrap();
     let old_function_count = function_count.unwrap();
     let new_import_count = summary
@@ -2366,7 +2416,18 @@ fn componentize(
             Payload::TableSection(reader) => {
                 let mut tables = TableSection::new();
                 for table in reader {
-                    tables.table(IntoTableType(table?).into());
+                    let table = table?;
+                    match table.init {
+                        wasmparser::TableInit::RefNull => {
+                            tables.table(IntoTableType(table.ty).into());
+                        }
+                        wasmparser::TableInit::Expr(expression) => {
+                            tables.table_with_init(
+                                IntoTableType(table.ty).into(),
+                                &ConstExpr::raw(visit(expression.get_binary_reader(), remap)?),
+                            );
+                        }
+                    }
                 }
                 tables.table(TableType {
                     element_type: RefType {
@@ -2385,7 +2446,7 @@ fn componentize(
                     let global = global?;
                     globals.global(
                         IntoGlobalType(global.ty).into(),
-                        &IntoConstExpr(global.init_expr).into(),
+                        &ConstExpr::raw(visit(global.init_expr.get_binary_reader(), remap)?).into(),
                     );
                 }
                 globals.global(
@@ -2428,10 +2489,10 @@ fn componentize(
                 for (index, function) in summary.functions.iter().enumerate() {
                     if let FunctionKind::Export = function.kind {
                         exports.export(
-                            if let Some(interface) = function.interface {
-                                &format!("{}#{}", interface, function.name)
+                            &if let Some(interface) = function.interface {
+                                format!("{}#{}", interface, function.name)
                             } else {
-                                function.name
+                                function.name.to_owned()
                             },
                             ExportKind::Func,
                             (old_function_count + new_import_count + index)
@@ -2444,7 +2505,7 @@ fn componentize(
             }
 
             Payload::CodeSectionEntry(body) => {
-                let reader = body.get_binary_reader();
+                let mut reader = body.get_binary_reader();
                 let mut locals = Vec::new();
                 for _ in 0..reader.read_var_u32()? {
                     let count = reader.read_var_u32()?;
@@ -2452,16 +2513,8 @@ fn componentize(
                     locals.push((count, IntoValType(ty).into()));
                 }
 
-                let visitor = Visitor {
-                    remap,
-                    buffer: Vec::new(),
-                };
-                while !reader.eof() {
-                    reader.visit_operator(&mut visitor)?;
-                }
-
-                let function = Function::new(locals);
-                function.raw(visitor.buffer);
+                let mut function = Function::new(locals);
+                function.raw(visit(reader, remap)?);
                 code_section.function(&function);
 
                 code_entries_remaining = code_entries_remaining.checked_sub(1).unwrap();
@@ -2478,10 +2531,10 @@ fn componentize(
                         })
                         .collect::<IndexSet<_>>();
 
-                    let import_index = 0;
-                    let dispatch_index = 0;
+                    let mut import_index = 0;
+                    let mut dispatch_index = 0;
                     for function in &summary.functions {
-                        let gen = FunctionBindgen::new(
+                        let mut gen = FunctionBindgen::new(
                             resolve,
                             stack_pointer_index,
                             &link_map,
@@ -2512,7 +2565,7 @@ fn componentize(
                             FunctionKind::ExportPostReturn => gen.compile_export_post_return(),
                         };
 
-                        let func = Function::new_with_locals_types(gen.local_types);
+                        let mut func = Function::new_with_locals_types(gen.local_types);
                         for instruction in &gen.instructions {
                             func.instruction(instruction);
                         }
@@ -2523,14 +2576,14 @@ fn componentize(
                         }
                     }
 
-                    let dispatch = Function::new([]);
+                    let mut dispatch = Function::new([]);
 
-                    dispatch.instruction(&Ins::GlobalGet(old_table_count.try_into().unwrap()));
+                    dispatch.instruction(&Ins::GlobalGet(old_global_count.try_into().unwrap()));
                     dispatch.instruction(&Ins::If(BlockType::Empty));
                     dispatch.instruction(&Ins::I32Const(0));
-                    dispatch.instruction(&Ins::GlobalSet(old_table_count.try_into().unwrap()));
+                    dispatch.instruction(&Ins::GlobalSet(old_global_count.try_into().unwrap()));
 
-                    let table_index = 0;
+                    let mut table_index = 0;
                     for (index, function) in summary.functions.iter().enumerate() {
                         if function.is_dispatchable() {
                             dispatch.instruction(&Ins::RefFunc(

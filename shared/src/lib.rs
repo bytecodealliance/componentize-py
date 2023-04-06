@@ -7,7 +7,7 @@ pub struct Function<'a> {
     pub name: &'a str,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Copy, Clone)]
 pub enum Direction {
     Import,
     Export,
