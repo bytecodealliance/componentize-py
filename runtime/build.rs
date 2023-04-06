@@ -42,44 +42,44 @@ fn main() {
 
 fn maybe_make_cpython(repo_dir: &Path) {
     let cpython_wasi_dir = repo_dir.join("cpython/builddir/wasi");
-    if cpython_wasi_dir.join("libpython3.11.a").exists() {
-        return;
+    if !cpython_wasi_dir.join("libpython3.11.a").exists() {
+        let cpython_native_dir = repo_dir.join("cpython/builddir/build");
+        if !cpython_native_dir.join("python.exe").exists() {
+            fs::create_dir_all(&cpython_native_dir).unwrap();
+            fs::create_dir_all(&cpython_wasi_dir).unwrap();
+
+            run(Command::new("../../configure")
+                .current_dir(&cpython_native_dir)
+                .arg(format!(
+                    "--prefix={}/install",
+                    cpython_native_dir.to_str().unwrap()
+                )));
+
+            run(Command::new("make").current_dir(cpython_native_dir));
+        }
+
+        let config_guess = run(Command::new("../../config.guess").current_dir(&cpython_wasi_dir));
+
+        run(Command::new("../../Tools/wasm/wasi-env")
+            .env("CONFIG_SITE", "../../Tools/wasm/config.site-wasm32-wasi")
+            .current_dir(&cpython_wasi_dir)
+            .args([
+                "../../configure",
+                "-C",
+                "--host=wasm32-unknown-wasi",
+                &format!("--build={}", String::from_utf8(config_guess).unwrap()),
+                &format!(
+                    "--with-build-python={}/../build/python.exe",
+                    cpython_wasi_dir.to_str().unwrap()
+                ),
+                &format!("--prefix={}/install", cpython_wasi_dir.to_str().unwrap()),
+                "--disable-test-modules",
+            ]));
+
+        run(Command::new("make")
+            .current_dir(cpython_wasi_dir)
+            .arg("install"));
     }
-
-    let cpython_native_dir = repo_dir.join("cpython/builddir/build");
-    fs::create_dir_all(&cpython_native_dir).unwrap();
-    fs::create_dir_all(&cpython_wasi_dir).unwrap();
-
-    run(Command::new("../../configure")
-        .current_dir(&cpython_native_dir)
-        .arg(format!(
-            "--prefix={}/install",
-            cpython_native_dir.to_str().unwrap()
-        )));
-
-    run(Command::new("make").current_dir(cpython_native_dir));
-
-    let config_guess = run(Command::new("../../config.guess").current_dir(&cpython_wasi_dir));
-
-    run(Command::new("../../Tools/wasm/wasi-env")
-        .env("CONFIG_SITE", "../../Tools/wasm/config.site-wasm32-wasi")
-        .current_dir(&cpython_wasi_dir)
-        .args([
-            "../../configure",
-            "-C",
-            "--host=wasm32-unknown-wasi",
-            &format!("--build={}", String::from_utf8(config_guess).unwrap()),
-            &format!(
-                "--with-build-python={}/../build/python",
-                cpython_wasi_dir.to_str().unwrap()
-            ),
-            &format!("--prefix={}/install", cpython_wasi_dir.to_str().unwrap()),
-            "--disable-test-modules",
-        ]));
-
-    run(Command::new("make")
-        .current_dir(cpython_wasi_dir)
-        .arg("install"));
 }
 
 fn run(command: &mut Command) -> Vec<u8> {

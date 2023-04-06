@@ -1,0 +1,8 @@
+implementation=CPython
+version=3.11
+shared=false
+abi3=true
+lib_name=python3.11
+pointer_width=32
+build_flags=
+suppress_build_script_link_lines=false

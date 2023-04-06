@@ -20,7 +20,9 @@ fn main() -> Result<()> {
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
 
-    if let Ok("cargo-clippy") = env::var("CARGO_CFG_FEATURE").as_deref() {
+    if matches!(env::var("CARGO_CFG_FEATURE").as_deref(), Ok("cargo-clippy"))
+        || env::var("CLIPPY_ARGS").is_ok()
+    {
         stubs_for_clippy(&out_dir)
     } else {
         package_runtime_and_core_library(&out_dir)

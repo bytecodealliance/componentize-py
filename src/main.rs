@@ -282,7 +282,7 @@ fn find_dir(name: &str, path: &Path) -> Result<Option<PathBuf>> {
 fn parse_wit(path: &Path, world: Option<&str>) -> Result<(Resolve, WorldId)> {
     let mut resolve = Resolve::default();
     let pkg = if path.is_dir() {
-        resolve.push_dir(&path)?.0
+        resolve.push_dir(path)?.0
     } else {
         let pkg = UnresolvedPackage::parse_file(path)?;
         resolve.push(pkg, &Default::default())?
@@ -1898,7 +1898,7 @@ impl<'a> Summary<'a> {
                     for (func_name, func) in &interface.functions {
                         self.visit_function(
                             Some(item_name),
-                            &func_name,
+                            func_name,
                             &func.params,
                             &func.results,
                             direction,
@@ -1964,6 +1964,7 @@ impl<'a> Summary<'a> {
         let mut world_imports = Vec::new();
         let mut index = 0;
         for function in &self.functions {
+            #[allow(clippy::single_match)]
             match function.kind {
                 FunctionKind::Import => {
                     // todo: generate typings
@@ -2278,17 +2279,14 @@ fn componentize(
             Payload::CustomSection(section) if section.name() == "name" => {
                 let subsections = NameSectionReader::new(section.data(), section.data_offset());
                 for subsection in subsections {
-                    match subsection? {
-                        Name::Global(map) => {
-                            for naming in map {
-                                let naming = naming?;
-                                if naming.name == "__stack_pointer" {
-                                    stack_pointer_index = Some(naming.index);
-                                    break;
-                                }
+                    if let Name::Global(map) = subsection? {
+                        for naming in map {
+                            let naming = naming?;
+                            if naming.name == "__stack_pointer" {
+                                stack_pointer_index = Some(naming.index);
+                                break;
                             }
                         }
-                        _ => {}
                     }
                 }
             }
@@ -2432,7 +2430,7 @@ fn componentize(
                 tables.table(TableType {
                     element_type: RefType {
                         nullable: true,
-                        heap_type: HeapType::TypedFunc(dispatch_type_index.try_into().unwrap()),
+                        heap_type: HeapType::TypedFunc(dispatch_type_index),
                     },
                     minimum: dispatchable_function_count.try_into().unwrap(),
                     maximum: Some(dispatchable_function_count.try_into().unwrap()),
@@ -2446,7 +2444,7 @@ fn componentize(
                     let global = global?;
                     globals.global(
                         IntoGlobalType(global.ty).into(),
-                        &ConstExpr::raw(visit(global.init_expr.get_binary_reader(), remap)?).into(),
+                        &ConstExpr::raw(visit(global.init_expr.get_binary_reader(), remap)?),
                     );
                 }
                 globals.global(
@@ -2700,11 +2698,11 @@ fn componentize(
 
     result.section(&CustomSection {
         name: &format!("component-type:{}", resolve.worlds[world].name),
-        data: &metadata::encode(&resolve, world, wit_component::StringEncoding::UTF8, None)?,
+        data: &metadata::encode(resolve, world, wit_component::StringEncoding::UTF8, None)?,
     });
 
     // Encode with WASI Preview 1 adapter
-    Ok(ComponentEncoder::default()
+    ComponentEncoder::default()
         .validate(true)
         .module(&result.finish())?
         .adapter(
@@ -2714,5 +2712,5 @@ fn componentize(
                 "/wasi_snapshot_preview1.wasm.zst"
             ))))?,
         )?
-        .encode()?)
+        .encode()
 }
