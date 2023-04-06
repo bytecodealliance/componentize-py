@@ -291,6 +291,7 @@ dependencies = [
  "bincode",
  "clap",
  "componentize-py-shared",
+ "heck 0.4.1",
  "indexmap",
  "tar",
  "tempfile",

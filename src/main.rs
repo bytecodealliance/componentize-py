@@ -2,31 +2,34 @@
 
 use {
     anyhow::{bail, Context, Result},
-    clap::Parser,
+    clap::Parser as _,
     componentize_py_shared::{self as symbols, Direction, Symbols},
+    heck::{ToSnakeCase, ToUpperCamelCase},
     indexmap::{IndexMap, IndexSet},
     std::{
         cmp::Ordering,
         collections::HashMap,
         env,
         fs::{self, File},
-        io::{self, Cursor, Seek},
+        io::{self, Cursor, Seek, Write},
         iter,
+        ops::Deref,
         path::{Path, PathBuf},
         process::Command,
         str,
     },
     tar::Archive,
     wasm_encoder::{
-        BlockType, CodeSection, ConstExpr, CustomSection, EntityType, ExportKind, ExportSection,
-        Function, FunctionSection, GlobalSection, GlobalType, HeapType, ImportSection,
-        Instruction as Ins, MemArg, Module, RawSection, RefType, TableSection, TableType,
-        TypeSection, ValType,
+        BlockType, CodeSection, ConstExpr, CustomSection, Encode, EntityType, ExportKind,
+        ExportSection, Function, FunctionSection, GlobalSection, GlobalType, HeapType,
+        ImportSection, Instruction as Ins, MemArg, Module, RawSection, RefType, TableSection,
+        TableType, TypeSection, ValType,
     },
-    wasmparser::{ExternalKind, Name, NameSectionReader, Payload, TypeRef, VisitOperator},
-    wit_component::ComponentEncoder,
+    wasmparser::{ExternalKind, Name, NameSectionReader, Parser, Payload, TypeRef, VisitOperator},
+    wit_component::{metadata, ComponentEncoder},
     wit_parser::{
-        InterfaceId, Resolve, Results, Type, TypeDefKind, TypeId, TypeOwner, WorldId, WorldItem,
+        InterfaceId, Resolve, Results, Type, TypeDefKind, TypeId, TypeOwner, UnresolvedPackage,
+        WorldId, WorldItem,
     },
     wizer::Wizer,
     zstd::Decoder,
@@ -47,7 +50,7 @@ const MAX_FLAT_PARAMS: usize = 16;
 const MAX_FLAT_RESULTS: usize = 1;
 
 /// A utility to convert Python apps into Wasm components
-#[derive(Parser, Debug)]
+#[derive(clap::Parser, Debug)]
 #[command(author, version, about)]
 struct Options {
     /// The name of a Python module containing the app to wrap
@@ -74,7 +77,7 @@ struct Options {
     output: PathBuf,
 }
 
-#[derive(Parser, Debug)]
+#[derive(clap::Parser, Debug)]
 struct PrivateOptions {
     app_name: String,
     #[arg(long)]
@@ -124,8 +127,13 @@ fn main() -> Result<()> {
             "/runtime.wasm.zst"
         ))))?)?;
 
-        let (resolve, world) = parse_wit(&options.wit_path, options.wit_world.as_deref())?;
-        let component = componentize(&module, &resolve, world, &Summary::try_new(resolve, world)?)?;
+        let (resolve, world) = parse_wit(&options.wit_path, options.world.as_deref())?;
+        let component = componentize(
+            &module,
+            &resolve,
+            world,
+            &Summary::try_new(&resolve, world)?,
+        )?;
 
         fs::write(&options.output, component)?;
     } else {
@@ -140,8 +148,8 @@ fn main() -> Result<()> {
         .unpack(stdlib.path())?;
 
         let generated_code = tempfile::tempdir()?;
-        let (resolve, world) = parse_wit(&options.wit_path, options.wit_world.as_deref())?;
-        let summary = Summary::try_new(resolve, world)?;
+        let (resolve, world) = parse_wit(&options.wit_path, options.world.as_deref())?;
+        let summary = Summary::try_new(&resolve, world)?;
         summary.generate_code(generated_code.path())?;
 
         let mut python_path = format!(
@@ -262,6 +270,36 @@ fn find_dir(name: &str, path: &Path) -> Result<Option<PathBuf>> {
     Ok(None)
 }
 
+fn parse_wit(path: &Path, world: Option<&str>) -> Result<(Resolve, WorldId)> {
+    let mut resolve = Resolve::default();
+    let pkg = if path.is_dir() {
+        resolve.push_dir(&path)?.0
+    } else {
+        let pkg = UnresolvedPackage::parse_file(path)?;
+        resolve.push(pkg, &Default::default())?
+    };
+    Ok((resolve, resolve.select_world(pkg, world)?))
+}
+
+trait Types {
+    fn types(&self) -> Box<dyn Iterator<Item = Type>>;
+}
+
+impl Types for &[(String, Type)] {
+    fn types(&self) -> Box<dyn Iterator<Item = Type>> {
+        Box::new(self.iter().map(|(_, ty)| *ty))
+    }
+}
+
+impl Types for Results {
+    fn types(&self) -> Box<dyn Iterator<Item = Type>> {
+        match self {
+            Self::Named(params) => params.deref().types(),
+            Self::Anon(ty) => Box::new(iter::once(*ty)),
+        }
+    }
+}
+
 macro_rules! declare_enum {
     ($name:ident { $( $variant:ident ),* } $list:ident) => {
         #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -297,7 +335,7 @@ declare_enum! {
     } LINK_LIST
 }
 
-fn align(a: u32, b: u32) -> u32 {
+fn align(a: usize, b: usize) -> usize {
     assert!(b.is_power_of_two());
     (a + (b - 1)) & !(b - 1)
 }
@@ -309,21 +347,30 @@ struct Abi {
 }
 
 fn record_abi(resolve: &Resolve, types: impl IntoIterator<Item = Type>) -> Abi {
-    let mut size = 0;
-    let mut align = 1;
+    let mut size = 0_usize;
+    let mut align_ = 1;
     let flattened = Vec::new();
     for ty in types {
         let abi = abi(resolve, ty);
-        align(&mut size, abi.align);
+        size = align(size, abi.align);
         size += abi.size;
+        if abi.align > align_ {
+            align_ = abi.align;
+        }
         flattened.extend(abi.flattened);
     }
 
     Abi {
         size,
-        align,
+        align: align_,
         flattened,
     }
+}
+
+fn record_abi_limit(resolve: &Resolve, types: impl IntoIterator<Item = Type>, limit: usize) -> Abi {
+    let mut abi = record_abi(resolve, types);
+    abi.flattened.truncate(limit);
+    abi
 }
 
 fn abi(resolve: &Resolve, ty: Type) -> Abi {
@@ -415,7 +462,7 @@ impl<'a> FunctionBindgen<'a> {
         }
     }
 
-    fn compile_import(&mut self, index: usize) {
+    fn compile_import(&mut self, index: u32) {
         // Arg 0: *const Python
         let context = 0;
         // Arg 1: *const &PyAny
@@ -429,7 +476,7 @@ impl<'a> FunctionBindgen<'a> {
                 .flattened
                 .iter()
                 .map(|ty| {
-                    let local = self.push_local(ty);
+                    let local = self.push_local(*ty);
                     self.push(Ins::LocalSet(local));
                     local
                 })
@@ -442,19 +489,21 @@ impl<'a> FunctionBindgen<'a> {
 
                 let value = self.push_local(ValType::I32);
 
-                self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(input));
-                self.push(Ins::I32Load(mem_arg(load_offset, WORD_ALIGN)));
+                self.push(Ins::I32Load(mem_arg(
+                    load_offset,
+                    WORD_ALIGN.try_into().unwrap(),
+                )));
                 self.push(Ins::LocalSet(value));
 
                 self.lower(ty, context, value);
 
-                for local in locals[lift_index..][..abi.flattened.len()] {
-                    self.push(Ins::LocalTee(local));
+                for local in &locals[lift_index..][..abi.flattened.len()] {
+                    self.push(Ins::LocalTee(*local));
                 }
 
                 lift_index += abi.flattened.len();
-                load_offset += WORD_SIZE;
+                load_offset += u64::try_from(WORD_SIZE).unwrap();
 
                 self.pop_local(value, ValType::I32);
             }
@@ -470,21 +519,24 @@ impl<'a> FunctionBindgen<'a> {
                 let destination = self.push_local(ValType::I32);
 
                 let abi = abi(self.resolve, ty);
-                align(&mut store_offset, abi.align);
+                store_offset = align(store_offset, abi.align);
 
                 self.get_stack();
-                self.push(Ins::I32Const(store_offset));
+                self.push(Ins::I32Const(store_offset.try_into().unwrap()));
                 self.push(Ins::I32Add);
                 self.push(Ins::LocalSet(destination));
 
                 self.push(Ins::LocalGet(input));
-                self.push(Ins::I32Load(mem_arg(load_offset, WORD_ALIGN)));
+                self.push(Ins::I32Load(mem_arg(
+                    load_offset,
+                    WORD_ALIGN.try_into().unwrap(),
+                )));
                 self.push(Ins::LocalSet(value));
 
                 self.store(ty, context, value, destination);
 
                 store_offset += abi.size;
-                load_offset += WORD_SIZE;
+                load_offset += u64::try_from(WORD_SIZE).unwrap();
 
                 self.pop_local(destination, ValType::I32);
                 self.pop_local(value, ValType::I32);
@@ -509,7 +561,7 @@ impl<'a> FunctionBindgen<'a> {
                 .flattened
                 .iter()
                 .map(|ty| {
-                    let local = self.push_local(ty);
+                    let local = self.push_local(*ty);
                     self.push(Ins::LocalSet(local));
                     local
                 })
@@ -518,7 +570,7 @@ impl<'a> FunctionBindgen<'a> {
             self.lift_record(self.results.types(), context, &locals, output);
 
             for (local, ty) in locals.iter().zip(&self.results_abi.flattened).rev() {
-                self.pop_local(local, ty);
+                self.pop_local(*local, *ty);
             }
         } else {
             let source = self.push_local(ValType::I32);
@@ -536,7 +588,7 @@ impl<'a> FunctionBindgen<'a> {
             self.free_lowered_record(self.params.types(), &locals);
 
             for (local, ty) in locals.iter().zip(&self.params_abi.flattened).rev() {
-                self.pop_local(local, ty);
+                self.pop_local(*local, *ty);
             }
         } else {
             let value = self.push_local(ValType::I32);
@@ -551,11 +603,13 @@ impl<'a> FunctionBindgen<'a> {
         }
     }
 
-    fn compile_export(&mut self, index: u32, lift: u32, lower: u32) {
+    fn compile_export(&mut self, index: i32, lift: i32, lower: i32) {
         self.push(Ins::I32Const(index));
         self.push(Ins::I32Const(lift));
         self.push(Ins::I32Const(lower));
-        self.push(Ins::I32Const(self.params.types().count()));
+        self.push(Ins::I32Const(
+            self.params.types().count().try_into().unwrap(),
+        ));
 
         let param_flat_count = if self.params_abi.flattened.len() <= MAX_FLAT_PARAMS {
             self.push_stack(self.params_abi.size);
@@ -566,7 +620,7 @@ impl<'a> FunctionBindgen<'a> {
 
             self.store_copy_record(
                 self.params.types(),
-                &(0..self.params_abi.flattened.len()).collect::<Vec<_>>(),
+                &(0..self.params_abi.flattened.len().try_into().unwrap()).collect::<Vec<_>>(),
                 destination,
             );
 
@@ -586,7 +640,7 @@ impl<'a> FunctionBindgen<'a> {
 
             self.get_stack();
         } else {
-            self.push(Ins::LocalGet(param_flat_count));
+            self.push(Ins::LocalGet(param_flat_count.try_into().unwrap()));
         }
 
         self.link_call(Link::Dispatch);
@@ -617,8 +671,6 @@ impl<'a> FunctionBindgen<'a> {
         let destination = 2;
 
         self.load_record(self.params.types(), context, source, destination);
-
-        self.build()
     }
 
     fn compile_export_lower(&mut self) {
@@ -629,9 +681,35 @@ impl<'a> FunctionBindgen<'a> {
         // Arg 2: *mut MyResults
         let destination = 2;
 
-        self.store_record(self.results.types(), context, source, destination);
+        let mut store_offset = 0;
+        let mut load_offset = 0;
+        for ty in self.results.types() {
+            let abi = abi(self.resolve, ty);
+            store_offset = align(store_offset, abi.align);
 
-        self.build()
+            let field_value = self.push_local(ValType::I32);
+            let field_destination = self.push_local(ValType::I32);
+
+            self.push(Ins::LocalGet(source));
+            self.push(Ins::I32Load(mem_arg(
+                load_offset,
+                WORD_ALIGN.try_into().unwrap(),
+            )));
+            self.push(Ins::LocalSet(field_value));
+
+            self.push(Ins::LocalGet(destination));
+            self.push(Ins::I32Const(store_offset.try_into().unwrap()));
+            self.push(Ins::I32Add);
+            self.push(Ins::LocalSet(field_destination));
+
+            self.store(ty, context, field_value, field_destination);
+
+            store_offset += abi.size;
+            load_offset += u64::try_from(WORD_SIZE).unwrap();
+
+            self.pop_local(field_destination, ValType::I32);
+            self.pop_local(field_value, ValType::I32);
+        }
     }
 
     fn compile_export_post_return(&mut self) {
@@ -639,33 +717,27 @@ impl<'a> FunctionBindgen<'a> {
             // Arg 0: *mut MyResults
             let value = 0;
 
-            let mut gen = FunctionBindgen::new(self);
-
             self.free_stored_record(self.results.types(), value);
 
             self.push(Ins::LocalGet(value));
-            self.push(Ins::I32Const(self.results_abi.size));
-            self.push(Ins::I32Const(self.results_abi.align));
+            self.push(Ins::I32Const(self.results_abi.size.try_into().unwrap()));
+            self.push(Ins::I32Const(self.results_abi.align.try_into().unwrap()));
             self.link_call(Link::Free);
-
-            Some(self.build())
         } else {
-            // As of this writing, no type involving heap allocation can fit into `MAX_FLAT_RESULTS`, so nothing to
-            // do.  We'll need to revisit this if `MAX_FLAT_RESULTS` changes or if new types are added.
-            None
+            unreachable!()
         }
     }
 
     fn push_stack(&mut self, size: usize) {
         self.push(Ins::GlobalGet(self.stack_pointer));
-        self.push(Ins::I32Const(align(size, WORD_SIZE)));
+        self.push(Ins::I32Const(align(size, WORD_SIZE).try_into().unwrap()));
         self.push(Ins::I32Sub);
         self.push(Ins::GlobalSet(self.stack_pointer));
     }
 
     fn pop_stack(&mut self, size: usize) {
         self.push(Ins::GlobalGet(self.stack_pointer));
-        self.push(Ins::I32Const(align(size, WORD_SIZE)));
+        self.push(Ins::I32Const(align(size, WORD_SIZE).try_into().unwrap()));
         self.push(Ins::I32Add);
         self.push(Ins::GlobalSet(self.stack_pointer));
     }
@@ -675,7 +747,7 @@ impl<'a> FunctionBindgen<'a> {
     }
 
     fn link_call(&mut self, link: Link) {
-        self.push(Ins::Call(self.link_map.get(link).unwrap()));
+        self.push(Ins::Call(*self.link_map.get(&link).unwrap()));
     }
 
     fn get_stack(&mut self) {
@@ -694,12 +766,19 @@ impl<'a> FunctionBindgen<'a> {
             self.local_types.push(ty);
         }
 
-        self.params_abi.flattened.len() + self.local_stack.len() - 1
+        (self.params_abi.flattened.len() + self.local_stack.len() - 1)
+            .try_into()
+            .unwrap()
     }
 
     fn pop_local(&mut self, index: u32, ty: ValType) {
-        assert!(index == self.params_abi.flattened.len() + self.local_stack.len() - 1);
-        assert!(ty == self.local_types.len() - 1);
+        assert!(
+            index
+                == (self.params_abi.flattened.len() + self.local_stack.len() - 1)
+                    .try_into()
+                    .unwrap()
+        );
+        assert!(ty == self.local_types[self.local_types.len() - 1]);
 
         self.local_stack.pop();
         while let Some(false) = self.local_stack.last() {
@@ -740,24 +819,27 @@ impl<'a> FunctionBindgen<'a> {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value));
                 self.push_stack(WORD_SIZE * 2);
-                self.stack();
+                self.get_stack();
                 self.link_call(Link::LowerString);
-                self.stack();
-                self.push(Ins::I32Load(mem_arg(0, WORD_ALIGN)));
-                self.stack();
-                self.push(Ins::I32Load(mem_arg(WORD_SIZE, WORD_ALIGN)));
+                self.get_stack();
+                self.push(Ins::I32Load(mem_arg(0, WORD_ALIGN.try_into().unwrap())));
+                self.get_stack();
+                self.push(Ins::I32Load(mem_arg(
+                    WORD_SIZE.try_into().unwrap(),
+                    WORD_ALIGN.try_into().unwrap(),
+                )));
                 self.pop_stack(WORD_SIZE * 2);
             }
             Type::Id(id) => match self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
-                    let type_index = self.types.get_index_of(id).unwrap();
+                    let type_index = self.types.get_index_of(&id).unwrap();
                     for (field_index, field) in record.fields.iter().enumerate() {
                         let field_value = self.push_local(ValType::I32);
 
                         self.push(Ins::LocalGet(context));
                         self.push(Ins::LocalGet(value));
-                        self.push(Ins::I32Const(type_index));
-                        self.push(Ins::I32Const(field_index));
+                        self.push(Ins::I32Const(type_index.try_into().unwrap()));
+                        self.push(Ins::I32Const(field_index.try_into().unwrap()));
                         self.link_call(Link::GetField);
                         self.push(Ins::LocalSet(field_value));
 
@@ -786,9 +868,9 @@ impl<'a> FunctionBindgen<'a> {
 
                     self.push(Ins::LocalGet(context));
                     self.push(Ins::LocalGet(length));
-                    self.push(Ins::I32Const(abi.size));
+                    self.push(Ins::I32Const(abi.size.try_into().unwrap()));
                     self.push(Ins::I32Mul);
-                    self.push(Ins::I32Const(abi.align));
+                    self.push(Ins::I32Const(abi.align.try_into().unwrap()));
                     self.link_call(Link::Allocate);
                     self.push(Ins::LocalSet(destination));
 
@@ -809,7 +891,7 @@ impl<'a> FunctionBindgen<'a> {
 
                     self.push(Ins::LocalGet(destination));
                     self.push(Ins::LocalGet(index));
-                    self.push(Ins::I32Const(abi.size));
+                    self.push(Ins::I32Const(abi.size.try_into().unwrap()));
                     self.push(Ins::I32Mul);
                     self.push(Ins::I32Add);
                     self.push(Ins::LocalSet(element_destination));
@@ -877,24 +959,24 @@ impl<'a> FunctionBindgen<'a> {
             }
             Type::Id(id) => match self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
-                    let type_index = self.types.get_index_of(id).unwrap();
+                    let type_index = self.types.get_index_of(&id).unwrap();
                     let mut store_offset = 0;
                     for (field_index, field) in record.fields.iter().enumerate() {
                         let abi = abi(self.resolve, ty);
-                        align(&mut store_offset, abi.align);
+                        store_offset = align(store_offset, abi.align);
 
                         let field_value = self.push_local(ValType::I32);
                         let field_destination = self.push_local(ValType::I32);
 
                         self.push(Ins::LocalGet(context));
                         self.push(Ins::LocalGet(value));
-                        self.push(Ins::I32Const(type_index));
-                        self.push(Ins::I32Const(field_index));
+                        self.push(Ins::I32Const(type_index.try_into().unwrap()));
+                        self.push(Ins::I32Const(field_index.try_into().unwrap()));
                         self.link_call(Link::GetField);
                         self.push(Ins::LocalSet(field_value));
 
                         self.push(Ins::LocalGet(destination));
-                        self.push(Ins::I32Const(store_offset));
+                        self.push(Ins::I32Const(store_offset.try_into().unwrap()));
                         self.push(Ins::I32Add);
                         self.push(Ins::LocalSet(field_destination));
 
@@ -909,9 +991,12 @@ impl<'a> FunctionBindgen<'a> {
                 TypeDefKind::List(element_type) => {
                     self.lower(ty, context, value);
                     self.push(Ins::LocalGet(destination));
-                    self.push(Ins::I32Store(mem_arg(WORD_SIZE, WORD_ALIGN)));
+                    self.push(Ins::I32Store(mem_arg(
+                        WORD_SIZE.try_into().unwrap(),
+                        WORD_ALIGN.try_into().unwrap(),
+                    )));
                     self.push(Ins::LocalGet(destination));
-                    self.push(Ins::I32Store(mem_arg(0, WORD_ALIGN)));
+                    self.push(Ins::I32Store(mem_arg(0, WORD_ALIGN.try_into().unwrap())));
                 }
                 _ => todo!(),
             },
@@ -947,10 +1032,13 @@ impl<'a> FunctionBindgen<'a> {
             Type::String => {
                 self.push(Ins::LocalGet(source[0]));
                 self.push(Ins::LocalGet(destination));
-                self.push(Ins::I32Store(mem_arg(0, WORD_ALIGN)));
+                self.push(Ins::I32Store(mem_arg(0, WORD_ALIGN.try_into().unwrap())));
                 self.push(Ins::LocalGet(source[1]));
                 self.push(Ins::LocalGet(destination));
-                self.push(Ins::I32Store(mem_arg(WORD_SIZE, WORD_ALIGN)));
+                self.push(Ins::I32Store(mem_arg(
+                    WORD_SIZE.try_into().unwrap(),
+                    WORD_ALIGN.try_into().unwrap(),
+                )));
             }
             Type::Id(id) => match self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
@@ -963,10 +1051,13 @@ impl<'a> FunctionBindgen<'a> {
                 TypeDefKind::List(element_type) => {
                     self.push(Ins::LocalGet(source[0]));
                     self.push(Ins::LocalGet(destination));
-                    self.push(Ins::I32Store(mem_arg(0, WORD_ALIGN)));
+                    self.push(Ins::I32Store(mem_arg(0, WORD_ALIGN.try_into().unwrap())));
                     self.push(Ins::LocalGet(source[1]));
                     self.push(Ins::LocalGet(destination));
-                    self.push(Ins::I32Store(mem_arg(WORD_SIZE, WORD_ALIGN)));
+                    self.push(Ins::I32Store(mem_arg(
+                        WORD_SIZE.try_into().unwrap(),
+                        WORD_ALIGN.try_into().unwrap(),
+                    )));
                 }
                 _ => todo!(),
             },
@@ -983,22 +1074,22 @@ impl<'a> FunctionBindgen<'a> {
         let mut store_offset = 0;
         for ty in types {
             let abi = abi(self.resolve, ty);
-            align(&mut store_offset, abi.align);
+            store_offset = align(store_offset, abi.align);
 
             let field_destination = self.push_local(ValType::I32);
 
             self.push(Ins::LocalGet(destination));
-            self.push(Ins::I32Const(store_offset));
+            self.push(Ins::I32Const(store_offset.try_into().unwrap()));
             self.push(Ins::I32Add);
             self.push(Ins::LocalSet(field_destination));
 
             self.store_copy(
                 ty,
-                source[local_index..][..abi.flat_count],
+                &source[local_index..][..abi.flattened.len()],
                 field_destination,
             );
 
-            local_index += abi.flat_count;
+            local_index += abi.flattened.len();
             store_offset += abi.size;
 
             self.pop_local(field_destination, ValType::I32);
@@ -1043,20 +1134,27 @@ impl<'a> FunctionBindgen<'a> {
             Type::Id(id) => match self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
                     self.push_stack(record.fields.len() * WORD_SIZE);
-                    let source = self.push_local(ValType::I32);
+                    let destination = self.push_local(ValType::I32);
 
                     self.get_stack();
-                    self.push(Ins::LocalSet(source));
+                    self.push(Ins::LocalSet(destination));
 
-                    self.lift_record(record.fields.iter().map(|field| field.ty), context, source);
+                    self.lift_record(
+                        record.fields.iter().map(|field| field.ty),
+                        context,
+                        value,
+                        destination,
+                    );
 
                     self.push(Ins::LocalGet(context));
-                    self.push(Ins::I32Const(self.types.get_index_of(id).unwrap()));
+                    self.push(Ins::I32Const(
+                        self.types.get_index_of(&id).unwrap().try_into().unwrap(),
+                    ));
                     self.get_stack();
-                    self.push(Ins::I32Const(record.fields.len()));
+                    self.push(Ins::I32Const(record.fields.len().try_into().unwrap()));
                     self.link_call(Link::Init);
 
-                    self.pop_local(source, ValType::I32);
+                    self.pop_local(destination, ValType::I32);
                     self.pop_stack(record.fields.len() * WORD_SIZE);
                 }
                 TypeDefKind::List(ty) => {
@@ -1089,7 +1187,7 @@ impl<'a> FunctionBindgen<'a> {
 
                     self.push(Ins::LocalGet(source));
                     self.push(Ins::LocalGet(index));
-                    self.push(Ins::I32Const(abi.size));
+                    self.push(Ins::I32Const(abi.size.try_into().unwrap()));
                     self.push(Ins::I32Mul);
                     self.push(Ins::I32Add);
                     self.push(Ins::LocalSet(element_source));
@@ -1129,32 +1227,51 @@ impl<'a> FunctionBindgen<'a> {
         let mut lift_index = 0;
         let mut store_offset = 0;
         for ty in types {
-            let flat_count = abi(self.resolve, ty).flat_count;
+            let flat_count = abi(self.resolve, ty).flattened.len();
 
             self.lift(ty, context, &source[lift_index..][..flat_count]);
 
             self.push(Ins::LocalGet(destination));
-            self.push(Ins::I32Store(mem_arg(store_offset, WORD_ALIGN)));
+            self.push(Ins::I32Store(mem_arg(
+                store_offset,
+                WORD_ALIGN.try_into().unwrap(),
+            )));
 
             lift_index += flat_count;
-            store_offset += WORD_SIZE;
+            store_offset += u64::try_from(WORD_SIZE).unwrap();
         }
     }
 
     fn load(&mut self, ty: Type, context: u32, source: u32) {
         match ty {
-            Type::Bool | Type::U8 | Type::S8 => {
+            Type::Bool | Type::U8 => {
                 let value = self.push_local(ValType::I32);
                 self.push(Ins::LocalGet(source));
-                self.push(Ins::I32Load8(mem_arg(0, 0)));
+                self.push(Ins::I32Load8U(mem_arg(0, 0)));
                 self.push(Ins::LocalSet(value));
                 self.lift(ty, context, &[value]);
                 self.pop_local(value, ValType::I32);
             }
-            Type::U16 | Type::S16 => {
+            Type::S8 => {
                 let value = self.push_local(ValType::I32);
                 self.push(Ins::LocalGet(source));
-                self.push(Ins::I32Load16(mem_arg(0, 1)));
+                self.push(Ins::I32Load8S(mem_arg(0, 0)));
+                self.push(Ins::LocalSet(value));
+                self.lift(ty, context, &[value]);
+                self.pop_local(value, ValType::I32);
+            }
+            Type::U16 => {
+                let value = self.push_local(ValType::I32);
+                self.push(Ins::LocalGet(source));
+                self.push(Ins::I32Load16U(mem_arg(0, 1)));
+                self.push(Ins::LocalSet(value));
+                self.lift(ty, context, &[value]);
+                self.pop_local(value, ValType::I32);
+            }
+            Type::S16 => {
+                let value = self.push_local(ValType::I32);
+                self.push(Ins::LocalGet(source));
+                self.push(Ins::I32Load16S(mem_arg(0, 1)));
                 self.push(Ins::LocalSet(value));
                 self.lift(ty, context, &[value]);
                 self.pop_local(value, ValType::I32);
@@ -1194,9 +1311,12 @@ impl<'a> FunctionBindgen<'a> {
             Type::String => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(source));
-                self.push(Ins::I32Load(mem_arg(0, WORD_ALIGN)));
+                self.push(Ins::I32Load(mem_arg(0, WORD_ALIGN.try_into().unwrap())));
                 self.push(Ins::LocalGet(source));
-                self.push(Ins::I32Load(mem_arg(WORD_SIZE, WORD_ALIGN)));
+                self.push(Ins::I32Load(mem_arg(
+                    WORD_SIZE.try_into().unwrap(),
+                    WORD_ALIGN.try_into().unwrap(),
+                )));
                 self.link_call(Link::LiftString);
             }
             Type::Id(id) => match self.resolve.types[id].kind {
@@ -1214,9 +1334,11 @@ impl<'a> FunctionBindgen<'a> {
                         destination,
                     );
 
-                    self.push(Ins::I32Const(self.types.get_index_of(id).unwrap()));
+                    self.push(Ins::I32Const(
+                        self.types.get_index_of(&id).unwrap().try_into().unwrap(),
+                    ));
                     self.get_stack();
-                    self.push(Ins::I32Const(record.fields.len()));
+                    self.push(Ins::I32Const(record.fields.len().try_into().unwrap()));
                     self.link_call(Link::Init);
 
                     self.pop_local(destination, ValType::I32);
@@ -1227,11 +1349,14 @@ impl<'a> FunctionBindgen<'a> {
                     let length = self.push_local(ValType::I32);
 
                     self.push(Ins::LocalGet(source));
-                    self.push(Ins::I32Load(mem_arg(0, WORD_ALIGN)));
+                    self.push(Ins::I32Load(mem_arg(0, WORD_ALIGN.try_into().unwrap())));
                     self.push(Ins::LocalSet(body));
 
                     self.push(Ins::LocalGet(source));
-                    self.push(Ins::I32Load(mem_arg(WORD_SIZE, WORD_ALIGN)));
+                    self.push(Ins::I32Load(mem_arg(
+                        WORD_SIZE.try_into().unwrap(),
+                        WORD_ALIGN.try_into().unwrap(),
+                    )));
                     self.push(Ins::LocalSet(length));
 
                     self.lift(ty, context, &[body, length]);
@@ -1257,20 +1382,23 @@ impl<'a> FunctionBindgen<'a> {
             let field_source = self.push_local(ValType::I32);
 
             let abi = abi(self.resolve, ty);
-            align(&mut load_offset, abi.align);
+            load_offset = align(load_offset, abi.align);
 
             self.push(Ins::LocalGet(source));
-            self.push(Ins::I32Const(load_offset));
+            self.push(Ins::I32Const(load_offset.try_into().unwrap()));
             self.push(Ins::I32Add);
-            self.load(Ins::LocalSet(field_source));
+            self.push(Ins::LocalSet(field_source));
 
             self.load(ty, context, field_source);
 
             self.push(Ins::LocalGet(destination));
-            self.push(Ins::I32Store(mem_arg(store_offset, WORD_ALIGN)));
+            self.push(Ins::I32Store(mem_arg(
+                store_offset,
+                WORD_ALIGN.try_into().unwrap(),
+            )));
 
             load_offset += abi.size;
-            store_offset += WORD_SIZE;
+            store_offset += u64::try_from(WORD_SIZE).unwrap();
 
             self.pop_local(field_source, ValType::I32);
         }
@@ -1278,13 +1406,21 @@ impl<'a> FunctionBindgen<'a> {
 
     fn load_copy(&mut self, ty: Type, source: u32) {
         match ty {
-            Type::Bool | Type::U8 | Type::S8 => {
+            Type::Bool | Type::U8 => {
                 self.push(Ins::LocalGet(source));
-                self.push(Ins::I32Load8(mem_arg(0, 0)));
+                self.push(Ins::I32Load8U(mem_arg(0, 0)));
             }
-            Type::U16 | Type::S16 => {
+            Type::S8 => {
                 self.push(Ins::LocalGet(source));
-                self.push(Ins::I32Load16(mem_arg(0, 1)));
+                self.push(Ins::I32Load8S(mem_arg(0, 0)));
+            }
+            Type::U16 => {
+                self.push(Ins::LocalGet(source));
+                self.push(Ins::I32Load16U(mem_arg(0, 1)));
+            }
+            Type::S16 => {
+                self.push(Ins::LocalGet(source));
+                self.push(Ins::I32Load16S(mem_arg(0, 1)));
             }
             Type::U32 | Type::S32 | Type::Char => {
                 self.push(Ins::LocalGet(source));
@@ -1304,9 +1440,12 @@ impl<'a> FunctionBindgen<'a> {
             }
             Type::String => {
                 self.push(Ins::LocalGet(source));
-                self.push(Ins::I32Load(mem_arg(0, WORD_ALIGN)));
+                self.push(Ins::I32Load(mem_arg(0, WORD_ALIGN.try_into().unwrap())));
                 self.push(Ins::LocalGet(source));
-                self.push(Ins::I32Load(mem_arg(WORD_SIZE, WORD_ALIGN)));
+                self.push(Ins::I32Load(mem_arg(
+                    WORD_SIZE.try_into().unwrap(),
+                    WORD_ALIGN.try_into().unwrap(),
+                )));
             }
             Type::Id(id) => match self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
@@ -1314,9 +1453,12 @@ impl<'a> FunctionBindgen<'a> {
                 }
                 TypeDefKind::List(_) => {
                     self.push(Ins::LocalGet(source));
-                    self.push(Ins::I32Load(mem_arg(0, WORD_ALIGN)));
+                    self.push(Ins::I32Load(mem_arg(0, WORD_ALIGN.try_into().unwrap())));
                     self.push(Ins::LocalGet(source));
-                    self.push(Ins::I32Load(mem_arg(WORD_SIZE, WORD_ALIGN)));
+                    self.push(Ins::I32Load(mem_arg(
+                        WORD_SIZE.try_into().unwrap(),
+                        WORD_ALIGN.try_into().unwrap(),
+                    )));
                 }
                 _ => todo!(),
             },
@@ -1329,12 +1471,12 @@ impl<'a> FunctionBindgen<'a> {
             let field_source = self.push_local(ValType::I32);
 
             let abi = abi(self.resolve, ty);
-            align(&mut load_offset, abi.align);
+            load_offset = align(load_offset, abi.align);
 
             self.push(Ins::LocalGet(source));
-            self.push(Ins::I32Const(load_offset));
+            self.push(Ins::I32Const(load_offset.try_into().unwrap()));
             self.push(Ins::I32Add);
-            self.load(Ins::LocalSet(field_source));
+            self.push(Ins::LocalSet(field_source));
 
             self.load_copy(ty, field_source);
 
@@ -1368,7 +1510,7 @@ impl<'a> FunctionBindgen<'a> {
 
             Type::Id(id) => match self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
-                    free_lowered_record(record.fields.iter().map(|field| field.ty), value);
+                    self.free_lowered_record(record.fields.iter().map(|field| field.ty), value);
                 }
                 TypeDefKind::List(ty) => {
                     // TODO: optimize (i.e. no loop) when list element is primitive
@@ -1395,7 +1537,7 @@ impl<'a> FunctionBindgen<'a> {
 
                     self.push(Ins::LocalGet(pointer));
                     self.push(Ins::LocalGet(index));
-                    self.push(Ins::I32Const(abi.size));
+                    self.push(Ins::I32Const(abi.size.try_into().unwrap()));
                     self.push(Ins::I32Mul);
                     self.push(Ins::I32Add);
                     self.push(Ins::LocalSet(element_pointer));
@@ -1411,9 +1553,9 @@ impl<'a> FunctionBindgen<'a> {
 
                     self.push(Ins::LocalGet(pointer));
                     self.push(Ins::LocalGet(index));
-                    self.push(Ins::I32Const(abi.size));
+                    self.push(Ins::I32Const(abi.size.try_into().unwrap()));
                     self.push(Ins::I32Mul);
-                    self.push(Ins::I32Const(abi.align));
+                    self.push(Ins::I32Const(abi.align.try_into().unwrap()));
                     self.link_call(Link::Free);
 
                     self.pop_local(element_pointer, ValType::I32);
@@ -1452,33 +1594,77 @@ impl<'a> FunctionBindgen<'a> {
 
             Type::String => {
                 self.push(Ins::LocalGet(value));
-                self.push(Ins::I32Load(mem_arg(0, WORD_ALIGN)));
+                self.push(Ins::I32Load(mem_arg(0, WORD_ALIGN.try_into().unwrap())));
                 self.push(Ins::LocalGet(value));
-                self.push(Ins::I32Load(mem_arg(WORD_SIZE, WORD_ALIGN)));
+                self.push(Ins::I32Load(mem_arg(
+                    WORD_SIZE.try_into().unwrap(),
+                    WORD_ALIGN.try_into().unwrap(),
+                )));
                 self.push(Ins::I32Const(1));
                 self.link_call(Link::Free);
             }
 
             Type::Id(id) => match self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
-                    free_stored_record(record.fields.iter().map(|field| field.ty), value);
+                    self.free_stored_record(record.fields.iter().map(|field| field.ty), value);
                 }
                 TypeDefKind::List(ty) => {
+                    // TODO: optimize this for primitive element types
+
+                    let abi = abi(self.resolve, ty);
+
+                    let index = self.push_local(ValType::I32);
                     let body = self.push_local(ValType::I32);
                     let length = self.push_local(ValType::I32);
+                    let element_value = self.push_local(ValType::I32);
 
                     self.push(Ins::LocalGet(value));
-                    self.push(Ins::I32Load(mem_arg(0, WORD_ALIGN)));
+                    self.push(Ins::I32Load(mem_arg(0, WORD_ALIGN.try_into().unwrap())));
                     self.push(Ins::LocalSet(body));
 
                     self.push(Ins::LocalGet(value));
-                    self.push(Ins::I32Load(mem_arg(WORD_SIZE, WORD_ALIGN)));
+                    self.push(Ins::I32Load(mem_arg(
+                        WORD_SIZE.try_into().unwrap(),
+                        WORD_ALIGN.try_into().unwrap(),
+                    )));
                     self.push(Ins::LocalSet(length));
 
-                    self.free_stored(ty, &[body, length]);
+                    let loop_ = self.push_block();
+                    self.push(Ins::Loop(BlockType::Empty));
 
+                    self.push(Ins::LocalGet(index));
+                    self.push(Ins::LocalGet(length));
+                    self.push(Ins::I32Ne);
+
+                    self.push(Ins::If(BlockType::Empty));
+
+                    self.push(Ins::LocalGet(value));
+                    self.push(Ins::LocalGet(index));
+                    self.push(Ins::I32Const(abi.size.try_into().unwrap()));
+                    self.push(Ins::I32Mul);
+                    self.push(Ins::I32Add);
+                    self.push(Ins::LocalSet(element_value));
+
+                    self.free_stored(ty, element_value);
+
+                    self.push(Ins::Br(loop_));
+
+                    self.push(Ins::End);
+
+                    self.push(Ins::End);
+                    self.pop_block(loop_);
+
+                    self.push(Ins::LocalGet(body));
+                    self.push(Ins::LocalGet(length));
+                    self.push(Ins::I32Const(abi.size.try_into().unwrap()));
+                    self.push(Ins::I32Mul);
+                    self.push(Ins::I32Const(abi.align.try_into().unwrap()));
+                    self.link_call(Link::Free);
+
+                    self.pop_local(element_value, ValType::I32);
                     self.pop_local(length, ValType::I32);
                     self.pop_local(body, ValType::I32);
+                    self.pop_local(index, ValType::I32);
                 }
                 _ => todo!(),
             },
@@ -1492,12 +1678,12 @@ impl<'a> FunctionBindgen<'a> {
             let field_value = self.push_local(ValType::I32);
 
             let abi = abi(self.resolve, ty);
-            align(&mut load_offset, abi.align);
+            load_offset = align(load_offset, abi.align);
 
             self.push(Ins::LocalGet(value));
-            self.push(Ins::I32Const(load_offset));
+            self.push(Ins::I32Const(load_offset.try_into().unwrap()));
             self.push(Ins::I32Add);
-            self.load(Ins::LocalSet(field_value));
+            self.push(Ins::LocalSet(field_value));
 
             self.free_stored(ty, field_value);
 
@@ -1535,7 +1721,7 @@ struct MyFunction<'a> {
 impl<'a> MyFunction<'a> {
     fn internal_name(&self) -> String {
         if let Some(interface) = self.interface {
-            format!("{}#{}", interface, self.name);
+            format!("{}#{}", interface, self.name)
         } else {
             self.name.to_owned()
         }
@@ -1582,7 +1768,9 @@ impl<'a> Summary<'a> {
         let mut me = Self {
             resolve,
             functions: Vec::new(),
-            types: IndexMap::new(),
+            types: IndexSet::new(),
+            exported_interfaces: HashMap::new(),
+            imported_interfaces: HashMap::new(),
         };
 
         me.visit_functions(&resolve.worlds[world].imports, Direction::Import)?;
@@ -1655,7 +1843,13 @@ impl<'a> Summary<'a> {
                 self.functions.push(make(FunctionKind::Export));
                 self.functions.push(make(FunctionKind::ExportLift));
                 self.functions.push(make(FunctionKind::ExportLower));
-                self.functions.push(make(FunctionKind::ExportPostReturn));
+                if record_abi(self.resolve, results.types()).flattened.len() > MAX_FLAT_RESULTS {
+                    self.functions.push(make(FunctionKind::ExportPostReturn));
+                } else {
+                    // As of this writing, no type involving heap allocation can fit into `MAX_FLAT_RESULTS`, so
+                    // nothing to do.  We'll need to revisit this if `MAX_FLAT_RESULTS` changes or if new types are
+                    // added.
+                }
             }
         }
     }
@@ -1669,14 +1863,14 @@ impl<'a> Summary<'a> {
             match item {
                 WorldItem::Interface(interface) => {
                     match direction {
-                        Direction::Import => self.imported_interfaces.insert(interface, item_name),
-                        Direction::Export => self.exported_interfaces.insert(interface, item_name),
-                    }
-                    let interface = &self.resolve.interfaces[interface];
+                        Direction::Import => self.imported_interfaces.insert(*interface, item_name),
+                        Direction::Export => self.exported_interfaces.insert(*interface, item_name),
+                    };
+                    let interface = &self.resolve.interfaces[*interface];
                     for (func_name, func) in interface.functions {
                         self.visit_function(
-                            Some(&interface.name),
-                            func_name,
+                            Some(item_name),
+                            &func_name,
                             &func.params,
                             &func.results,
                             direction,
@@ -1685,7 +1879,7 @@ impl<'a> Summary<'a> {
                 }
 
                 WorldItem::Function(func) => {
-                    self.visit_func(None, &func.name, &func.params, &func.results, direction);
+                    self.visit_function(None, &func.name, &func.params, &func.results, direction);
                 }
 
                 WorldItem::Type(_) => bail!("type imports and exports not yet supported"),
@@ -1695,19 +1889,13 @@ impl<'a> Summary<'a> {
     }
 
     fn collect_symbols(&self) -> Symbols<'a> {
-        let mut imports = Vec::new();
         let mut exports = Vec::new();
         for function in self.functions {
-            match function.kind {
-                FunctionKind::Import => imports.push(symbols::Function {
+            if let FunctionKind::Export = function.kind {
+                exports.push(symbols::Function {
                     interface: function.interface,
                     name: function.name,
-                }),
-                FunctionKind::Export => exports.push(symbols::Function {
-                    interface: function.interface,
-                    name: function.name,
-                }),
-                _ => (),
+                });
             }
         }
 
@@ -1716,26 +1904,35 @@ impl<'a> Summary<'a> {
             let ty = &self.resolve.types[ty];
             if let TypeOwner::Interface(interface) = ty.owner {
                 let (direction, interface) =
-                    if let Some(name) = self.imported_interfaces.get(interface) {
-                        (Direction::Import, name)
+                    if let Some(name) = self.imported_interfaces.get(&interface) {
+                        (Direction::Import, *name)
                     } else {
-                        (Direction::Export, self.exported_interfaces[interface])
+                        (Direction::Export, self.exported_interfaces[&interface])
                     };
 
                 types.push(symbols::Type {
                     direction,
                     interface,
                     name: ty.name.as_deref(),
+                    fields: match ty.kind {
+                        TypeDefKind::Record(record) => {
+                            record.fields.iter().map(|f| f.name.as_str()).collect()
+                        }
+                        TypeDefKind::List(_) => Vec::new(),
+                        _ => todo!(),
+                    },
                 });
             } else {
                 todo!("handle types exported directly from a world");
             };
         }
+
+        Symbols { exports, types }
     }
 
     fn generate_code(&self, path: &Path) -> Result<()> {
-        let mut interface_imports = HashMap::new();
-        let mut interface_exports = HashMap::new();
+        let mut interface_imports = HashMap::<_, Vec<_>>::new();
+        let mut interface_exports = HashMap::<_, Vec<_>>::new();
         let mut world_imports = Vec::new();
         let mut index = 0;
         for function in self.functions {
@@ -1747,7 +1944,7 @@ impl<'a> Summary<'a> {
                     let params = function
                         .params
                         .iter()
-                        .map(|(name, _)| name)
+                        .map(|(name, _)| name.as_str())
                         .collect::<Vec<_>>()
                         .join(", ");
 
@@ -1774,7 +1971,7 @@ impl<'a> Summary<'a> {
         }
 
         for (index, ty) in self.types.iter().enumerate() {
-            let ty = &self.resolve.types[ty];
+            let ty = &self.resolve.types[*ty];
             if let TypeOwner::Interface(interface) = ty.owner {
                 // todo: generate `dataclass` with typings
                 let camel = || {
@@ -1817,11 +2014,11 @@ impl<'a> Summary<'a> {
                 };
 
                 if let Some(code) = code {
-                    if let Some(name) = self.imported_interfaces.get(interface) {
+                    if let Some(name) = self.imported_interfaces.get(&interface) {
                         interface_imports.entry(name).or_default().push(code)
                     } else {
                         interface_exports
-                            .entry(self.exported_interfaces[interface])
+                            .entry(self.exported_interfaces[&interface])
                             .or_default()
                             .push(code)
                     }
@@ -1865,6 +2062,8 @@ impl<'a> Summary<'a> {
                 file.write_all(code.as_bytes())?;
             }
         }
+
+        Ok(())
     }
 }
 
@@ -1887,7 +2086,7 @@ macro_rules! define_encode {
                     )*
                 )?
                 let insn = define_encode!(mk $op $($($arg)*)?);
-                insn.encode(&mut self.buf);
+                insn.encode(&mut self.buffer);
             }
         )*
     };
@@ -1987,16 +2186,18 @@ fn componentize(
     for payload in Parser::new(0).parse_all(module) {
         match payload? {
             Payload::TypeSection(reader) => {
-                types = Some(reader.into_iter().collect::<Vec<_>>());
+                types = Some(reader.into_iter().collect::<Result<Vec<_>, _>>()?);
             }
             Payload::ImportSection(reader) => {
                 let count = 0;
                 for import in reader {
                     let import = import?;
                     if import.module == "componentize-py" {
-                        if import.field == "dispatch" {
+                        if import.name == "dispatch" {
                             match import.ty {
-                                TypeRef::Func(ty) if types.unwrap()[ty] == dispatch_type => {
+                                TypeRef::Func(ty)
+                                    if types.unwrap()[ty.try_into().unwrap()] == dispatch_type =>
+                                {
                                     dispatch_import_index = Some(count);
                                     dispatch_type_index = Some(ty);
                                 }
@@ -2008,7 +2209,7 @@ fn componentize(
                         } else {
                             bail!(
                                 "componentize-py module import has unrecognized name: {}",
-                                import.field
+                                import.name
                             );
                         }
                     }
@@ -2062,23 +2263,29 @@ fn componentize(
         .filter(|f| f.is_dispatchable())
         .count();
     let dispatch_type_index = dispatch_type_index.unwrap();
+    let dispatch_import_index = dispatch_import_index.unwrap();
+    let stack_pointer_index = stack_pointer_index.unwrap();
 
-    let remap = move |index| match index.cmp(dispatch_import_index) {
+    let remap = move |index: u32| match index.cmp(&dispatch_import_index.try_into().unwrap()) {
         Ordering::Less => index,
-        Ordering::Equal => old_function_count + new_import_count - 1,
+        Ordering::Equal => (old_function_count + new_import_count - 1)
+            .try_into()
+            .unwrap(),
         Ordering::Greater => {
-            if index < old_import_count {
+            if index < old_import_count.try_into().unwrap() {
                 index - 1
             } else {
-                old_import_count + new_import_count - 1
+                (old_import_count + new_import_count - 1)
+                    .try_into()
+                    .unwrap()
             }
         }
     };
 
     let mut link_name_map = LINK_LIST
         .iter()
-        .map(|&v| (v, format!("{v:?}")))
-        .collect::<HashMap<_>>();
+        .map(|&v| (format!("{v:?}"), v))
+        .collect::<HashMap<_, _>>();
 
     let mut link_map = HashMap::new();
 
@@ -2090,7 +2297,8 @@ fn componentize(
         match payload? {
             Payload::TypeSection(reader) => {
                 let mut types = TypeSection::new();
-                for wasmparser::Type::Func(ty) in types {
+                for ty in reader {
+                    let wasmparser::Type::Func(ty) = ty?;
                     let map = |&ty| IntoValType(ty).into();
                     types.function(ty.params().iter().map(map), ty.params().iter().map(map));
                 }
@@ -2121,7 +2329,7 @@ fn componentize(
                     })
                 {
                     let import = import?;
-                    imports.import(import.module, import.field, IntoEntityType(import.ty));
+                    imports.import(import.module, import.name, IntoEntityType(import.ty));
                 }
                 for (index, function) in summary
                     .functions
@@ -2132,7 +2340,7 @@ fn componentize(
                     imports.import(
                         function.interface.unwrap_or(&resolve.worlds[world].name),
                         function.name,
-                        EntityType::Function(old_type_count + index),
+                        EntityType::Function((old_type_count + index).try_into().unwrap()),
                     );
                 }
                 result.section(&imports);
@@ -2146,7 +2354,11 @@ fn componentize(
                 // dispatch function:
                 functions.function(dispatch_type_index);
                 for index in 0..summary.functions.len() {
-                    functions.function(old_type_count + new_import_count + index);
+                    functions.function(
+                        (old_type_count + new_import_count + index)
+                            .try_into()
+                            .unwrap(),
+                    );
                 }
                 result.section(&functions);
             }
@@ -2154,15 +2366,15 @@ fn componentize(
             Payload::TableSection(reader) => {
                 let mut tables = TableSection::new();
                 for table in reader {
-                    result.table(IntoTableType(table?).into());
+                    tables.table(IntoTableType(table?).into());
                 }
-                result.table(TableType {
+                tables.table(TableType {
                     element_type: RefType {
                         nullable: true,
-                        heap_type: HeapType::TypedFunc(dispatch_type_index),
+                        heap_type: HeapType::TypedFunc(dispatch_type_index.try_into().unwrap()),
                     },
-                    minimum: dispatchable_function_count,
-                    maximum: Some(dispatchable_function_count),
+                    minimum: dispatchable_function_count.try_into().unwrap(),
+                    maximum: Some(dispatchable_function_count.try_into().unwrap()),
                 });
                 result.section(&tables);
             }
@@ -2170,6 +2382,7 @@ fn componentize(
             Payload::GlobalSection(reader) => {
                 let mut globals = GlobalSection::new();
                 for global in reader {
+                    let global = global?;
                     globals.global(
                         IntoGlobalType(global.ty).into(),
                         &IntoConstExpr(global.init_expr).into(),
@@ -2212,7 +2425,7 @@ fn componentize(
                     bail!("missing expected exports: {:#?}", link_name_map.keys());
                 }
 
-                for (index, function) in summary.functions.enumerate() {
+                for (index, function) in summary.functions.iter().enumerate() {
                     if let FunctionKind::Export = function.kind {
                         exports.export(
                             if let Some(interface) = function.interface {
@@ -2221,7 +2434,9 @@ fn componentize(
                                 function.name
                             },
                             ExportKind::Func,
-                            old_function_count + new_import_count + index,
+                            (old_function_count + new_import_count + index)
+                                .try_into()
+                                .unwrap(),
                         );
                     }
                 }
@@ -2234,7 +2449,7 @@ fn componentize(
                 for _ in 0..reader.read_var_u32()? {
                     let count = reader.read_var_u32()?;
                     let ty = reader.read()?;
-                    locals.push((count, ty));
+                    locals.push((count, IntoValType(ty).into()));
                 }
 
                 let visitor = Visitor {
@@ -2249,13 +2464,14 @@ fn componentize(
                 function.raw(visitor.buffer);
                 code_section.function(&function);
 
-                *code_entries_remaining = (*code_entries_remaining).checked_sub(1);
-                if *code_entries_remaining == 0 {
+                code_entries_remaining = code_entries_remaining.checked_sub(1).unwrap();
+                if code_entries_remaining == 0 {
                     let exports = summary
                         .functions
+                        .iter()
                         .filter_map(|f| {
                             if let FunctionKind::Export = f.kind {
-                                Some((function.interface, function.name))
+                                Some((f.interface, f.name))
                             } else {
                                 None
                             }
@@ -2276,7 +2492,9 @@ fn componentize(
 
                         match function.kind {
                             FunctionKind::Import => {
-                                gen.compile_import(old_import_count - 1 + import_index);
+                                gen.compile_import(
+                                    (old_import_count - 1 + import_index).try_into().unwrap(),
+                                );
                                 import_index += 1;
                             }
                             FunctionKind::Export => gen.compile_export(
@@ -2289,8 +2507,8 @@ fn componentize(
                                 dispatch_index,
                                 dispatch_index + 1,
                             ),
-                            FunctionKind::ExportLift => function.compile_export_lift(),
-                            FunctionKind::ExportLower => function.compile_export_lower(),
+                            FunctionKind::ExportLift => gen.compile_export_lift(),
+                            FunctionKind::ExportLower => gen.compile_export_lower(),
                             FunctionKind::ExportPostReturn => gen.compile_export_post_return(),
                         };
 
@@ -2307,19 +2525,22 @@ fn componentize(
 
                     let dispatch = Function::new([]);
 
-                    dispatch.instruction(&Ins::GlobalGet(table_count));
+                    dispatch.instruction(&Ins::GlobalGet(old_table_count.try_into().unwrap()));
                     dispatch.instruction(&Ins::If(BlockType::Empty));
                     dispatch.instruction(&Ins::I32Const(0));
-                    dispatch.instruction(&Ins::GlobalSet(table_count));
+                    dispatch.instruction(&Ins::GlobalSet(old_table_count.try_into().unwrap()));
 
                     let table_index = 0;
-                    for (index, function) in summary.functions.iter().enumarate() {
+                    for (index, function) in summary.functions.iter().enumerate() {
                         if function.is_dispatchable() {
                             dispatch.instruction(&Ins::RefFunc(
-                                old_function_count + new_import_count + index,
+                                (old_function_count + new_import_count + index)
+                                    .try_into()
+                                    .unwrap(),
                             ));
                             dispatch.instruction(&Ins::I32Const(table_index));
-                            dispatch.instruction(&Ins::TableSet(old_table_count));
+                            dispatch
+                                .instruction(&Ins::TableSet(old_table_count.try_into().unwrap()));
                             table_index += 1;
                         }
                     }
@@ -2331,8 +2552,10 @@ fn componentize(
                         dispatch.instruction(&Ins::LocalGet(local));
                     }
                     dispatch.instruction(&Ins::CallIndirect {
-                        ty: old_type_count + new_import_count + summary.functions.len(),
-                        table: old_table_count,
+                        ty: (old_type_count + new_import_count + summary.functions.len())
+                            .try_into()
+                            .unwrap(),
+                        table: old_table_count.try_into().unwrap(),
                     });
 
                     code_section.function(&dispatch);
@@ -2351,13 +2574,13 @@ fn componentize(
                         Name::Function(map) => {
                             for naming in map {
                                 let naming = naming?;
-                                function_names.push((remap(naming.index), naming.name));
+                                function_names.push((remap(naming.index), naming.name.to_owned()));
                             }
                         }
                         Name::Global(map) => {
                             for naming in map {
                                 let naming = naming?;
-                                global_names.push((naming.index, naming.name));
+                                global_names.push((naming.index, naming.name.to_owned()));
                             }
                         }
                         // TODO: do we want to copy over other names as well?
@@ -2366,8 +2589,10 @@ fn componentize(
                 }
 
                 function_names.push((
-                    old_function_count + new_import_count - 1,
-                    "componentize-py#dispatch",
+                    (old_function_count + new_import_count - 1)
+                        .try_into()
+                        .unwrap(),
+                    "componentize-py#dispatch".to_owned(),
                 ));
 
                 for (index, function) in summary
@@ -2377,14 +2602,16 @@ fn componentize(
                     .enumerate()
                 {
                     function_names.push((
-                        old_import_count - 1 + index,
+                        (old_import_count - 1 + index).try_into().unwrap(),
                         format!("{}-import", function.internal_name()),
                     ));
                 }
 
                 for (index, function) in summary.functions.iter().enumerate() {
                     function_names.push((
-                        old_function_count + new_import_count + index,
+                        (old_function_count + new_import_count + index)
+                            .try_into()
+                            .unwrap(),
                         function.internal_name(),
                     ));
                 }
@@ -2397,7 +2624,7 @@ fn componentize(
                         index.encode(&mut subsection);
                         name.encode(&mut subsection);
                     }
-                    section.push(code);
+                    data.push(code);
                     subsection.encode(&mut data);
                 }
 
@@ -2426,7 +2653,7 @@ fn componentize(
     // Encode with WASI Preview 1 adapter
     Ok(ComponentEncoder::default()
         .validate(true)
-        .module(&result.encode())?
+        .module(&result.finish())?
         .adapter(
             "wasi_snapshot_preview1",
             &zstd::decode_all(Cursor::new(include_bytes!(concat!(

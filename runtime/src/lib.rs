@@ -54,6 +54,8 @@ fn do_init() -> Result<()> {
                 .deref(),
         )?;
 
+        // TODO: do name tweaking in componentize-py instead of here so we don't have to pull in the heck
+        // dependency
         EXPORTS
             .set(
                 symbols
