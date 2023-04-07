@@ -87,8 +87,6 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
 
     let runtime_path = out_dir.join("wasm32-wasi/release/componentize_py_runtime.wasm");
 
-    println!("cargo:rerun-if-changed={runtime_path:?}");
-
     if runtime_path.exists() {
         let copied_runtime_path = out_dir.join("runtime.wasm.zst");
 
@@ -100,8 +98,6 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
     }
 
     let core_library_path = repo_dir.join("cpython/builddir/wasi/install/lib/python3.11");
-
-    println!("cargo:rerun-if-changed={core_library_path:?}");
 
     if core_library_path.exists() {
         let copied_core_library_path = out_dir.join("python-lib.tar.zst");
