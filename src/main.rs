@@ -5,8 +5,8 @@ use {
     clap::Parser as _,
     componentize_py_shared::{self as symbols, Direction, Symbols},
     convert::{
-        IntoBlockType, IntoEntityType, IntoExportKind, IntoGlobalType, IntoHeapType, IntoMemArg,
-        IntoRefType, IntoTableType, IntoValType,
+        IntoBlockType, IntoEntityType, IntoExportKind, IntoHeapType, IntoMemArg, IntoRefType,
+        IntoTableType, IntoValType,
     },
     heck::{ToSnakeCase, ToUpperCamelCase},
     indexmap::{IndexMap, IndexSet},
@@ -25,9 +25,9 @@ use {
     tar::Archive,
     wasm_encoder::{
         BlockType, CodeSection, ConstExpr, CustomSection, ElementSection, Elements, Encode,
-        EntityType, ExportKind, ExportSection, Function, FunctionSection, GlobalSection,
-        GlobalType, HeapType, ImportSection, Instruction as Ins, MemArg, Module, RawSection,
-        RefType, TableSection, TableType, TypeSection, ValType,
+        EntityType, ExportKind, ExportSection, Function, FunctionSection, HeapType, ImportSection,
+        Instruction as Ins, MemArg, Module, RawSection, RefType, TableSection, TableType,
+        TypeSection, ValType,
     },
     wasmparser::{
         BinaryReader, ExternalKind, Name, NameSectionReader, Parser, Payload, TypeRef,
@@ -57,6 +57,9 @@ const WORD_ALIGN: usize = 2; // as a power of two
 
 const MAX_FLAT_PARAMS: usize = 16;
 const MAX_FLAT_RESULTS: usize = 1;
+
+const DISPATCHABLE_CORE_PARAM_COUNT: usize = 3;
+const DISPATCH_CORE_PARAM_COUNT: usize = DISPATCHABLE_CORE_PARAM_COUNT + 1;
 
 /// A utility to convert Python apps into Wasm components
 #[derive(clap::Parser, Debug)]
@@ -196,7 +199,6 @@ fn main() -> Result<()> {
 
         let mut cmd = Command::new(env::args().next().unwrap());
         cmd.env_clear()
-            .env("RUST_BACKTRACE", "1")
             .env("COMPONENTIZE_PY_WIZEN", "1")
             .arg(&options.app_name)
             .arg(
@@ -218,13 +220,13 @@ fn main() -> Result<()> {
 
         let status = cmd.status()?;
 
+        stdout.rewind()?;
+        io::copy(&mut stdout, &mut io::stdout().lock())?;
+
+        stderr.rewind()?;
+        io::copy(&mut stderr, &mut io::stderr().lock())?;
+
         if !status.success() {
-            stdout.rewind()?;
-            io::copy(&mut stdout, &mut io::stdout().lock())?;
-
-            stderr.rewind()?;
-            io::copy(&mut stderr, &mut io::stderr().lock())?;
-
             bail!("Couldn't create wasm from input");
         }
 
@@ -453,6 +455,7 @@ struct FunctionBindgen<'a> {
     local_stack: Vec<bool>,
     top_block: u32,
     instructions: Vec<Ins<'static>>,
+    param_count: usize,
 }
 
 impl<'a> FunctionBindgen<'a> {
@@ -463,6 +466,7 @@ impl<'a> FunctionBindgen<'a> {
         types: &'a IndexSet<TypeId>,
         params: &'a [(String, Type)],
         results: &'a Results,
+        param_count: usize,
     ) -> Self {
         Self {
             resolve,
@@ -471,6 +475,7 @@ impl<'a> FunctionBindgen<'a> {
             types,
             params,
             results,
+            param_count,
             params_abi: record_abi(resolve, params.types()),
             results_abi: record_abi(resolve, results.types()),
             local_types: Vec::new(),
@@ -786,7 +791,7 @@ impl<'a> FunctionBindgen<'a> {
             self.local_types.push(ty);
         }
 
-        (self.params_abi.flattened.len() + self.local_stack.len() - 1)
+        (self.param_count + self.local_stack.len() - 1)
             .try_into()
             .unwrap()
     }
@@ -794,7 +799,7 @@ impl<'a> FunctionBindgen<'a> {
     fn pop_local(&mut self, index: u32, ty: ValType) {
         assert!(
             index
-                == (self.params_abi.flattened.len() + self.local_stack.len() - 1)
+                == (self.param_count + self.local_stack.len() - 1)
                     .try_into()
                     .unwrap()
         );
@@ -952,33 +957,33 @@ impl<'a> FunctionBindgen<'a> {
     fn store(&mut self, ty: Type, context: u32, value: u32, destination: u32) {
         match ty {
             Type::Bool | Type::U8 | Type::S8 => {
-                self.lower(ty, context, value);
                 self.push(Ins::LocalGet(destination));
+                self.lower(ty, context, value);
                 self.push(Ins::I32Store8(mem_arg(0, 0)));
             }
             Type::U16 | Type::S16 => {
-                self.lower(ty, context, value);
                 self.push(Ins::LocalGet(destination));
+                self.lower(ty, context, value);
                 self.push(Ins::I32Store16(mem_arg(0, 1)));
             }
             Type::U32 | Type::S32 | Type::Char => {
-                self.lower(ty, context, value);
                 self.push(Ins::LocalGet(destination));
+                self.lower(ty, context, value);
                 self.push(Ins::I32Store(mem_arg(0, 2)));
             }
             Type::U64 | Type::S64 => {
-                self.lower(ty, context, value);
                 self.push(Ins::LocalGet(destination));
+                self.lower(ty, context, value);
                 self.push(Ins::I64Store(mem_arg(0, 3)));
             }
             Type::Float32 => {
-                self.lower(ty, context, value);
                 self.push(Ins::LocalGet(destination));
+                self.lower(ty, context, value);
                 self.push(Ins::F32Store(mem_arg(0, 2)));
             }
             Type::Float64 => {
-                self.lower(ty, context, value);
                 self.push(Ins::LocalGet(destination));
+                self.lower(ty, context, value);
                 self.push(Ins::F64Store(mem_arg(0, 3)));
             }
             Type::String => {
@@ -1019,14 +1024,20 @@ impl<'a> FunctionBindgen<'a> {
                     }
                 }
                 TypeDefKind::List(_) => {
-                    self.lower(ty, context, value);
+                    let length = self.push_local(ValType::I32);
+
                     self.push(Ins::LocalGet(destination));
+                    self.lower(ty, context, value);
+                    self.push(Ins::LocalSet(length));
+                    self.push(Ins::I32Store(mem_arg(0, WORD_ALIGN.try_into().unwrap())));
+                    self.push(Ins::LocalGet(destination));
+                    self.push(Ins::LocalGet(length));
                     self.push(Ins::I32Store(mem_arg(
                         WORD_SIZE.try_into().unwrap(),
                         WORD_ALIGN.try_into().unwrap(),
                     )));
-                    self.push(Ins::LocalGet(destination));
-                    self.push(Ins::I32Store(mem_arg(0, WORD_ALIGN.try_into().unwrap())));
+
+                    self.pop_local(length, ValType::I32);
                 }
                 _ => todo!(),
             },
@@ -1036,41 +1047,41 @@ impl<'a> FunctionBindgen<'a> {
     fn store_copy(&mut self, ty: Type, source: &[u32], destination: u32) {
         match ty {
             Type::Bool | Type::U8 | Type::S8 => {
-                self.push(Ins::LocalGet(source[0]));
                 self.push(Ins::LocalGet(destination));
+                self.push(Ins::LocalGet(source[0]));
                 self.push(Ins::I32Store8(mem_arg(0, 0)));
             }
             Type::U16 | Type::S16 => {
-                self.push(Ins::LocalGet(source[0]));
                 self.push(Ins::LocalGet(destination));
+                self.push(Ins::LocalGet(source[0]));
                 self.push(Ins::I32Store16(mem_arg(0, 1)));
             }
             Type::U32 | Type::S32 | Type::Char => {
-                self.push(Ins::LocalGet(source[0]));
                 self.push(Ins::LocalGet(destination));
+                self.push(Ins::LocalGet(source[0]));
                 self.push(Ins::I32Store(mem_arg(0, 2)));
             }
             Type::U64 | Type::S64 => {
-                self.push(Ins::LocalGet(source[0]));
                 self.push(Ins::LocalGet(destination));
+                self.push(Ins::LocalGet(source[0]));
                 self.push(Ins::I64Store(mem_arg(0, 3)));
             }
             Type::Float32 => {
-                self.push(Ins::LocalGet(source[0]));
                 self.push(Ins::LocalGet(destination));
+                self.push(Ins::LocalGet(source[0]));
                 self.push(Ins::F32Store(mem_arg(0, 2)));
             }
             Type::Float64 => {
-                self.push(Ins::LocalGet(source[0]));
                 self.push(Ins::LocalGet(destination));
+                self.push(Ins::LocalGet(source[0]));
                 self.push(Ins::F64Store(mem_arg(0, 3)));
             }
             Type::String => {
+                self.push(Ins::LocalGet(destination));
                 self.push(Ins::LocalGet(source[0]));
-                self.push(Ins::LocalGet(destination));
                 self.push(Ins::I32Store(mem_arg(0, WORD_ALIGN.try_into().unwrap())));
-                self.push(Ins::LocalGet(source[1]));
                 self.push(Ins::LocalGet(destination));
+                self.push(Ins::LocalGet(source[1]));
                 self.push(Ins::I32Store(mem_arg(
                     WORD_SIZE.try_into().unwrap(),
                     WORD_ALIGN.try_into().unwrap(),
@@ -1085,11 +1096,11 @@ impl<'a> FunctionBindgen<'a> {
                     );
                 }
                 TypeDefKind::List(_) => {
+                    self.push(Ins::LocalGet(destination));
                     self.push(Ins::LocalGet(source[0]));
-                    self.push(Ins::LocalGet(destination));
                     self.push(Ins::I32Store(mem_arg(0, WORD_ALIGN.try_into().unwrap())));
-                    self.push(Ins::LocalGet(source[1]));
                     self.push(Ins::LocalGet(destination));
+                    self.push(Ins::LocalGet(source[1]));
                     self.push(Ins::I32Store(mem_arg(
                         WORD_SIZE.try_into().unwrap(),
                         WORD_ALIGN.try_into().unwrap(),
@@ -1265,9 +1276,8 @@ impl<'a> FunctionBindgen<'a> {
         for ty in types {
             let flat_count = abi(self.resolve, ty).flattened.len();
 
-            self.lift(ty, context, &source[lift_index..][..flat_count]);
-
             self.push(Ins::LocalGet(destination));
+            self.lift(ty, context, &source[lift_index..][..flat_count]);
             self.push(Ins::I32Store(mem_arg(
                 store_offset,
                 WORD_ALIGN.try_into().unwrap(),
@@ -1424,10 +1434,8 @@ impl<'a> FunctionBindgen<'a> {
             self.push(Ins::I32Const(load_offset.try_into().unwrap()));
             self.push(Ins::I32Add);
             self.push(Ins::LocalSet(field_source));
-
-            self.load(ty, context, field_source);
-
             self.push(Ins::LocalGet(destination));
+            self.load(ty, context, field_source);
             self.push(Ins::I32Store(mem_arg(
                 store_offset,
                 WORD_ALIGN.try_into().unwrap(),
@@ -1782,9 +1790,10 @@ impl<'a> MyFunction<'a> {
     fn core_type(&self, resolve: &Resolve) -> (Vec<ValType>, Vec<ValType>) {
         match self.kind {
             FunctionKind::Export => self.canonical_core_type(resolve),
-            FunctionKind::Import | FunctionKind::ExportLift | FunctionKind::ExportLower => {
-                (vec![ValType::I32; 4], Vec::new())
-            }
+            FunctionKind::Import | FunctionKind::ExportLift | FunctionKind::ExportLower => (
+                vec![ValType::I32; DISPATCHABLE_CORE_PARAM_COUNT],
+                Vec::new(),
+            ),
             FunctionKind::ExportPostReturn => (
                 record_abi_limit(resolve, self.results.types(), MAX_FLAT_RESULTS).flattened,
                 Vec::new(),
@@ -2248,9 +2257,12 @@ impl<F: (Fn(u32) -> u32) + Copy> TryFrom<(wasmparser::ElementItems<'_>, F)> for 
 
     fn try_from((val, remap): (wasmparser::ElementItems, F)) -> Result<MyElements> {
         Ok(match val {
-            wasmparser::ElementItems::Functions(reader) => {
-                MyElements::Functions(reader.into_iter().collect::<Result<_, _>>()?)
-            }
+            wasmparser::ElementItems::Functions(reader) => MyElements::Functions(
+                reader
+                    .into_iter()
+                    .map(|f| f.map(remap))
+                    .collect::<Result<_, _>>()?,
+            ),
             wasmparser::ElementItems::Expressions(reader) => MyElements::Expressions(
                 reader
                     .into_iter()
@@ -2274,18 +2286,17 @@ fn componentize(
     world: WorldId,
     summary: &Summary,
 ) -> Result<Vec<u8>> {
-    fs::write("/tmp/before.wasm", module)?;
-
     // First pass: find stack pointer and dispatch function, and count various items
-    let dispatch_type =
-        wasmparser::Type::Func(wasmparser::FuncType::new([wasmparser::ValType::I32; 4], []));
+    let dispatch_type = wasmparser::Type::Func(wasmparser::FuncType::new(
+        [wasmparser::ValType::I32; DISPATCH_CORE_PARAM_COUNT],
+        [],
+    ));
     let mut types = None;
     let mut import_count = None;
     let mut dispatch_import_index = None;
     let mut dispatch_type_index = None;
     let mut function_count = None;
     let mut table_count = None;
-    let mut global_count = None;
     let mut stack_pointer_index = None;
     for payload in Parser::new(0).parse_all(module) {
         match payload? {
@@ -2330,9 +2341,6 @@ fn componentize(
             Payload::TableSection(reader) => {
                 table_count = Some(reader.into_iter().count());
             }
-            Payload::GlobalSection(reader) => {
-                global_count = Some(reader.into_iter().count());
-            }
             Payload::CustomSection(section) if section.name() == "name" => {
                 let subsections = NameSectionReader::new(section.data(), section.data_offset());
                 for subsection in subsections {
@@ -2354,7 +2362,6 @@ fn componentize(
 
     let old_type_count = types.unwrap().len();
     let old_table_count = table_count.unwrap();
-    let old_global_count = global_count.unwrap();
     let old_import_count = import_count.unwrap();
     let old_function_count = function_count.unwrap();
     let new_import_count = summary
@@ -2493,25 +2500,6 @@ fn componentize(
                 result.section(&tables);
             }
 
-            Payload::GlobalSection(reader) => {
-                let mut globals = GlobalSection::new();
-                for global in reader {
-                    let global = global?;
-                    globals.global(
-                        IntoGlobalType(global.ty).into(),
-                        &const_expr(global.init_expr.get_binary_reader(), remap)?,
-                    );
-                }
-                globals.global(
-                    GlobalType {
-                        val_type: ValType::I32,
-                        mutable: true,
-                    },
-                    &ConstExpr::i32_const(0),
-                );
-                result.section(&globals);
-            }
-
             Payload::ExportSection(reader) => {
                 let mut exports = ExportSection::new();
                 for export in reader {
@@ -2585,7 +2573,9 @@ fn componentize(
                         ),
                     };
                 }
-                elements.declared(
+                elements.active(
+                    Some(old_table_count.try_into().unwrap()),
+                    &ConstExpr::i32_const(0),
                     RefType {
                         nullable: true,
                         heap_type: HeapType::Func,
@@ -2627,28 +2617,6 @@ fn componentize(
                 if code_entries_remaining == 0 {
                     let mut dispatch = Function::new([]);
 
-                    dispatch.instruction(&Ins::GlobalGet(old_global_count.try_into().unwrap()));
-                    dispatch.instruction(&Ins::If(BlockType::Empty));
-                    dispatch.instruction(&Ins::I32Const(0));
-                    dispatch.instruction(&Ins::GlobalSet(old_global_count.try_into().unwrap()));
-
-                    let mut table_index = 0;
-                    for (index, function) in summary.functions.iter().enumerate() {
-                        if function.is_dispatchable() {
-                            dispatch.instruction(&Ins::I32Const(table_index));
-                            dispatch.instruction(&Ins::RefFunc(
-                                (old_function_count + new_import_count + index)
-                                    .try_into()
-                                    .unwrap(),
-                            ));
-                            dispatch
-                                .instruction(&Ins::TableSet(old_table_count.try_into().unwrap()));
-                            table_index += 1;
-                        }
-                    }
-
-                    dispatch.instruction(&Ins::End);
-
                     let dispatch_param_count = 4;
                     for local in 0..dispatch_param_count {
                         dispatch.instruction(&Ins::LocalGet(local));
@@ -2685,6 +2653,7 @@ fn componentize(
                             &summary.types,
                             function.params,
                             function.results,
+                            function.core_type(resolve).0.len(),
                         );
 
                         match function.kind {
@@ -2813,7 +2782,7 @@ fn componentize(
 
     let result = result.finish();
 
-    fs::write("/tmp/foo.wasm", &result)?;
+    fs::write("/tmp/module.wasm", &result)?;
 
     // Encode with WASI Preview 1 adapter
     ComponentEncoder::default()

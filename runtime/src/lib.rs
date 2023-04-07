@@ -7,7 +7,7 @@ use {
     once_cell::sync::OnceCell,
     pyo3::{
         exceptions::PyAssertionError,
-        types::{PyFloat, PyInt, PyList, PyMapping, PyModule, PyString, PyTuple},
+        types::{PyList, PyMapping, PyModule, PyString, PyTuple},
         Py, PyAny, PyErr, PyObject, PyResult, Python, ToPyObject,
     },
     std::{
@@ -210,9 +210,12 @@ pub unsafe extern "C" fn componentize_py_dispatch(
             .call1(py, PyTuple::new(py, params_lifted))
             .unwrap();
 
+        let result = result.into_ref(py);
+        let result_array = [result];
+
         dispatch(
             &py as *const _ as _,
-            result.as_ref(py) as *const _ as _,
+            result_array.as_ptr() as *const _ as _,
             results,
             lower,
         );
@@ -300,22 +303,22 @@ pub unsafe extern "C" fn componentize_py_allocate(
 }
 
 #[export_name = "componentize-py#LiftI32"]
-pub extern "C" fn componentize_py_lift_i32<'a>(py: &'a Python<'a>, value: i32) -> &'a PyInt {
+pub extern "C" fn componentize_py_lift_i32<'a>(py: &'a Python<'a>, value: i32) -> &'a PyAny {
     value.to_object(*py).into_ref(*py).downcast().unwrap()
 }
 
 #[export_name = "componentize-py#LiftI64"]
-pub extern "C" fn componentize_py_lift_i64<'a>(py: &'a Python<'a>, value: i64) -> &'a PyInt {
+pub extern "C" fn componentize_py_lift_i64<'a>(py: &'a Python<'a>, value: i64) -> &'a PyAny {
     value.to_object(*py).into_ref(*py).downcast().unwrap()
 }
 
 #[export_name = "componentize-py#LiftF32"]
-pub extern "C" fn componentize_py_lift_f32<'a>(py: &'a Python<'a>, value: f32) -> &'a PyFloat {
+pub extern "C" fn componentize_py_lift_f32<'a>(py: &'a Python<'a>, value: f32) -> &'a PyAny {
     value.to_object(*py).into_ref(*py).downcast().unwrap()
 }
 
 #[export_name = "componentize-py#LiftF64"]
-pub extern "C" fn componentize_py_lift_f64<'a>(py: &'a Python<'a>, value: f64) -> &'a PyFloat {
+pub extern "C" fn componentize_py_lift_f64<'a>(py: &'a Python<'a>, value: f64) -> &'a PyAny {
     value.to_object(*py).into_ref(*py).downcast().unwrap()
 }
 
