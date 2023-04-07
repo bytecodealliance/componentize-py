@@ -1,5 +1,8 @@
 use {
-    crate::abi::{self, Abi, Types as _, MAX_FLAT_PARAMS, MAX_FLAT_RESULTS},
+    crate::{
+        abi::{self, Abi, MAX_FLAT_PARAMS, MAX_FLAT_RESULTS},
+        util::Types as _,
+    },
     indexmap::IndexSet,
     std::collections::HashMap,
     wasm_encoder::{BlockType, Instruction as Ins, MemArg, ValType},

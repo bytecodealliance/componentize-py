@@ -34,7 +34,8 @@ pub(crate) fn componentize(
     world: WorldId,
     summary: &Summary,
 ) -> Result<Vec<u8>> {
-    // First pass: find stack pointer and dispatch function, and count various items
+    // First pass: find stack pointer and `dispatch` function, and count various items
+
     let dispatch_type = wasmparser::Type::Func(wasmparser::FuncType::new(
         [wasmparser::ValType::I32; DISPATCH_CORE_PARAM_COUNT],
         [],
@@ -107,6 +108,9 @@ pub(crate) fn componentize(
             _ => {}
         }
     }
+
+    // Second pass: generate a new module, removing the `componentize-py` imports and exports and adding the
+    // imports, exports, generated functions, and dispatch table needed to implement the desired component type.
 
     let old_type_count = types.unwrap().len();
     let old_table_count = table_count.unwrap();

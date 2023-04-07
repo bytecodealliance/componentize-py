@@ -1,7 +1,8 @@
 use {
     crate::{
-        abi::{self, Types as _, MAX_FLAT_PARAMS, MAX_FLAT_RESULTS},
+        abi::{self, MAX_FLAT_PARAMS, MAX_FLAT_RESULTS},
         bindgen::DISPATCHABLE_CORE_PARAM_COUNT,
+        util::Types as _,
     },
     anyhow::{bail, Result},
     componentize_py_shared::{self as symbols, Direction, Symbols},

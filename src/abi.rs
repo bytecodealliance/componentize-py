@@ -1,35 +1,10 @@
 use {
-    std::{iter, ops::Deref},
     wasm_encoder::ValType,
-    wit_parser::{Resolve, Results, Type, TypeDefKind},
+    wit_parser::{Resolve, Type, TypeDefKind},
 };
 
 pub(crate) const MAX_FLAT_PARAMS: usize = 16;
 pub(crate) const MAX_FLAT_RESULTS: usize = 1;
-
-pub(crate) trait Types {
-    fn types(&self) -> Box<dyn Iterator<Item = Type>>;
-}
-
-impl Types for &[(String, Type)] {
-    fn types(&self) -> Box<dyn Iterator<Item = Type>> {
-        Box::new(
-            self.iter()
-                .map(|(_, ty)| *ty)
-                .collect::<Vec<_>>()
-                .into_iter(),
-        )
-    }
-}
-
-impl Types for Results {
-    fn types(&self) -> Box<dyn Iterator<Item = Type>> {
-        match self {
-            Self::Named(params) => params.deref().types(),
-            Self::Anon(ty) => Box::new(iter::once(*ty)),
-        }
-    }
-}
 
 pub(crate) fn align(a: usize, b: usize) -> usize {
     assert!(b.is_power_of_two());

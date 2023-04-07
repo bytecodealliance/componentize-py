@@ -23,6 +23,7 @@ mod bindgen;
 mod componentize;
 mod convert;
 mod summary;
+mod util;
 
 #[cfg(unix)]
 const NATIVE_PATH_DELIMITER: char = ':';
