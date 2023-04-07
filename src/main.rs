@@ -1,12 +1,12 @@
 #![deny(warnings)]
 
 use {
-    anyhow::{bail, Context, Result},
+    anyhow::{bail, Context, Error, Result},
     clap::Parser as _,
     componentize_py_shared::{self as symbols, Direction, Symbols},
     convert::{
         IntoBlockType, IntoEntityType, IntoExportKind, IntoGlobalType, IntoHeapType, IntoMemArg,
-        IntoTableType, IntoValType,
+        IntoRefType, IntoTableType, IntoValType,
     },
     heck::{ToSnakeCase, ToUpperCamelCase},
     indexmap::{IndexMap, IndexSet},
@@ -24,10 +24,10 @@ use {
     },
     tar::Archive,
     wasm_encoder::{
-        BlockType, CodeSection, ConstExpr, CustomSection, Encode, EntityType, ExportKind,
-        ExportSection, Function, FunctionSection, GlobalSection, GlobalType, HeapType,
-        ImportSection, Instruction as Ins, MemArg, Module, RawSection, RefType, TableSection,
-        TableType, TypeSection, ValType,
+        BlockType, CodeSection, ConstExpr, CustomSection, ElementSection, Elements, Encode,
+        EntityType, ExportKind, ExportSection, Function, FunctionSection, GlobalSection,
+        GlobalType, HeapType, ImportSection, Instruction as Ins, MemArg, Module, RawSection,
+        RefType, TableSection, TableType, TypeSection, ValType,
     },
     wasmparser::{
         BinaryReader, ExternalKind, Name, NameSectionReader, Parser, Payload, TypeRef,
@@ -2223,6 +2223,44 @@ fn visit(mut reader: BinaryReader<'_>, remap: impl Fn(u32) -> u32) -> Result<Vec
     Ok(visitor.buffer)
 }
 
+fn const_expr(reader: BinaryReader<'_>, remap: impl Fn(u32) -> u32) -> Result<ConstExpr> {
+    let mut bytes = visit(reader, remap)?;
+    assert_eq!(bytes.pop(), Some(0xb));
+    Ok(ConstExpr::raw(bytes))
+}
+
+enum MyElements {
+    Functions(Vec<u32>),
+    Expressions(Vec<ConstExpr>),
+}
+
+impl MyElements {
+    fn as_elements(&self) -> Elements {
+        match self {
+            Self::Functions(v) => Elements::Functions(v),
+            Self::Expressions(v) => Elements::Expressions(v),
+        }
+    }
+}
+
+impl<F: (Fn(u32) -> u32) + Copy> TryFrom<(wasmparser::ElementItems<'_>, F)> for MyElements {
+    type Error = Error;
+
+    fn try_from((val, remap): (wasmparser::ElementItems, F)) -> Result<MyElements> {
+        Ok(match val {
+            wasmparser::ElementItems::Functions(reader) => {
+                MyElements::Functions(reader.into_iter().collect::<Result<_, _>>()?)
+            }
+            wasmparser::ElementItems::Expressions(reader) => MyElements::Expressions(
+                reader
+                    .into_iter()
+                    .map(|e| const_expr(e?.get_binary_reader(), remap))
+                    .collect::<Result<_, _>>()?,
+            ),
+        })
+    }
+}
+
 fn types_eq(
     wasmparser::Type::Func(a): &wasmparser::Type,
     wasmparser::Type::Func(b): &wasmparser::Type,
@@ -2236,7 +2274,7 @@ fn componentize(
     world: WorldId,
     summary: &Summary,
 ) -> Result<Vec<u8>> {
-    fs::write("/tmp/before.wasm", &module)?;
+    fs::write("/tmp/before.wasm", module)?;
 
     // First pass: find stack pointer and dispatch function, and count various items
     let dispatch_type =
@@ -2439,7 +2477,7 @@ fn componentize(
                         wasmparser::TableInit::Expr(expression) => {
                             tables.table_with_init(
                                 IntoTableType(table.ty).into(),
-                                &ConstExpr::raw(visit(expression.get_binary_reader(), remap)?),
+                                &const_expr(expression.get_binary_reader(), remap)?,
                             );
                         }
                     }
@@ -2459,9 +2497,10 @@ fn componentize(
                 let mut globals = GlobalSection::new();
                 for global in reader {
                     let global = global?;
-                    let mut bytes = visit(global.init_expr.get_binary_reader(), remap)?;
-                    assert_eq!(bytes.pop(), Some(0xb));
-                    globals.global(IntoGlobalType(global.ty).into(), &ConstExpr::raw(bytes));
+                    globals.global(
+                        IntoGlobalType(global.ty).into(),
+                        &const_expr(global.init_expr.get_binary_reader(), remap)?,
+                    );
                 }
                 globals.global(
                     GlobalType {
@@ -2523,27 +2562,28 @@ fn componentize(
             }
 
             Payload::ElementSection(reader) => {
-                let elements = ElementSection::new();
+                let mut elements = ElementSection::new();
                 for element in reader {
+                    let element = element?;
                     match element.kind {
                         wasmparser::ElementKind::Passive => elements.passive(
                             IntoRefType(element.ty).into(),
-                            IntoElements(element.items).into(),
+                            MyElements::try_from((element.items, remap))?.as_elements(),
                         ),
                         wasmparser::ElementKind::Active {
                             table_index,
                             offset_expr,
                         } => elements.active(
-                            table_index,
-                            into_const_expr(offset_expr, remap),
+                            Some(table_index),
+                            &const_expr(offset_expr.get_binary_reader(), remap)?,
                             IntoRefType(element.ty).into(),
-                            IntoElements(element.items).into(),
+                            MyElements::try_from((element.items, remap))?.as_elements(),
                         ),
                         wasmparser::ElementKind::Declared => elements.declared(
                             IntoRefType(element.ty).into(),
-                            IntoElements(element.items).into(),
+                            MyElements::try_from((element.items, remap))?.as_elements(),
                         ),
-                    }
+                    };
                 }
                 elements.declared(
                     RefType {
@@ -2595,12 +2635,12 @@ fn componentize(
                     let mut table_index = 0;
                     for (index, function) in summary.functions.iter().enumerate() {
                         if function.is_dispatchable() {
+                            dispatch.instruction(&Ins::I32Const(table_index));
                             dispatch.instruction(&Ins::RefFunc(
                                 (old_function_count + new_import_count + index)
                                     .try_into()
                                     .unwrap(),
                             ));
-                            dispatch.instruction(&Ins::I32Const(table_index));
                             dispatch
                                 .instruction(&Ins::TableSet(old_table_count.try_into().unwrap()));
                             table_index += 1;
