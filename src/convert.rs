@@ -1,12 +1,13 @@
 use {
+    anyhow::{Error, Result},
     wasm_encoder::{
-        BlockType, EntityType, ExportKind, GlobalType, HeapType, MemArg, MemoryType, RefType,
-        TableType, TagKind, TagType, ValType,
+        BlockType, ConstExpr, Elements, Encode as _, EntityType, ExportKind, GlobalType, HeapType,
+        MemArg, MemoryType, RefType, TableType, TagKind, TagType, ValType,
     },
-    wasmparser::{ExternalKind, TypeRef},
+    wasmparser::{BinaryReader, ExternalKind, TypeRef, VisitOperator},
 };
 
-pub struct IntoGlobalType(pub wasmparser::GlobalType);
+pub(crate) struct IntoGlobalType(pub(crate) wasmparser::GlobalType);
 
 impl From<IntoGlobalType> for GlobalType {
     fn from(val: IntoGlobalType) -> Self {
@@ -17,7 +18,7 @@ impl From<IntoGlobalType> for GlobalType {
     }
 }
 
-pub struct IntoBlockType(pub wasmparser::BlockType);
+pub(crate) struct IntoBlockType(pub(crate) wasmparser::BlockType);
 
 impl From<IntoBlockType> for BlockType {
     fn from(val: IntoBlockType) -> Self {
@@ -29,7 +30,7 @@ impl From<IntoBlockType> for BlockType {
     }
 }
 
-pub struct IntoMemArg(pub wasmparser::MemArg);
+pub(crate) struct IntoMemArg(pub(crate) wasmparser::MemArg);
 
 impl From<IntoMemArg> for MemArg {
     fn from(val: IntoMemArg) -> Self {
@@ -41,7 +42,7 @@ impl From<IntoMemArg> for MemArg {
     }
 }
 
-pub struct IntoTableType(pub wasmparser::TableType);
+pub(crate) struct IntoTableType(pub(crate) wasmparser::TableType);
 
 impl From<IntoTableType> for TableType {
     fn from(val: IntoTableType) -> Self {
@@ -53,7 +54,7 @@ impl From<IntoTableType> for TableType {
     }
 }
 
-pub struct IntoHeapType(pub wasmparser::HeapType);
+pub(crate) struct IntoHeapType(pub(crate) wasmparser::HeapType);
 
 impl From<IntoHeapType> for HeapType {
     fn from(val: IntoHeapType) -> Self {
@@ -65,7 +66,7 @@ impl From<IntoHeapType> for HeapType {
     }
 }
 
-pub struct IntoRefType(pub wasmparser::RefType);
+pub(crate) struct IntoRefType(pub(crate) wasmparser::RefType);
 
 impl From<IntoRefType> for RefType {
     fn from(val: IntoRefType) -> Self {
@@ -76,7 +77,7 @@ impl From<IntoRefType> for RefType {
     }
 }
 
-pub struct IntoValType(pub wasmparser::ValType);
+pub(crate) struct IntoValType(pub(crate) wasmparser::ValType);
 
 impl From<IntoValType> for ValType {
     fn from(val: IntoValType) -> Self {
@@ -91,7 +92,7 @@ impl From<IntoValType> for ValType {
     }
 }
 
-pub struct IntoTagKind(pub wasmparser::TagKind);
+pub(crate) struct IntoTagKind(pub(crate) wasmparser::TagKind);
 
 impl From<IntoTagKind> for TagKind {
     fn from(val: IntoTagKind) -> Self {
@@ -101,7 +102,7 @@ impl From<IntoTagKind> for TagKind {
     }
 }
 
-pub struct IntoEntityType(pub TypeRef);
+pub(crate) struct IntoEntityType(pub(crate) TypeRef);
 
 impl From<IntoEntityType> for EntityType {
     fn from(val: IntoEntityType) -> Self {
@@ -130,7 +131,7 @@ impl From<IntoEntityType> for EntityType {
     }
 }
 
-pub struct IntoExportKind(pub ExternalKind);
+pub(crate) struct IntoExportKind(pub(crate) ExternalKind);
 
 impl From<IntoExportKind> for ExportKind {
     fn from(val: IntoExportKind) -> Self {
@@ -141,5 +142,159 @@ impl From<IntoExportKind> for ExportKind {
             ExternalKind::Global => ExportKind::Global,
             ExternalKind::Tag => ExportKind::Tag,
         }
+    }
+}
+
+struct Visitor<F> {
+    remap: F,
+    buffer: Vec<u8>,
+}
+
+// Adapted from https://github.com/bytecodealliance/wasm-tools/blob/1e0052974277b3cce6c3703386e4e90291da2b24/crates/wit-component/src/gc.rs#L1118
+macro_rules! define_encode {
+    ($(@$p:ident $op:ident $({ $($arg:ident: $argty:ty),* })? => $visit:ident)*) => {
+        $(
+            #[allow(clippy::drop_copy)]
+            fn $visit(&mut self $(, $($arg: $argty),*)?)  {
+                #[allow(unused_imports)]
+                use wasm_encoder::Instruction::*;
+                $(
+                    $(
+                        let $arg = define_encode!(map self $arg $arg);
+                    )*
+                )?
+                let insn = define_encode!(mk $op $($($arg)*)?);
+                insn.encode(&mut self.buffer);
+            }
+        )*
+    };
+
+    // No-payload instructions are named the same in wasmparser as they are in
+    // wasm-encoder
+    (mk $op:ident) => ($op);
+
+    // Instructions which need "special care" to map from wasmparser to
+    // wasm-encoder
+    (mk BrTable $arg:ident) => ({
+        BrTable($arg.0, $arg.1)
+    });
+    (mk CallIndirect $ty:ident $table:ident $table_byte:ident) => ({
+        drop($table_byte);
+        CallIndirect { ty: $ty, table: $table }
+    });
+    (mk ReturnCallIndirect $ty:ident $table:ident) => (
+        ReturnCallIndirect { ty: $ty, table: $table }
+    );
+    (mk MemorySize $mem:ident $mem_byte:ident) => ({
+        drop($mem_byte);
+        MemorySize($mem)
+    });
+    (mk MemoryGrow $mem:ident $mem_byte:ident) => ({
+        drop($mem_byte);
+        MemoryGrow($mem)
+    });
+    (mk I32Const $v:ident) => (I32Const($v));
+    (mk I64Const $v:ident) => (I64Const($v));
+    (mk F32Const $v:ident) => (F32Const(f32::from_bits($v.bits())));
+    (mk F64Const $v:ident) => (F64Const(f64::from_bits($v.bits())));
+    (mk V128Const $v:ident) => (V128Const($v.i128()));
+
+    // Catch-all for the translation of one payload argument which is typically
+    // represented as a tuple-enum in wasm-encoder.
+    (mk $op:ident $arg:ident) => ($op($arg));
+
+    // Catch-all of everything else where the wasmparser fields are simply
+    // translated to wasm-encoder fields.
+    (mk $op:ident $($arg:ident)*) => ($op { $($arg),* });
+
+    // Individual cases of mapping one argument type to another
+    (map $self:ident $arg:ident memarg) => {IntoMemArg($arg).into()};
+    (map $self:ident $arg:ident blockty) => {IntoBlockType($arg).into()};
+    (map $self:ident $arg:ident hty) => {IntoHeapType($arg).into()};
+    (map $self:ident $arg:ident tag_index) => {$arg};
+    (map $self:ident $arg:ident relative_depth) => {$arg};
+    (map $self:ident $arg:ident function_index) => {($self.remap)($arg)};
+    (map $self:ident $arg:ident global_index) => {$arg};
+    (map $self:ident $arg:ident mem) => {$arg};
+    (map $self:ident $arg:ident src_mem) => {$arg};
+    (map $self:ident $arg:ident dst_mem) => {$arg};
+    (map $self:ident $arg:ident table) => {$arg};
+    (map $self:ident $arg:ident table_index) => {$arg};
+    (map $self:ident $arg:ident src_table) => {$arg};
+    (map $self:ident $arg:ident dst_table) => {$arg};
+    (map $self:ident $arg:ident type_index) => {$arg};
+    (map $self:ident $arg:ident ty) => {IntoValType($arg).into()};
+    (map $self:ident $arg:ident local_index) => {$arg};
+    (map $self:ident $arg:ident lane) => {$arg};
+    (map $self:ident $arg:ident lanes) => {$arg};
+    (map $self:ident $arg:ident elem_index) => {$arg};
+    (map $self:ident $arg:ident data_index) => {$arg};
+    (map $self:ident $arg:ident table_byte) => {$arg};
+    (map $self:ident $arg:ident mem_byte) => {$arg};
+    (map $self:ident $arg:ident value) => {$arg};
+    (map $self:ident $arg:ident targets) => ((
+        $arg.targets().map(|i| i.unwrap()).collect::<Vec<_>>().into(),
+        $arg.default(),
+    ));
+}
+
+impl<'a, F: Fn(u32) -> u32> VisitOperator<'a> for Visitor<F> {
+    type Output = ();
+
+    wasmparser::for_each_operator!(define_encode);
+}
+
+pub(crate) fn visit(mut reader: BinaryReader<'_>, remap: impl Fn(u32) -> u32) -> Result<Vec<u8>> {
+    let mut visitor = Visitor {
+        remap,
+        buffer: Vec::new(),
+    };
+    while !reader.eof() {
+        reader.visit_operator(&mut visitor)?;
+    }
+    Ok(visitor.buffer)
+}
+
+pub(crate) fn const_expr(
+    reader: BinaryReader<'_>,
+    remap: impl Fn(u32) -> u32,
+) -> Result<ConstExpr> {
+    let mut bytes = visit(reader, remap)?;
+    assert_eq!(bytes.pop(), Some(0xb));
+    Ok(ConstExpr::raw(bytes))
+}
+
+pub(crate) enum MyElements {
+    Functions(Vec<u32>),
+    Expressions(Vec<ConstExpr>),
+}
+
+impl MyElements {
+    pub(crate) fn as_elements(&self) -> Elements {
+        match self {
+            Self::Functions(v) => Elements::Functions(v),
+            Self::Expressions(v) => Elements::Expressions(v),
+        }
+    }
+}
+
+impl<F: (Fn(u32) -> u32) + Copy> TryFrom<(wasmparser::ElementItems<'_>, F)> for MyElements {
+    type Error = Error;
+
+    fn try_from((val, remap): (wasmparser::ElementItems, F)) -> Result<MyElements> {
+        Ok(match val {
+            wasmparser::ElementItems::Functions(reader) => MyElements::Functions(
+                reader
+                    .into_iter()
+                    .map(|f| f.map(remap))
+                    .collect::<Result<_, _>>()?,
+            ),
+            wasmparser::ElementItems::Expressions(reader) => MyElements::Expressions(
+                reader
+                    .into_iter()
+                    .map(|e| const_expr(e?.get_binary_reader(), remap))
+                    .collect::<Result<_, _>>()?,
+            ),
+        })
     }
 }
