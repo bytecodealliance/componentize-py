@@ -2,7 +2,9 @@
 mod tests {
     use {
         anyhow::{Error, Result},
+        async_trait::async_trait,
         std::{fs, process::Command, sync::Once},
+        wasi_preview2::WasiCtx,
         wasmtime::{
             component::{Component, Linker},
             Config, Engine, Store,
@@ -43,18 +45,18 @@ mod tests {
         Ok(fs::read(tempdir.path().join("app.wasm"))?)
     }
 
-    wasmtime::component::bindgen!({
-        path: "wit",
-        world: "simple-export",
-        async: true
-    });
-
     #[tokio::test]
     async fn simple_export() -> Result<()> {
+        wasmtime::component::bindgen!({
+            path: "wit",
+            world: "simple-export",
+            async: true
+        });
+
         let component = &make_component(
             include_str!("../wit/simple-export.wit"),
             r#"
-def exports_bar(v):
+def exports_foo(v):
     return v + 3
 "#,
         )?;
@@ -75,14 +77,78 @@ def exports_bar(v):
                 .build(),
         );
 
-        let (simple_export, _) = SimpleExport::instantiate_async(
+        let (instance, _) = SimpleExport::instantiate_async(
             &mut store,
             &Component::new(engine, component)?,
             &linker,
         )
         .await?;
 
-        assert_eq!(45, simple_export.exports.call_bar(&mut store, 42).await?);
+        assert_eq!(45, instance.exports.call_foo(&mut store, 42).await?);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn simple_import_and_export() -> Result<()> {
+        wasmtime::component::bindgen!({
+            path: "wit",
+            world: "simple-import-and-export",
+            async: true
+        });
+
+        struct Host;
+
+        #[async_trait]
+        impl imports::Host for Host {
+            async fn foo(&mut self, v: u32) -> Result<u32> {
+                Ok(v + 2)
+            }
+        }
+
+        struct Data {
+            host: Host,
+            wasi: WasiCtx,
+        }
+
+        let component = &make_component(
+            include_str!("../wit/simple-import-and-export.wit"),
+            r#"
+import imports
+
+def exports_foo(v):
+    return imports.foo(v) + 3
+"#,
+        )?;
+
+        let mut config = Config::new();
+        config.async_support(true);
+        config.wasm_component_model(true);
+
+        let engine = &Engine::new(&config)?;
+        let mut linker = Linker::<Data>::new(engine);
+        wasi_host::command::add_to_linker(&mut linker, |data| &mut data.wasi)?;
+        imports::add_to_linker(&mut linker, |data| &mut data.host)?;
+
+        let mut store = Store::new(
+            engine,
+            Data {
+                host: Host,
+                wasi: wasmtime_wasi_preview2::WasiCtxBuilder::new()
+                    .inherit_stdout()
+                    .inherit_stderr()
+                    .build(),
+            },
+        );
+
+        let (instance, _) = SimpleImportAndExport::instantiate_async(
+            &mut store,
+            &Component::new(engine, component)?,
+            &linker,
+        )
+        .await?;
+
+        assert_eq!(47, instance.exports.call_foo(&mut store, 42).await?);
 
         Ok(())
     }

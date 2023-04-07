@@ -58,6 +58,8 @@ fn mem_arg(offset: u64, align: u32) -> MemArg {
 }
 
 pub(crate) struct FunctionBindgen<'a> {
+    pub(crate) local_types: Vec<ValType>,
+    pub(crate) instructions: Vec<Ins<'static>>,
     resolve: &'a Resolve,
     stack_pointer: u32,
     link_map: &'a HashMap<Link, u32>,
@@ -66,10 +68,8 @@ pub(crate) struct FunctionBindgen<'a> {
     results: &'a Results,
     params_abi: Abi,
     results_abi: Abi,
-    pub(crate) local_types: Vec<ValType>,
     local_stack: Vec<bool>,
     top_block: u32,
-    pub(crate) instructions: Vec<Ins<'static>>,
     param_count: usize,
 }
 
@@ -114,11 +114,7 @@ impl<'a> FunctionBindgen<'a> {
                 .flattened
                 .clone()
                 .iter()
-                .map(|ty| {
-                    let local = self.push_local(*ty);
-                    self.push(Ins::LocalSet(local));
-                    local
-                })
+                .map(|ty| self.push_local(*ty))
                 .collect::<Vec<_>>();
 
             let mut lift_index = 0;

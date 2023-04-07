@@ -7,14 +7,7 @@ use {
     componentize_py_shared::{self as symbols, Direction, Symbols},
     heck::{ToSnakeCase, ToUpperCamelCase},
     indexmap::{IndexMap, IndexSet},
-    std::{
-        collections::HashMap,
-        fs::{self, File},
-        io::Write,
-        iter,
-        path::Path,
-        str,
-    },
+    std::{collections::HashMap, fs::File, io::Write, iter, path::Path, str},
     wasm_encoder::ValType,
     wit_parser::{
         InterfaceId, Resolve, Results, Type, TypeDefKind, TypeId, TypeOwner, WorldId, WorldItem,
@@ -285,9 +278,19 @@ impl<'a> Summary<'a> {
 
                     let result_count = function.results.types().count();
 
+                    let return_ = match result_count {
+                        0 => "return",
+                        1 => "return result[0]",
+                        _ => "return result",
+                    };
+
                     let code = format!(
-                        "def {snake}({params}):\n    \
-                         return componentize_py.call_import({index}, [{params}], {result_count})\n\n"
+                        r#"
+def {snake}({params}):
+    result = componentize_py.call_import({index}, [{params}], {result_count})
+    {return_}
+
+"#
                     );
 
                     if let Some(interface) = function.interface {
@@ -339,9 +342,12 @@ impl<'a> Summary<'a> {
                         }
 
                         Some(format!(
-                            "class {camel}:\n    \
-                             def __init__({params}):\n        \
-                             {inits}\n\n"
+                            r#"
+class {camel}:
+    def __init__({params}):
+        {inits}
+
+"#
                         ))
                     }
                     TypeDefKind::List(_) => None,
@@ -363,36 +369,24 @@ impl<'a> Summary<'a> {
             };
         }
 
-        if !interface_imports.is_empty() {
-            let dir = path.join("imports");
-            fs::create_dir_all(&dir)?;
-
-            for (name, code) in interface_imports {
-                let mut file = File::create(dir.join(name))?;
-                for code in code {
-                    file.write_all(code.as_bytes())?;
-                }
+        for (name, code) in interface_imports {
+            let mut file = File::create(path.join(&format!("{name}.py")))?;
+            file.write_all(b"import componentize_py\n\n")?;
+            for code in code {
+                file.write_all(code.as_bytes())?;
             }
-
-            File::create(dir.join("__init__.py"))?;
         }
 
-        if !interface_exports.is_empty() {
-            let dir = path.join("exports");
-            fs::create_dir_all(&dir)?;
-
-            for (name, code) in interface_exports {
-                let mut file = File::create(dir.join(name))?;
-                for code in code {
-                    file.write_all(code.as_bytes())?;
-                }
+        for (name, code) in interface_exports {
+            let mut file = File::create(path.join(&format!("{name}.py")))?;
+            for code in code {
+                file.write_all(code.as_bytes())?;
             }
-
-            File::create(dir.join("__init__.py"))?;
         }
 
+        let mut file = File::create(path.join("__init__.py"))?;
         if !world_imports.is_empty() {
-            let mut file = File::create(path.join("__init__.py"))?;
+            file.write_all(b"import componentize_py\n\n")?;
             for code in world_imports {
                 file.write_all(code.as_bytes())?;
             }

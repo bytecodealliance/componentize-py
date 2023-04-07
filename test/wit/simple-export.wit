@@ -1,5 +1,5 @@
 default world simple-export {
     export exports: interface {
-        bar: func(v: u32) -> u32
+        foo: func(v: u32) -> u32
     }
 }

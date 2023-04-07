@@ -1,0 +1,8 @@
+default world simple-import-and-export {
+    import imports: interface {
+        foo: func(v: u32) -> u32
+    }
+    export exports: interface {
+        foo: func(v: u32) -> u32
+    }
+}
