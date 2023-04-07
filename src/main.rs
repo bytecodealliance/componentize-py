@@ -2659,6 +2659,7 @@ fn componentize(
                             .unwrap(),
                         table: old_table_count.try_into().unwrap(),
                     });
+                    dispatch.instruction(&Ins::End);
 
                     code_section.function(&dispatch);
 
@@ -2712,6 +2713,7 @@ fn componentize(
                         for instruction in &gen.instructions {
                             func.instruction(instruction);
                         }
+                        func.instruction(&Ins::End);
                         code_section.function(&func);
 
                         if function.is_dispatchable() {
