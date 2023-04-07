@@ -59,8 +59,6 @@ def exports_bar(v):
 "#,
         )?;
 
-        tokio::fs::write("/tmp/foo.wasm", &component).await?;
-
         let mut config = Config::new();
         config.async_support(true);
         config.wasm_component_model(true);

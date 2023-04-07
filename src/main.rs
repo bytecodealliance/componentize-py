@@ -2782,8 +2782,6 @@ fn componentize(
 
     let result = result.finish();
 
-    fs::write("/tmp/module.wasm", &result)?;
-
     // Encode with WASI Preview 1 adapter
     ComponentEncoder::default()
         .validate(true)
