@@ -39,6 +39,7 @@ mod tests {
             .arg(tempdir.path())
             .arg("--output")
             .arg(tempdir.path().join("app.wasm"))
+            .arg("--quiet")
             .status()?
             .success());
 

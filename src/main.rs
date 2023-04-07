@@ -54,9 +54,13 @@ struct Options {
     #[arg(short = 'p', long, default_value = ".")]
     python_path: String,
 
-    /// Output file to write the resulting module to
+    /// Output file to which to write the resulting component
     #[arg(short = 'o', long, default_value = "index.wasm")]
     output: PathBuf,
+
+    /// Disable non-error output
+    #[arg(short = 'q', long)]
+    quiet: bool,
 }
 
 #[derive(clap::Parser, Debug)]
@@ -71,137 +75,145 @@ struct PrivateOptions {
 }
 
 fn main() -> Result<()> {
-    if env::var_os("COMPONENTIZE_PY_WIZEN").is_some() {
-        let options = PrivateOptions::parse();
+    if env::var_os("COMPONENTIZE_PY_COMPONENTIZE").is_some() {
+        componentize(PrivateOptions::parse())
+    } else {
+        fork(Options::parse())
+    }
+}
 
-        env::remove_var("COMPONENTIZE_PY_WIZEN");
+fn fork(options: Options) -> Result<()> {
+    // Spawn a subcommand to do the real work.  This gives us an opportunity to clear the environment so that
+    // build-time environment variables don't end up in the Wasm module we're building.
+    //
+    // Note that we need to use temporary files for stdio instead of the default inheriting behavior since (as
+    // of this writing) CPython interacts poorly with Wasmtime's WASI implementation if any of the stdio
+    // descriptors point to non-files on Windows.  Specifically, the WASI implementation will trap when CPython
+    // calls `fd_filestat_get` on non-files.
 
-        env::set_var("PYTHONUNBUFFERED", "1");
-        env::set_var("COMPONENTIZE_PY_APP_NAME", &options.app_name);
+    let stdlib = tempfile::tempdir()?;
 
-        let mut wizer = Wizer::new();
+    Archive::new(Decoder::new(Cursor::new(include_bytes!(concat!(
+        env!("OUT_DIR"),
+        "/python-lib.tar.zst"
+    ))))?)
+    .unpack(stdlib.path())?;
 
-        wizer
-            .allow_wasi(true)?
-            .inherit_env(true)
-            .inherit_stdio(true)
-            .wasm_bulk_memory(true);
+    let mut python_path = options.python_path;
 
-        let (resolve, world) = parse_wit(&options.wit_path, options.world.as_deref())?;
-        let summary = Summary::try_new(&resolve, world)?;
+    if let Some(site_packages) = find_site_packages()? {
+        python_path = format!(
+            "{python_path}{NATIVE_PATH_DELIMITER}{}",
+            site_packages
+                .to_str()
+                .context("non-UTF-8 site-packages name")?
+        )
+    }
 
-        let symbols = tempfile::tempdir()?;
-        wizer.map_dir("symbols", symbols.path());
-        bincode::serialize_into(
-            &mut File::create(symbols.path().join("bin"))?,
-            &summary.collect_symbols(),
-        )?;
-        env::set_var("COMPONENTIZE_PY_SYMBOLS_PATH", "/symbols/bin");
+    let mut stdout = tempfile::tempfile()?;
+    let mut stderr = tempfile::tempfile()?;
 
-        let generated_code = tempfile::tempdir()?;
-        summary.generate_code(generated_code.path())?;
-
-        let python_path = format!(
-            "{}{NATIVE_PATH_DELIMITER}{}",
-            options.python_path,
-            generated_code
+    let mut cmd = Command::new(env::args().next().unwrap());
+    cmd.env_clear()
+        .env("COMPONENTIZE_PY_COMPONENTIZE", "1")
+        .arg(&options.app_name)
+        .arg(
+            stdlib
                 .path()
                 .to_str()
-                .context("non-UTF-8 temporary directory name")?
-        );
+                .context("non-UTF-8 temporary directory name")?,
+        )
+        .arg(&python_path)
+        .arg(&options.output)
+        .arg(&options.wit_path)
+        .stdin(tempfile::tempfile()?)
+        .stdout(stdout.try_clone()?)
+        .stderr(stderr.try_clone()?);
 
-        let python_path = python_path
-            .split(NATIVE_PATH_DELIMITER)
-            .enumerate()
-            .map(|(index, path)| {
-                let index = index.to_string();
-                wizer.map_dir(&index, path);
-                format!("/{index}")
-            })
-            .collect::<Vec<_>>()
-            .join(":");
+    if let Some(world) = &options.world {
+        cmd.arg("--world").arg(world);
+    }
 
-        wizer.map_dir("python", &options.python_home);
+    let status = cmd.status()?;
 
-        env::set_var("PYTHONPATH", format!("/python:{python_path}"));
-        env::set_var("PYTHONHOME", "/python");
+    stdout.rewind()?;
+    io::copy(&mut stdout, &mut io::stdout().lock())?;
 
-        let module = wizer.run(&zstd::decode_all(Cursor::new(include_bytes!(concat!(
-            env!("OUT_DIR"),
-            "/runtime.wasm.zst"
-        ))))?)?;
+    stderr.rewind()?;
+    io::copy(&mut stderr, &mut io::stderr().lock())?;
 
-        let component = componentize::componentize(&module, &resolve, world, &summary)?;
+    if !status.success() {
+        bail!("Couldn't create wasm from input");
+    }
 
-        fs::write(&options.output, component)?;
-    } else {
-        let options = Options::parse();
-
-        let stdlib = tempfile::tempdir()?;
-
-        Archive::new(Decoder::new(Cursor::new(include_bytes!(concat!(
-            env!("OUT_DIR"),
-            "/python-lib.tar.zst"
-        ))))?)
-        .unpack(stdlib.path())?;
-
-        let mut python_path = options.python_path;
-
-        if let Some(site_packages) = find_site_packages()? {
-            python_path = format!(
-                "{python_path}{NATIVE_PATH_DELIMITER}{}",
-                site_packages
-                    .to_str()
-                    .context("non-UTF-8 site-packages name")?
-            )
-        }
-
-        // Spawn a subcommand to do the real work.  This gives us an opportunity to clear the environment so that
-        // build-time environment variables don't end up in the Wasm module we're building.
-        //
-        // Note that we need to use temporary files for stdio instead of the default inheriting behavior since (as
-        // of this writing) CPython interacts poorly with Wasmtime's WASI implementation if any of the stdio
-        // descriptors point to non-files on Windows.  Specifically, the WASI implementation will trap when CPython
-        // calls `fd_filestat_get` on non-files.
-
-        let mut stdout = tempfile::tempfile()?;
-        let mut stderr = tempfile::tempfile()?;
-
-        let mut cmd = Command::new(env::args().next().unwrap());
-        cmd.env_clear()
-            .env("COMPONENTIZE_PY_WIZEN", "1")
-            .arg(&options.app_name)
-            .arg(
-                stdlib
-                    .path()
-                    .to_str()
-                    .context("non-UTF-8 temporary directory name")?,
-            )
-            .arg(&python_path)
-            .arg(&options.output)
-            .arg(&options.wit_path)
-            .stdin(tempfile::tempfile()?)
-            .stdout(stdout.try_clone()?)
-            .stderr(stderr.try_clone()?);
-
-        if let Some(world) = &options.world {
-            cmd.arg("--world").arg(world);
-        }
-
-        let status = cmd.status()?;
-
-        stdout.rewind()?;
-        io::copy(&mut stdout, &mut io::stdout().lock())?;
-
-        stderr.rewind()?;
-        io::copy(&mut stderr, &mut io::stderr().lock())?;
-
-        if !status.success() {
-            bail!("Couldn't create wasm from input");
-        }
-
+    if !options.quiet {
         println!("Component built successfully");
     }
+
+    Ok(())
+}
+
+fn componentize(options: PrivateOptions) -> Result<()> {
+    env::remove_var("COMPONENTIZE_PY_COMPONENTIZE");
+
+    env::set_var("PYTHONUNBUFFERED", "1");
+    env::set_var("COMPONENTIZE_PY_APP_NAME", &options.app_name);
+
+    let mut wizer = Wizer::new();
+
+    wizer
+        .allow_wasi(true)?
+        .inherit_env(true)
+        .inherit_stdio(true)
+        .wasm_bulk_memory(true);
+
+    let (resolve, world) = parse_wit(&options.wit_path, options.world.as_deref())?;
+    let summary = Summary::try_new(&resolve, world)?;
+
+    let symbols = tempfile::tempdir()?;
+    wizer.map_dir("symbols", symbols.path());
+    bincode::serialize_into(
+        &mut File::create(symbols.path().join("bin"))?,
+        &summary.collect_symbols(),
+    )?;
+    env::set_var("COMPONENTIZE_PY_SYMBOLS_PATH", "/symbols/bin");
+
+    let generated_code = tempfile::tempdir()?;
+    summary.generate_code(generated_code.path())?;
+
+    let python_path = format!(
+        "{}{NATIVE_PATH_DELIMITER}{}",
+        options.python_path,
+        generated_code
+            .path()
+            .to_str()
+            .context("non-UTF-8 temporary directory name")?
+    );
+
+    let python_path = python_path
+        .split(NATIVE_PATH_DELIMITER)
+        .enumerate()
+        .map(|(index, path)| {
+            let index = index.to_string();
+            wizer.map_dir(&index, path);
+            format!("/{index}")
+        })
+        .collect::<Vec<_>>()
+        .join(":");
+
+    wizer.map_dir("python", &options.python_home);
+
+    env::set_var("PYTHONPATH", format!("/python:{python_path}"));
+    env::set_var("PYTHONHOME", "/python");
+
+    let module = wizer.run(&zstd::decode_all(Cursor::new(include_bytes!(concat!(
+        env!("OUT_DIR"),
+        "/runtime.wasm.zst"
+    ))))?)?;
+
+    let component = componentize::componentize(&module, &resolve, world, &summary)?;
+
+    fs::write(&options.output, component)?;
 
     Ok(())
 }
