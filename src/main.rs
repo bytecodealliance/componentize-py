@@ -114,8 +114,30 @@ fn main() -> Result<()> {
             .inherit_stdio(true)
             .wasm_bulk_memory(true);
 
-        let python_path = options
-            .python_path
+        let (resolve, world) = parse_wit(&options.wit_path, options.world.as_deref())?;
+        let summary = Summary::try_new(&resolve, world)?;
+
+        let symbols = tempfile::tempdir()?;
+        wizer.map_dir("symbols", symbols.path());
+        bincode::serialize_into(
+            &mut File::create(symbols.path().join("bin"))?,
+            &summary.collect_symbols(),
+        )?;
+        env::set_var("COMPONENTIZE_PY_SYMBOLS_PATH", "/symbols/bin");
+
+        let generated_code = tempfile::tempdir()?;
+        summary.generate_code(generated_code.path())?;
+
+        let python_path = format!(
+            "{}{NATIVE_PATH_DELIMITER}{}",
+            options.python_path,
+            generated_code
+                .path()
+                .to_str()
+                .context("non-UTF-8 temporary directory name")?
+        );
+
+        let python_path = python_path
             .split(NATIVE_PATH_DELIMITER)
             .enumerate()
             .map(|(index, path)| {
@@ -136,13 +158,7 @@ fn main() -> Result<()> {
             "/runtime.wasm.zst"
         ))))?)?;
 
-        let (resolve, world) = parse_wit(&options.wit_path, options.world.as_deref())?;
-        let component = componentize(
-            &module,
-            &resolve,
-            world,
-            &Summary::try_new(&resolve, world)?,
-        )?;
+        let component = componentize(&module, &resolve, world, &summary)?;
 
         fs::write(&options.output, component)?;
     } else {
@@ -156,19 +172,7 @@ fn main() -> Result<()> {
         ))))?)
         .unpack(stdlib.path())?;
 
-        let generated_code = tempfile::tempdir()?;
-        let (resolve, world) = parse_wit(&options.wit_path, options.world.as_deref())?;
-        let summary = Summary::try_new(&resolve, world)?;
-        summary.generate_code(generated_code.path())?;
-
-        let mut python_path = format!(
-            "{}{NATIVE_PATH_DELIMITER}{}",
-            options.python_path,
-            generated_code
-                .path()
-                .to_str()
-                .context("non-UTF-8 temporary directory name")?
-        );
+        let mut python_path = options.python_path;
 
         if let Some(site_packages) = find_site_packages()? {
             python_path = format!(
@@ -187,18 +191,14 @@ fn main() -> Result<()> {
         // descriptors point to non-files on Windows.  Specifically, the WASI implementation will trap when CPython
         // calls `fd_filestat_get` on non-files.
 
-        let mut stdin = tempfile::tempfile()?;
         let mut stdout = tempfile::tempfile()?;
         let mut stderr = tempfile::tempfile()?;
 
-        bincode::serialize_into(&mut stdin, &summary.collect_symbols())?;
-        stdin.rewind()?;
-
         let mut cmd = Command::new(env::args().next().unwrap());
         cmd.env_clear()
+            .env("RUST_BACKTRACE", "1")
             .env("COMPONENTIZE_PY_WIZEN", "1")
             .arg(&options.app_name)
-            .arg(&options.wit_path)
             .arg(
                 stdlib
                     .path()
@@ -207,7 +207,8 @@ fn main() -> Result<()> {
             )
             .arg(&python_path)
             .arg(&options.output)
-            .stdin(stdin)
+            .arg(&options.wit_path)
+            .stdin(tempfile::tempfile()?)
             .stdout(stdout.try_clone()?)
             .stderr(stderr.try_clone()?);
 
@@ -1036,26 +1037,32 @@ impl<'a> FunctionBindgen<'a> {
         match ty {
             Type::Bool | Type::U8 | Type::S8 => {
                 self.push(Ins::LocalGet(source[0]));
+                self.push(Ins::LocalGet(destination));
                 self.push(Ins::I32Store8(mem_arg(0, 0)));
             }
             Type::U16 | Type::S16 => {
                 self.push(Ins::LocalGet(source[0]));
+                self.push(Ins::LocalGet(destination));
                 self.push(Ins::I32Store16(mem_arg(0, 1)));
             }
             Type::U32 | Type::S32 | Type::Char => {
                 self.push(Ins::LocalGet(source[0]));
+                self.push(Ins::LocalGet(destination));
                 self.push(Ins::I32Store(mem_arg(0, 2)));
             }
             Type::U64 | Type::S64 => {
                 self.push(Ins::LocalGet(source[0]));
+                self.push(Ins::LocalGet(destination));
                 self.push(Ins::I64Store(mem_arg(0, 3)));
             }
             Type::Float32 => {
                 self.push(Ins::LocalGet(source[0]));
+                self.push(Ins::LocalGet(destination));
                 self.push(Ins::F32Store(mem_arg(0, 2)));
             }
             Type::Float64 => {
                 self.push(Ins::LocalGet(source[0]));
+                self.push(Ins::LocalGet(destination));
                 self.push(Ins::F64Store(mem_arg(0, 3)));
             }
             Type::String => {
@@ -1749,7 +1756,17 @@ struct MyFunction<'a> {
 impl<'a> MyFunction<'a> {
     fn internal_name(&self) -> String {
         if let Some(interface) = self.interface {
-            format!("{}#{}", interface, self.name)
+            format!(
+                "{}#{}{}",
+                interface,
+                self.name,
+                match self.kind {
+                    FunctionKind::Import | FunctionKind::Export => "",
+                    FunctionKind::ExportLift => "-lift",
+                    FunctionKind::ExportLower => "-lower",
+                    FunctionKind::ExportPostReturn => "-post-return",
+                }
+            )
         } else {
             self.name.to_owned()
         }
@@ -2219,6 +2236,8 @@ fn componentize(
     world: WorldId,
     summary: &Summary,
 ) -> Result<Vec<u8>> {
+    fs::write("/tmp/before.wasm", &module)?;
+
     // First pass: find stack pointer and dispatch function, and count various items
     let dispatch_type =
         wasmparser::Type::Func(wasmparser::FuncType::new([wasmparser::ValType::I32; 4], []));
@@ -2323,9 +2342,7 @@ fn componentize(
             if index < old_import_count.try_into().unwrap() {
                 index - 1
             } else {
-                (old_import_count + new_import_count - 1)
-                    .try_into()
-                    .unwrap()
+                index + u32::try_from(new_import_count).unwrap() - 1
             }
         }
     };
@@ -2348,7 +2365,7 @@ fn componentize(
                 for ty in reader {
                     let wasmparser::Type::Func(ty) = ty?;
                     let map = |&ty| IntoValType(ty).into();
-                    types.function(ty.params().iter().map(map), ty.params().iter().map(map));
+                    types.function(ty.params().iter().map(map), ty.results().iter().map(map));
                 }
                 // TODO: should probably deduplicate these types:
                 for function in summary
@@ -2373,7 +2390,7 @@ fn componentize(
                     .into_iter()
                     .enumerate()
                     .filter_map(|(index, import)| {
-                        (index == dispatch_import_index).then_some(import)
+                        (index != dispatch_import_index).then_some(import)
                     })
                 {
                     let import = import?;
@@ -2430,7 +2447,7 @@ fn componentize(
                 tables.table(TableType {
                     element_type: RefType {
                         nullable: true,
-                        heap_type: HeapType::TypedFunc(dispatch_type_index),
+                        heap_type: HeapType::Func,
                     },
                     minimum: dispatchable_function_count.try_into().unwrap(),
                     maximum: Some(dispatchable_function_count.try_into().unwrap()),
@@ -2442,10 +2459,9 @@ fn componentize(
                 let mut globals = GlobalSection::new();
                 for global in reader {
                     let global = global?;
-                    globals.global(
-                        IntoGlobalType(global.ty).into(),
-                        &ConstExpr::raw(visit(global.init_expr.get_binary_reader(), remap)?),
-                    );
+                    let mut bytes = visit(global.init_expr.get_binary_reader(), remap)?;
+                    assert_eq!(bytes.pop(), Some(0xb));
+                    globals.global(IntoGlobalType(global.ty).into(), &ConstExpr::raw(bytes));
                 }
                 globals.global(
                     GlobalType {
@@ -2475,7 +2491,11 @@ fn componentize(
                         exports.export(
                             export.name,
                             IntoExportKind(export.kind).into(),
-                            remap(export.index),
+                            if let wasmparser::ExternalKind::Func = export.kind {
+                                remap(export.index)
+                            } else {
+                                export.index
+                            },
                         );
                     }
                 }
@@ -2502,6 +2522,54 @@ fn componentize(
                 result.section(&exports);
             }
 
+            Payload::ElementSection(reader) => {
+                let elements = ElementSection::new();
+                for element in reader {
+                    match element.kind {
+                        wasmparser::ElementKind::Passive => elements.passive(
+                            IntoRefType(element.ty).into(),
+                            IntoElements(element.items).into(),
+                        ),
+                        wasmparser::ElementKind::Active {
+                            table_index,
+                            offset_expr,
+                        } => elements.active(
+                            table_index,
+                            into_const_expr(offset_expr, remap),
+                            IntoRefType(element.ty).into(),
+                            IntoElements(element.items).into(),
+                        ),
+                        wasmparser::ElementKind::Declared => elements.declared(
+                            IntoRefType(element.ty).into(),
+                            IntoElements(element.items).into(),
+                        ),
+                    }
+                }
+                elements.declared(
+                    RefType {
+                        nullable: true,
+                        heap_type: HeapType::Func,
+                    },
+                    Elements::Functions(
+                        &summary
+                            .functions
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(index, function)| {
+                                function.is_dispatchable().then_some(
+                                    (old_function_count + new_import_count + index)
+                                        .try_into()
+                                        .unwrap(),
+                                )
+                            })
+                            .collect::<Vec<_>>(),
+                    ),
+                );
+                result.section(&elements);
+            }
+
+            Payload::CodeSectionStart { .. } => {}
+
             Payload::CodeSectionEntry(body) => {
                 let mut reader = body.get_binary_reader();
                 let mut locals = Vec::new();
@@ -2517,6 +2585,43 @@ fn componentize(
 
                 code_entries_remaining = code_entries_remaining.checked_sub(1).unwrap();
                 if code_entries_remaining == 0 {
+                    let mut dispatch = Function::new([]);
+
+                    dispatch.instruction(&Ins::GlobalGet(old_global_count.try_into().unwrap()));
+                    dispatch.instruction(&Ins::If(BlockType::Empty));
+                    dispatch.instruction(&Ins::I32Const(0));
+                    dispatch.instruction(&Ins::GlobalSet(old_global_count.try_into().unwrap()));
+
+                    let mut table_index = 0;
+                    for (index, function) in summary.functions.iter().enumerate() {
+                        if function.is_dispatchable() {
+                            dispatch.instruction(&Ins::RefFunc(
+                                (old_function_count + new_import_count + index)
+                                    .try_into()
+                                    .unwrap(),
+                            ));
+                            dispatch.instruction(&Ins::I32Const(table_index));
+                            dispatch
+                                .instruction(&Ins::TableSet(old_table_count.try_into().unwrap()));
+                            table_index += 1;
+                        }
+                    }
+
+                    dispatch.instruction(&Ins::End);
+
+                    let dispatch_param_count = 4;
+                    for local in 0..dispatch_param_count {
+                        dispatch.instruction(&Ins::LocalGet(local));
+                    }
+                    dispatch.instruction(&Ins::CallIndirect {
+                        ty: (old_type_count + new_import_count + summary.functions.len())
+                            .try_into()
+                            .unwrap(),
+                        table: old_table_count.try_into().unwrap(),
+                    });
+
+                    code_section.function(&dispatch);
+
                     let exports = summary
                         .functions
                         .iter()
@@ -2573,43 +2678,6 @@ fn componentize(
                             dispatch_index += 1;
                         }
                     }
-
-                    let mut dispatch = Function::new([]);
-
-                    dispatch.instruction(&Ins::GlobalGet(old_global_count.try_into().unwrap()));
-                    dispatch.instruction(&Ins::If(BlockType::Empty));
-                    dispatch.instruction(&Ins::I32Const(0));
-                    dispatch.instruction(&Ins::GlobalSet(old_global_count.try_into().unwrap()));
-
-                    let mut table_index = 0;
-                    for (index, function) in summary.functions.iter().enumerate() {
-                        if function.is_dispatchable() {
-                            dispatch.instruction(&Ins::RefFunc(
-                                (old_function_count + new_import_count + index)
-                                    .try_into()
-                                    .unwrap(),
-                            ));
-                            dispatch.instruction(&Ins::I32Const(table_index));
-                            dispatch
-                                .instruction(&Ins::TableSet(old_table_count.try_into().unwrap()));
-                            table_index += 1;
-                        }
-                    }
-
-                    dispatch.instruction(&Ins::End);
-
-                    let dispatch_param_count = 4;
-                    for local in 0..dispatch_param_count {
-                        dispatch.instruction(&Ins::LocalGet(local));
-                    }
-                    dispatch.instruction(&Ins::CallIndirect {
-                        ty: (old_type_count + new_import_count + summary.functions.len())
-                            .try_into()
-                            .unwrap(),
-                        table: old_table_count.try_into().unwrap(),
-                    });
-
-                    code_section.function(&dispatch);
 
                     result.section(&code_section);
                 }
@@ -2701,10 +2769,14 @@ fn componentize(
         data: &metadata::encode(resolve, world, wit_component::StringEncoding::UTF8, None)?,
     });
 
+    let result = result.finish();
+
+    fs::write("/tmp/foo.wasm", &result)?;
+
     // Encode with WASI Preview 1 adapter
     ComponentEncoder::default()
         .validate(true)
-        .module(&result.finish())?
+        .module(&result)?
         .adapter(
             "wasi_snapshot_preview1",
             &zstd::decode_all(Cursor::new(include_bytes!(concat!(

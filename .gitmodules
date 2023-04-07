@@ -1,3 +1,6 @@
 [submodule "cpython"]
 	path = cpython
 	url = https://github.com/python/cpython
+[submodule "preview2"]
+	path = preview2
+	url = https://github.com/bytecodealliance/preview2-prototyping

@@ -14,7 +14,7 @@ use {
         alloc::{self, Layout},
         env,
         ffi::c_void,
-        io::{self, Read},
+        fs,
         mem::{self, MaybeUninit},
         ops::Deref,
         ptr, slice, str,
@@ -84,16 +84,15 @@ fn componentize_py_module(_py: Python<'_>, module: &PyModule) -> PyResult<()> {
 }
 
 fn do_init() -> Result<()> {
-    let mut input = Vec::new();
-    io::stdin().lock().read_to_end(&mut input)?;
-    let symbols = bincode::deserialize::<Symbols<'_>>(&input)?;
+    let symbols = fs::read(env::var("COMPONENTIZE_PY_SYMBOLS_PATH")?)?;
+    let symbols = bincode::deserialize::<Symbols<'_>>(&symbols)?;
 
     pyo3::append_to_inittab!(componentize_py_module);
 
     pyo3::prepare_freethreaded_python();
 
     Python::with_gil(|py| {
-        let app = py.import(env::var("SPIN_PYTHON_APP_NAME")?.deref())?;
+        let app = py.import(env::var("COMPONENTIZE_PY_APP_NAME")?.deref())?;
 
         // TODO: do name tweaking in componentize-py instead of here so we don't have to pull in the heck
         // dependency
@@ -187,6 +186,7 @@ pub unsafe extern "C" fn componentize_py_dispatch(
     Python::with_gil(|py| {
         let mut params_lifted =
             vec![MaybeUninit::<&PyAny>::uninit(); param_count.try_into().unwrap()];
+
         dispatch(
             &py as *const _ as _,
             params,

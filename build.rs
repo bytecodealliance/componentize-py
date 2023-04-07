@@ -79,7 +79,7 @@ fn package_runtime_and_core_library(out_dir: &Path) -> Result<()> {
     assert!(status.success());
     println!("cargo:rerun-if-changed=runtime");
 
-    let runtime_path = out_dir.join("target/wasm32-wasi/release/spin_python_runtime.wasm");
+    let runtime_path = out_dir.join("wasm32-wasi/release/componentize_py_runtime.wasm");
 
     println!("cargo:rerun-if-changed={runtime_path:?}");
 
@@ -111,6 +111,23 @@ fn package_runtime_and_core_library(out_dir: &Path) -> Result<()> {
     } else {
         bail!("no such directory: {}", core_library_path.display())
     }
+
+    let mut cmd = Command::new("cargo");
+    cmd.arg("build")
+        .current_dir("preview2")
+        .arg("--release")
+        .arg("--target=wasm32-unknown-unknown")
+        .env("CARGO_TARGET_DIR", out_dir);
+
+    let status = cmd.status()?;
+    assert!(status.success());
+    println!("cargo:rerun-if-changed=preview2");
+
+    let adapter_path = out_dir.join("wasm32-unknown-unknown/release/wasi_snapshot_preview1.wasm");
+    let copied_adapter_path = out_dir.join("wasi_snapshot_preview1.wasm.zst");
+    let mut encoder = Encoder::new(File::create(copied_adapter_path)?, ZSTD_COMPRESSION_LEVEL)?;
+    io::copy(&mut File::open(adapter_path)?, &mut encoder)?;
+    encoder.do_finish()?;
 
     Ok(())
 }
