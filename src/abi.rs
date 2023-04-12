@@ -44,7 +44,9 @@ pub(crate) fn record_abi_limit(
     limit: usize,
 ) -> Abi {
     let mut abi = record_abi(resolve, types);
-    abi.flattened.truncate(limit);
+    if abi.flattened.len() > limit {
+        abi.flattened = vec![ValType::I32];
+    }
     abi
 }
 
@@ -89,6 +91,7 @@ pub(crate) fn abi(resolve: &Resolve, ty: Type) -> Abi {
             TypeDefKind::Record(record) => {
                 record_abi(resolve, record.fields.iter().map(|field| field.ty))
             }
+            TypeDefKind::Tuple(tuple) => record_abi(resolve, tuple.types.iter().copied()),
             TypeDefKind::List(_) => Abi {
                 size: 8,
                 align: 4,

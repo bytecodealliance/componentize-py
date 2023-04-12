@@ -50,24 +50,31 @@ impl<'a> MyFunction<'a> {
         }
     }
 
-    pub(crate) fn canonical_core_type(&self, resolve: &Resolve) -> (Vec<ValType>, Vec<ValType>) {
-        (
-            abi::record_abi_limit(resolve, self.params.types(), MAX_FLAT_PARAMS).flattened,
-            abi::record_abi_limit(resolve, self.results.types(), MAX_FLAT_RESULTS).flattened,
-        )
+    pub(crate) fn core_import_type(&self, resolve: &Resolve) -> (Vec<ValType>, Vec<ValType>) {
+        let mut params =
+            abi::record_abi_limit(resolve, self.params.types(), MAX_FLAT_PARAMS).flattened;
+
+        let mut results = abi::record_abi(resolve, self.results.types()).flattened;
+
+        if results.len() > MAX_FLAT_RESULTS {
+            params.push(ValType::I32);
+            results = Vec::new();
+        };
+
+        (params, results)
     }
 
-    pub(crate) fn core_type(&self, resolve: &Resolve) -> (Vec<ValType>, Vec<ValType>) {
+    pub(crate) fn core_export_type(&self, resolve: &Resolve) -> (Vec<ValType>, Vec<ValType>) {
         match self.kind {
-            FunctionKind::Export => self.canonical_core_type(resolve),
+            FunctionKind::Export => (
+                abi::record_abi_limit(resolve, self.params.types(), MAX_FLAT_PARAMS).flattened,
+                abi::record_abi_limit(resolve, self.results.types(), MAX_FLAT_RESULTS).flattened,
+            ),
             FunctionKind::Import | FunctionKind::ExportLift | FunctionKind::ExportLower => (
                 vec![ValType::I32; DISPATCHABLE_CORE_PARAM_COUNT],
                 Vec::new(),
             ),
-            FunctionKind::ExportPostReturn => (
-                abi::record_abi_limit(resolve, self.results.types(), MAX_FLAT_RESULTS).flattened,
-                Vec::new(),
-            ),
+            FunctionKind::ExportPostReturn => (vec![ValType::I32], Vec::new()),
         }
     }
 
@@ -123,6 +130,12 @@ impl<'a> Summary<'a> {
                     self.types.insert(id);
                     for field in &record.fields {
                         self.visit_type(field.ty);
+                    }
+                }
+                TypeDefKind::Tuple(tuple) => {
+                    self.types.insert(id);
+                    for ty in &tuple.types {
+                        self.visit_type(*ty);
                     }
                 }
                 TypeDefKind::List(ty) => {
@@ -230,29 +243,36 @@ impl<'a> Summary<'a> {
         let mut types = Vec::new();
         for ty in &self.types {
             let ty = &self.resolve.types[*ty];
-            if let TypeOwner::Interface(interface) = ty.owner {
-                let (direction, interface) =
-                    if let Some(name) = self.imported_interfaces.get(&interface) {
-                        (Direction::Import, *name)
-                    } else {
-                        (Direction::Export, self.exported_interfaces[&interface])
-                    };
+            types.push(match ty.owner {
+                TypeOwner::Interface(interface) => {
+                    let (direction, interface) =
+                        if let Some(name) = self.imported_interfaces.get(&interface) {
+                            (Direction::Import, *name)
+                        } else {
+                            (Direction::Export, self.exported_interfaces[&interface])
+                        };
 
-                types.push(symbols::Type {
-                    direction,
-                    interface,
-                    name: ty.name.as_deref(),
-                    fields: match &ty.kind {
-                        TypeDefKind::Record(record) => {
-                            record.fields.iter().map(|f| f.name.as_str()).collect()
-                        }
-                        TypeDefKind::List(_) => Vec::new(),
-                        _ => todo!(),
-                    },
-                });
-            } else {
-                todo!("handle types exported directly from a world");
-            };
+                    symbols::Type::Owned(symbols::OwnedType {
+                        direction,
+                        interface,
+                        name: ty.name.as_deref(),
+                        fields: match &ty.kind {
+                            TypeDefKind::Record(record) => {
+                                record.fields.iter().map(|f| f.name.as_str()).collect()
+                            }
+                            TypeDefKind::List(_) => Vec::new(),
+                            _ => todo!(),
+                        },
+                    })
+                }
+
+                TypeOwner::None => match &ty.kind {
+                    TypeDefKind::Tuple(tuple) => symbols::Type::Tuple(tuple.types.len()),
+                    _ => todo!(),
+                },
+
+                TypeOwner::World(_) => todo!("handle types exported directly from a world: {ty:?}"),
+            });
         }
 
         Symbols { exports, types }
@@ -311,63 +331,67 @@ def {snake}({params}):
 
         for (index, ty) in self.types.iter().enumerate() {
             let ty = &self.resolve.types[*ty];
-            if let TypeOwner::Interface(interface) = ty.owner {
-                // todo: generate `dataclass` with typings
-                let camel = || {
-                    if let Some(name) = &ty.name {
-                        name.to_upper_camel_case()
-                    } else {
-                        format!("AnonymousType{index}")
-                    }
-                };
-
-                let code = match &ty.kind {
-                    TypeDefKind::Record(record) => {
-                        let camel = camel();
-
-                        let snakes =
-                            || record.fields.iter().map(|field| field.name.to_snake_case());
-
-                        let params = iter::once("self".to_owned())
-                            .chain(snakes())
-                            .collect::<Vec<_>>()
-                            .join(", ");
-
-                        let mut inits = snakes()
-                            .map(|snake| format!("self.{snake} = {snake}"))
-                            .collect::<Vec<_>>()
-                            .join("\n        ");
-
-                        if inits.is_empty() {
-                            inits = "pass".to_owned()
+            match ty.owner {
+                TypeOwner::Interface(interface) => {
+                    // todo: generate `dataclass` with typings
+                    let camel = || {
+                        if let Some(name) = &ty.name {
+                            name.to_upper_camel_case()
+                        } else {
+                            format!("AnonymousType{index}")
                         }
+                    };
 
-                        Some(format!(
-                            r#"
+                    let code = match &ty.kind {
+                        TypeDefKind::Record(record) => {
+                            let camel = camel();
+
+                            let snakes =
+                                || record.fields.iter().map(|field| field.name.to_snake_case());
+
+                            let params = iter::once("self".to_owned())
+                                .chain(snakes())
+                                .collect::<Vec<_>>()
+                                .join(", ");
+
+                            let mut inits = snakes()
+                                .map(|snake| format!("self.{snake} = {snake}"))
+                                .collect::<Vec<_>>()
+                                .join("\n        ");
+
+                            if inits.is_empty() {
+                                inits = "pass".to_owned()
+                            }
+
+                            Some(format!(
+                                r#"
 class {camel}:
     def __init__({params}):
         {inits}
 
 "#
-                        ))
-                    }
-                    TypeDefKind::List(_) => None,
-                    _ => todo!(),
-                };
+                            ))
+                        }
+                        TypeDefKind::Tuple(_) | TypeDefKind::List(_) => None,
+                        _ => todo!(),
+                    };
 
-                if let Some(code) = code {
-                    if let Some(name) = self.imported_interfaces.get(&interface) {
-                        interface_imports.entry(name).or_default().push(code)
-                    } else {
-                        interface_exports
-                            .entry(self.exported_interfaces[&interface])
-                            .or_default()
-                            .push(code)
+                    if let Some(code) = code {
+                        if let Some(name) = self.imported_interfaces.get(&interface) {
+                            interface_imports.entry(name).or_default().push(code)
+                        } else {
+                            interface_exports
+                                .entry(self.exported_interfaces[&interface])
+                                .or_default()
+                                .push(code)
+                        }
                     }
                 }
-            } else {
-                todo!("handle types exported directly from a world");
-            };
+
+                TypeOwner::None => (),
+
+                TypeOwner::World(_) => todo!("handle types exported directly from a world: {ty:?}"),
+            }
         }
 
         for (name, code) in interface_imports {

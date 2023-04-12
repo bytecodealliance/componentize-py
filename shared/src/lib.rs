@@ -14,13 +14,19 @@ pub enum Direction {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct Type<'a> {
+pub struct OwnedType<'a> {
     pub direction: Direction,
     pub interface: &'a str,
     #[serde(borrow)]
     pub name: Option<&'a str>,
     #[serde(borrow)]
     pub fields: Vec<&'a str>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub enum Type<'a> {
+    Owned(#[serde(borrow)] OwnedType<'a>),
+    Tuple(usize),
 }
 
 #[derive(Serialize, Deserialize)]

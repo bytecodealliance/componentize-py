@@ -250,7 +250,7 @@ impl<'a> FunctionBindgen<'a> {
             self.params.types().count().try_into().unwrap(),
         ));
 
-        let param_flat_count = if self.params_abi.flattened.len() <= MAX_FLAT_PARAMS {
+        if self.params_abi.flattened.len() <= MAX_FLAT_PARAMS {
             self.push_stack(self.params_abi.size);
 
             let destination = self.push_local(ValType::I32);
@@ -266,25 +266,27 @@ impl<'a> FunctionBindgen<'a> {
             self.pop_local(destination, ValType::I32);
 
             self.get_stack();
-
-            self.params_abi.flattened.len()
         } else {
             self.push(Ins::LocalGet(0));
-
-            1
         };
 
+        let mut result = None;
         if self.results_abi.flattened.len() <= MAX_FLAT_RESULTS {
             self.push_stack(self.results_abi.size);
 
             self.get_stack();
         } else {
-            self.push(Ins::LocalGet(param_flat_count.try_into().unwrap()));
+            let my_result = self.push_local(ValType::I32);
+            result = Some(my_result);
+            self.push(Ins::LocalGet(my_result));
         }
 
         self.link_call(Link::Dispatch);
 
-        if self.results_abi.flattened.len() <= MAX_FLAT_RESULTS {
+        if let Some(result) = result {
+            self.push(Ins::LocalGet(result));
+            self.pop_local(result, ValType::I32);
+        } else {
             let source = self.push_local(ValType::I32);
             self.get_stack();
             self.push(Ins::LocalSet(source));
@@ -421,7 +423,7 @@ impl<'a> FunctionBindgen<'a> {
                     .try_into()
                     .unwrap()
         );
-        assert!(ty == self.local_types[self.local_types.len() - 1]);
+        assert!(ty == self.local_types[self.local_stack.len() - 1]);
 
         self.local_stack.pop();
         while let Some(false) = self.local_stack.last() {
@@ -485,21 +487,10 @@ impl<'a> FunctionBindgen<'a> {
             }
             Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
-                    let type_index = self.types.get_index_of(&id).unwrap();
-                    for (field_index, field) in record.fields.iter().enumerate() {
-                        let field_value = self.push_local(ValType::I32);
-
-                        self.push(Ins::LocalGet(context));
-                        self.push(Ins::LocalGet(value));
-                        self.push(Ins::I32Const(type_index.try_into().unwrap()));
-                        self.push(Ins::I32Const(field_index.try_into().unwrap()));
-                        self.link_call(Link::GetField);
-                        self.push(Ins::LocalSet(field_value));
-
-                        self.lower(field.ty, context, field_value);
-
-                        self.pop_local(field_value, ValType::I32);
-                    }
+                    self.lower_record(id, record.fields.iter().map(|f| f.ty), context, value);
+                }
+                TypeDefKind::Tuple(tuple) => {
+                    self.lower_record(id, tuple.types.iter().copied(), context, value);
                 }
                 TypeDefKind::List(ty) => {
                     // TODO: optimize `list<u8>` (and others if appropriate)
@@ -572,6 +563,30 @@ impl<'a> FunctionBindgen<'a> {
         }
     }
 
+    fn lower_record(
+        &mut self,
+        id: TypeId,
+        types: impl IntoIterator<Item = Type>,
+        context: u32,
+        value: u32,
+    ) {
+        let type_index = self.types.get_index_of(&id).unwrap();
+        for (field_index, ty) in types.into_iter().enumerate() {
+            let field_value = self.push_local(ValType::I32);
+
+            self.push(Ins::LocalGet(context));
+            self.push(Ins::LocalGet(value));
+            self.push(Ins::I32Const(type_index.try_into().unwrap()));
+            self.push(Ins::I32Const(field_index.try_into().unwrap()));
+            self.link_call(Link::GetField);
+            self.push(Ins::LocalSet(field_value));
+
+            self.lower(ty, context, field_value);
+
+            self.pop_local(field_value, ValType::I32);
+        }
+    }
+
     fn store(&mut self, ty: Type, context: u32, value: u32, destination: u32) {
         match ty {
             Type::Bool | Type::U8 | Type::S8 => {
@@ -612,34 +627,16 @@ impl<'a> FunctionBindgen<'a> {
             }
             Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
-                    let type_index = self.types.get_index_of(&id).unwrap();
-                    let mut store_offset = 0;
-                    for (field_index, field) in record.fields.iter().enumerate() {
-                        let abi = abi::abi(self.resolve, field.ty);
-                        store_offset = abi::align(store_offset, abi.align);
-
-                        let field_value = self.push_local(ValType::I32);
-                        let field_destination = self.push_local(ValType::I32);
-
-                        self.push(Ins::LocalGet(context));
-                        self.push(Ins::LocalGet(value));
-                        self.push(Ins::I32Const(type_index.try_into().unwrap()));
-                        self.push(Ins::I32Const(field_index.try_into().unwrap()));
-                        self.link_call(Link::GetField);
-                        self.push(Ins::LocalSet(field_value));
-
-                        self.push(Ins::LocalGet(destination));
-                        self.push(Ins::I32Const(store_offset.try_into().unwrap()));
-                        self.push(Ins::I32Add);
-                        self.push(Ins::LocalSet(field_destination));
-
-                        self.store(field.ty, context, field_value, field_destination);
-
-                        store_offset += abi.size;
-
-                        self.pop_local(field_destination, ValType::I32);
-                        self.pop_local(field_value, ValType::I32);
-                    }
+                    self.store_record(
+                        id,
+                        record.fields.iter().map(|f| f.ty),
+                        context,
+                        value,
+                        destination,
+                    );
+                }
+                TypeDefKind::Tuple(tuple) => {
+                    self.store_record(id, tuple.types.iter().copied(), context, value, destination);
                 }
                 TypeDefKind::List(_) => {
                     let length = self.push_local(ValType::I32);
@@ -659,6 +656,44 @@ impl<'a> FunctionBindgen<'a> {
                 }
                 _ => todo!(),
             },
+        }
+    }
+
+    fn store_record(
+        &mut self,
+        id: TypeId,
+        types: impl IntoIterator<Item = Type>,
+        context: u32,
+        value: u32,
+        destination: u32,
+    ) {
+        let type_index = self.types.get_index_of(&id).unwrap();
+        let mut store_offset = 0;
+        for (field_index, ty) in types.into_iter().enumerate() {
+            let abi = abi::abi(self.resolve, ty);
+            store_offset = abi::align(store_offset, abi.align);
+
+            let field_value = self.push_local(ValType::I32);
+            let field_destination = self.push_local(ValType::I32);
+
+            self.push(Ins::LocalGet(context));
+            self.push(Ins::LocalGet(value));
+            self.push(Ins::I32Const(type_index.try_into().unwrap()));
+            self.push(Ins::I32Const(field_index.try_into().unwrap()));
+            self.link_call(Link::GetField);
+            self.push(Ins::LocalSet(field_value));
+
+            self.push(Ins::LocalGet(destination));
+            self.push(Ins::I32Const(store_offset.try_into().unwrap()));
+            self.push(Ins::I32Add);
+            self.push(Ins::LocalSet(field_destination));
+
+            self.store(ty, context, field_value, field_destination);
+
+            store_offset += abi.size;
+
+            self.pop_local(field_destination, ValType::I32);
+            self.pop_local(field_value, ValType::I32);
         }
     }
 
@@ -712,6 +747,9 @@ impl<'a> FunctionBindgen<'a> {
                         source,
                         destination,
                     );
+                }
+                TypeDefKind::Tuple(tuple) => {
+                    self.store_copy_record(tuple.types.iter().copied(), source, destination);
                 }
                 TypeDefKind::List(_) => {
                     self.push(Ins::LocalGet(destination));
@@ -798,29 +836,15 @@ impl<'a> FunctionBindgen<'a> {
             }
             Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
-                    self.push_stack(record.fields.len() * WORD_SIZE);
-                    let destination = self.push_local(ValType::I32);
-
-                    self.get_stack();
-                    self.push(Ins::LocalSet(destination));
-
-                    self.lift_record(
+                    self.lift_record_onto_stack(
+                        id,
                         record.fields.iter().map(|field| field.ty),
                         context,
                         value,
-                        destination,
                     );
-
-                    self.push(Ins::LocalGet(context));
-                    self.push(Ins::I32Const(
-                        self.types.get_index_of(&id).unwrap().try_into().unwrap(),
-                    ));
-                    self.get_stack();
-                    self.push(Ins::I32Const(record.fields.len().try_into().unwrap()));
-                    self.link_call(Link::Init);
-
-                    self.pop_local(destination, ValType::I32);
-                    self.pop_stack(record.fields.len() * WORD_SIZE);
+                }
+                TypeDefKind::Tuple(tuple) => {
+                    self.lift_record_onto_stack(id, tuple.types.iter().copied(), context, value);
                 }
                 TypeDefKind::List(ty) => {
                     // TODO: optimize using bulk memory operation when list element is primitive
@@ -906,6 +930,34 @@ impl<'a> FunctionBindgen<'a> {
         }
     }
 
+    fn lift_record_onto_stack(
+        &mut self,
+        id: TypeId,
+        types: impl ExactSizeIterator<Item = Type>,
+        context: u32,
+        source: &[u32],
+    ) {
+        let len = types.len();
+        self.push_stack(len * WORD_SIZE);
+        let destination = self.push_local(ValType::I32);
+
+        self.get_stack();
+        self.push(Ins::LocalSet(destination));
+
+        self.lift_record(types, context, source, destination);
+
+        self.push(Ins::LocalGet(context));
+        self.push(Ins::I32Const(
+            self.types.get_index_of(&id).unwrap().try_into().unwrap(),
+        ));
+        self.get_stack();
+        self.push(Ins::I32Const(len.try_into().unwrap()));
+        self.link_call(Link::Init);
+
+        self.pop_local(destination, ValType::I32);
+        self.pop_stack(len * WORD_SIZE);
+    }
+
     fn load(&mut self, ty: Type, context: u32, source: u32) {
         match ty {
             Type::Bool | Type::U8 => {
@@ -985,28 +1037,15 @@ impl<'a> FunctionBindgen<'a> {
             }
             Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
-                    self.push_stack(record.fields.len() * WORD_SIZE);
-                    let destination = self.push_local(ValType::I32);
-
-                    self.get_stack();
-                    self.push(Ins::LocalSet(destination));
-
-                    self.load_record(
+                    self.load_record_onto_stack(
+                        id,
                         record.fields.iter().map(|field| field.ty),
                         context,
                         source,
-                        destination,
                     );
-
-                    self.push(Ins::I32Const(
-                        self.types.get_index_of(&id).unwrap().try_into().unwrap(),
-                    ));
-                    self.get_stack();
-                    self.push(Ins::I32Const(record.fields.len().try_into().unwrap()));
-                    self.link_call(Link::Init);
-
-                    self.pop_local(destination, ValType::I32);
-                    self.pop_stack(record.fields.len() * WORD_SIZE);
+                }
+                TypeDefKind::Tuple(tuple) => {
+                    self.load_record_onto_stack(id, tuple.types.iter().copied(), context, source);
                 }
                 TypeDefKind::List(_) => {
                     let body = self.push_local(ValType::I32);
@@ -1066,6 +1105,34 @@ impl<'a> FunctionBindgen<'a> {
         }
     }
 
+    fn load_record_onto_stack(
+        &mut self,
+        id: TypeId,
+        types: impl ExactSizeIterator<Item = Type>,
+        context: u32,
+        source: u32,
+    ) {
+        let len = types.len();
+        self.push_stack(len * WORD_SIZE);
+        let destination = self.push_local(ValType::I32);
+
+        self.get_stack();
+        self.push(Ins::LocalSet(destination));
+
+        self.load_record(types, context, source, destination);
+
+        self.push(Ins::LocalGet(context));
+        self.push(Ins::I32Const(
+            self.types.get_index_of(&id).unwrap().try_into().unwrap(),
+        ));
+        self.get_stack();
+        self.push(Ins::I32Const(len.try_into().unwrap()));
+        self.link_call(Link::Init);
+
+        self.pop_local(destination, ValType::I32);
+        self.pop_stack(len * WORD_SIZE);
+    }
+
     fn load_copy(&mut self, ty: Type, source: u32) {
         match ty {
             Type::Bool | Type::U8 => {
@@ -1112,6 +1179,9 @@ impl<'a> FunctionBindgen<'a> {
             Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
                     self.load_copy_record(record.fields.iter().map(|field| field.ty), source);
+                }
+                TypeDefKind::Tuple(tuple) => {
+                    self.load_copy_record(tuple.types.iter().copied(), source);
                 }
                 TypeDefKind::List(_) => {
                     self.push(Ins::LocalGet(source));
@@ -1173,6 +1243,9 @@ impl<'a> FunctionBindgen<'a> {
             Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
                     self.free_lowered_record(record.fields.iter().map(|field| field.ty), value);
+                }
+                TypeDefKind::Tuple(tuple) => {
+                    self.free_lowered_record(tuple.types.iter().copied(), value);
                 }
                 TypeDefKind::List(ty) => {
                     // TODO: optimize (i.e. no loop) when list element is primitive
@@ -1269,6 +1342,9 @@ impl<'a> FunctionBindgen<'a> {
             Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
                     self.free_stored_record(record.fields.iter().map(|field| field.ty), value);
+                }
+                TypeDefKind::Tuple(tuple) => {
+                    self.free_stored_record(tuple.types.iter().copied(), value);
                 }
                 TypeDefKind::List(ty) => {
                     // TODO: optimize this for primitive element types

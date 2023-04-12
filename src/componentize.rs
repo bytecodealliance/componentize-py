@@ -170,11 +170,11 @@ pub(crate) fn componentize(
                     .iter()
                     .filter(|f| matches!(f.kind, FunctionKind::Import))
                 {
-                    let (params, results) = function.canonical_core_type(resolve);
+                    let (params, results) = function.core_import_type(resolve);
                     types.function(params, results);
                 }
                 for function in &summary.functions {
-                    let (params, results) = function.core_type(resolve);
+                    let (params, results) = function.core_export_type(resolve);
                     types.function(params, results);
                 }
                 types.function([ValType::I32; 3], []);
@@ -284,18 +284,30 @@ pub(crate) fn componentize(
                 }
 
                 for (index, function) in summary.functions.iter().enumerate() {
-                    if let FunctionKind::Export = function.kind {
-                        exports.export(
-                            &if let Some(interface) = function.interface {
-                                format!("{}#{}", interface, function.name)
-                            } else {
-                                function.name.to_owned()
-                            },
-                            ExportKind::Func,
-                            (old_function_count + new_import_count + index)
-                                .try_into()
-                                .unwrap(),
-                        );
+                    match function.kind {
+                        FunctionKind::Export | FunctionKind::ExportPostReturn => {
+                            exports.export(
+                                &format!(
+                                    "{}{}",
+                                    if let FunctionKind::ExportPostReturn = function.kind {
+                                        "cabi_post_"
+                                    } else {
+                                        ""
+                                    },
+                                    if let Some(interface) = function.interface {
+                                        format!("{}#{}", interface, function.name)
+                                    } else {
+                                        function.name.to_owned()
+                                    }
+                                ),
+                                ExportKind::Func,
+                                (old_function_count + new_import_count + index)
+                                    .try_into()
+                                    .unwrap(),
+                            );
+                        }
+
+                        _ => (),
                     }
                 }
                 result.section(&exports);
@@ -405,7 +417,7 @@ pub(crate) fn componentize(
                             &summary.types,
                             function.params,
                             function.results,
-                            function.core_type(resolve).0.len(),
+                            function.core_export_type(resolve).0.len(),
                         );
 
                         match function.kind {

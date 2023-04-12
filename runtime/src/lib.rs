@@ -2,7 +2,7 @@
 
 use {
     anyhow::{Error, Result},
-    componentize_py_shared::{Direction, Symbols},
+    componentize_py_shared::{self as symbols, Direction, Symbols},
     heck::{ToSnakeCase, ToUpperCamelCase},
     once_cell::sync::OnceCell,
     pyo3::{
@@ -26,9 +26,12 @@ static TYPES: OnceCell<Vec<Type>> = OnceCell::new();
 static ENVIRON: OnceCell<Py<PyMapping>> = OnceCell::new();
 
 #[derive(Debug)]
-struct Type {
-    constructor: PyObject,
-    fields: Vec<String>,
+enum Type {
+    Owned {
+        constructor: PyObject,
+        fields: Vec<String>,
+    },
+    Tuple(usize),
 }
 
 struct Anyhow(Error);
@@ -125,24 +128,28 @@ fn do_init() -> Result<()> {
                     .iter()
                     .enumerate()
                     .map(|(index, ty)| {
-                        Ok(Type {
-                            constructor: py
-                                .import(match ty.direction {
-                                    Direction::Import => "imports",
-                                    Direction::Export => "exports",
-                                })?
-                                .getattr(ty.interface)?
-                                .getattr(
-                                    if let Some(name) = ty.name {
-                                        name.to_upper_camel_case()
-                                    } else {
-                                        format!("AnonymousType{index}")
-                                    }
-                                    .as_str(),
-                                )?
-                                .into(),
+                        Ok(match ty {
+                            symbols::Type::Owned(ty) => Type::Owned {
+                                constructor: py
+                                    .import(match ty.direction {
+                                        Direction::Import => "imports",
+                                        Direction::Export => "exports",
+                                    })?
+                                    .getattr(ty.interface)?
+                                    .getattr(
+                                        if let Some(name) = ty.name {
+                                            name.to_upper_camel_case()
+                                        } else {
+                                            format!("AnonymousType{index}")
+                                        }
+                                        .as_str(),
+                                    )?
+                                    .into(),
 
-                            fields: ty.fields.iter().map(|&f| f.to_owned()).collect(),
+                                fields: ty.fields.iter().map(|&f| f.to_owned()).collect(),
+                            },
+
+                            symbols::Type::Tuple(length) => Type::Tuple(*length),
                         })
                     })
                     .collect::<PyResult<_>>()?,
@@ -224,6 +231,21 @@ pub unsafe extern "C" fn componentize_py_dispatch(
 
 /// # Safety
 /// TODO
+#[export_name = "cabi_realloc"]
+pub unsafe extern "C" fn cabi_realloc(
+    old_ptr: *mut u8,
+    old_len: usize,
+    align: usize,
+    new_size: usize,
+) -> *mut u8 {
+    assert!(old_ptr == ptr::null_mut());
+    assert!(old_len == 0);
+
+    alloc::alloc(Layout::from_size_align(new_size, align).unwrap())
+}
+
+/// # Safety
+/// TODO
 #[export_name = "componentize-py#Free"]
 pub unsafe extern "C" fn componentize_py_free(ptr: *mut u8, size: usize, align: usize) {
     alloc::dealloc(ptr, Layout::from_size_align(size, align).unwrap())
@@ -272,9 +294,14 @@ pub extern "C" fn componentize_py_get_field<'a>(
     ty: usize,
     field: usize,
 ) -> &'a PyAny {
-    value
-        .getattr(TYPES.get().unwrap()[ty].fields[field].as_str())
-        .unwrap()
+    match &TYPES.get().unwrap()[ty] {
+        Type::Owned { fields, .. } => value.getattr(fields[field].as_str()),
+        Type::Tuple(length) => {
+            assert!(field < *length);
+            value.downcast::<PyTuple>().unwrap().get_item(field)
+        }
+    }
+    .unwrap()
 }
 
 #[export_name = "componentize-py#GetListLength"]
@@ -345,14 +372,20 @@ pub unsafe extern "C" fn componentize_py_init<'a>(
     data: *const &PyAny,
     len: usize,
 ) -> &'a PyAny {
-    TYPES.get().unwrap()[ty]
-        .constructor
-        .call1(
-            *py,
-            PyTuple::new(*py, unsafe { slice::from_raw_parts(data, len) }),
-        )
-        .unwrap()
-        .into_ref(*py)
+    match &TYPES.get().unwrap()[ty] {
+        Type::Owned { constructor, .. } => constructor
+            .call1(
+                *py,
+                PyTuple::new(*py, unsafe { slice::from_raw_parts(data, len) }),
+            )
+            .unwrap()
+            .into_ref(*py),
+
+        Type::Tuple(length) => {
+            assert!(*length == len);
+            PyTuple::new(*py, unsafe { slice::from_raw_parts(data, len) })
+        }
+    }
 }
 
 #[export_name = "componentize-py#MakeList"]
