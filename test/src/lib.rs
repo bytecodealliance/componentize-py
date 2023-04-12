@@ -438,9 +438,9 @@ def exports_echo_many(v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v1
             )
         }
 
-        pub fn run<S: Strategy>(
+        pub fn test<S: Strategy>(
             strategy: &S,
-            test: impl Fn(S::Value, &Echoes, &mut Store<Host>, &Runtime) -> Result<S::Value>,
+            test: impl Fn(S::Value, &Echoes, &mut Store<Host>, &Runtime) -> Result<()>,
         ) -> Result<()>
         where
             S::Value: PartialEq<S::Value> + Clone + Send + Sync + 'static,
@@ -452,19 +452,110 @@ def exports_echo_many(v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v1
             let store = RefCell::new(store);
 
             Ok(TestRunner::default().run(strategy, move |v| {
-                assert_eq!(
-                    v,
-                    test(v.clone(), &instance, &mut store.borrow_mut(), &runtime).unwrap()
-                );
+                test(v.clone(), &instance, &mut store.borrow_mut(), &runtime).unwrap();
                 Ok(())
             })?)
+        }
+
+        pub fn all_eq<S: Strategy>(
+            strategy: &S,
+            echo: impl Fn(S::Value, &Echoes, &mut Store<Host>, &Runtime) -> Result<S::Value>,
+        ) -> Result<()>
+        where
+            S::Value: PartialEq<S::Value> + Clone + Send + Sync + 'static,
+        {
+            test(strategy, |v, instance, store, runtime| {
+                assert_eq!(v, echo(v.clone(), instance, store, runtime)?);
+                Ok(())
+            })
         }
     }
 
     #[test]
     fn bools() -> Result<()> {
-        echoes::run(&proptest::bool::ANY, |v, instance, store, runtime| {
+        echoes::all_eq(&proptest::bool::ANY, |v, instance, store, runtime| {
             runtime.block_on(instance.exports().call_echo_bool(store, v))
+        })
+    }
+
+    #[test]
+    fn u8s() -> Result<()> {
+        echoes::all_eq(&proptest::num::u8::ANY, |v, instance, store, runtime| {
+            runtime.block_on(instance.exports().call_echo_u8(store, v))
+        })
+    }
+
+    #[test]
+    fn s8s() -> Result<()> {
+        echoes::all_eq(&proptest::num::i8::ANY, |v, instance, store, runtime| {
+            runtime.block_on(instance.exports().call_echo_s8(store, v))
+        })
+    }
+
+    #[test]
+    fn u16s() -> Result<()> {
+        echoes::all_eq(&proptest::num::u16::ANY, |v, instance, store, runtime| {
+            runtime.block_on(instance.exports().call_echo_u16(store, v))
+        })
+    }
+
+    #[test]
+    fn s16s() -> Result<()> {
+        echoes::all_eq(&proptest::num::i16::ANY, |v, instance, store, runtime| {
+            runtime.block_on(instance.exports().call_echo_s16(store, v))
+        })
+    }
+
+    #[test]
+    fn u32s() -> Result<()> {
+        echoes::all_eq(&proptest::num::u32::ANY, |v, instance, store, runtime| {
+            runtime.block_on(instance.exports().call_echo_u32(store, v))
+        })
+    }
+
+    #[test]
+    fn s32s() -> Result<()> {
+        echoes::all_eq(&proptest::num::i32::ANY, |v, instance, store, runtime| {
+            runtime.block_on(instance.exports().call_echo_s32(store, v))
+        })
+    }
+
+    #[test]
+    fn u64s() -> Result<()> {
+        echoes::all_eq(&proptest::num::u64::ANY, |v, instance, store, runtime| {
+            runtime.block_on(instance.exports().call_echo_u64(store, v))
+        })
+    }
+
+    #[test]
+    fn s64s() -> Result<()> {
+        echoes::all_eq(&proptest::num::i64::ANY, |v, instance, store, runtime| {
+            runtime.block_on(instance.exports().call_echo_s64(store, v))
+        })
+    }
+
+    #[test]
+    fn chars() -> Result<()> {
+        echoes::all_eq(&proptest::char::any(), |v, instance, store, runtime| {
+            runtime.block_on(instance.exports().call_echo_char(store, v))
+        })
+    }
+
+    #[test]
+    fn float32s() -> Result<()> {
+        echoes::test(&proptest::num::f32::ANY, |v, instance, store, runtime| {
+            let result = runtime.block_on(instance.exports().call_echo_float32(store, v))?;
+            assert!((result.is_nan() && v.is_nan()) || result == v);
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn float64s() -> Result<()> {
+        echoes::test(&proptest::num::f64::ANY, |v, instance, store, runtime| {
+            let result = runtime.block_on(instance.exports().call_echo_float64(store, v))?;
+            assert!((result.is_nan() && v.is_nan()) || result == v);
+            Ok(())
         })
     }
 }
