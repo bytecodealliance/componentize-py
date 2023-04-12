@@ -471,6 +471,24 @@ def exports_echo_many(v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v1
         }
     }
 
+    #[derive(Debug, Copy, Clone)]
+    struct MyFloat32(f32);
+
+    impl PartialEq<MyFloat32> for MyFloat32 {
+        fn eq(&self, other: &Self) -> bool {
+            (self.0.is_nan() && other.0.is_nan()) || (self.0 == other.0)
+        }
+    }
+
+    #[derive(Debug, Copy, Clone)]
+    struct MyFloat64(f64);
+
+    impl PartialEq<MyFloat64> for MyFloat64 {
+        fn eq(&self, other: &Self) -> bool {
+            (self.0.is_nan() && other.0.is_nan()) || (self.0 == other.0)
+        }
+    }
+
     #[test]
     fn bools() -> Result<()> {
         echoes::all_eq(&proptest::bool::ANY, |v, instance, store, runtime| {
@@ -543,19 +561,163 @@ def exports_echo_many(v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v1
 
     #[test]
     fn float32s() -> Result<()> {
-        echoes::test(&proptest::num::f32::ANY, |v, instance, store, runtime| {
-            let result = runtime.block_on(instance.exports().call_echo_float32(store, v))?;
-            assert!((result.is_nan() && v.is_nan()) || result == v);
-            Ok(())
-        })
+        echoes::all_eq(
+            &proptest::num::f32::ANY.prop_map(MyFloat32),
+            |v, instance, store, runtime| {
+                Ok(MyFloat32(runtime.block_on(
+                    instance.exports().call_echo_float32(store, v.0),
+                )?))
+            },
+        )
     }
 
     #[test]
     fn float64s() -> Result<()> {
-        echoes::test(&proptest::num::f64::ANY, |v, instance, store, runtime| {
-            let result = runtime.block_on(instance.exports().call_echo_float64(store, v))?;
-            assert!((result.is_nan() && v.is_nan()) || result == v);
-            Ok(())
-        })
+        echoes::all_eq(
+            &proptest::num::f64::ANY.prop_map(MyFloat64),
+            |v, instance, store, runtime| {
+                Ok(MyFloat64(runtime.block_on(
+                    instance.exports().call_echo_float64(store, v.0),
+                )?))
+            },
+        )
+    }
+
+    fn size_range() -> proptest::collection::SizeRange {
+        (0..100).into()
+    }
+
+    #[test]
+    fn list_bools() -> Result<()> {
+        echoes::all_eq(
+            &proptest::collection::vec(proptest::bool::ANY, size_range()),
+            |v, instance, store, runtime| {
+                runtime.block_on(instance.exports().call_echo_list_bool(store, &v))
+            },
+        )
+    }
+
+    #[test]
+    fn list_u8s() -> Result<()> {
+        echoes::all_eq(
+            &proptest::collection::vec(proptest::num::u8::ANY, size_range()),
+            |v, instance, store, runtime| {
+                runtime.block_on(instance.exports().call_echo_list_u8(store, &v))
+            },
+        )
+    }
+
+    #[test]
+    fn list_s8s() -> Result<()> {
+        echoes::all_eq(
+            &proptest::collection::vec(proptest::num::i8::ANY, size_range()),
+            |v, instance, store, runtime| {
+                runtime.block_on(instance.exports().call_echo_list_s8(store, &v))
+            },
+        )
+    }
+
+    #[test]
+    fn list_u16s() -> Result<()> {
+        echoes::all_eq(
+            &proptest::collection::vec(proptest::num::u16::ANY, size_range()),
+            |v, instance, store, runtime| {
+                runtime.block_on(instance.exports().call_echo_list_u16(store, &v))
+            },
+        )
+    }
+
+    #[test]
+    fn list_s16s() -> Result<()> {
+        echoes::all_eq(
+            &proptest::collection::vec(proptest::num::i16::ANY, size_range()),
+            |v, instance, store, runtime| {
+                runtime.block_on(instance.exports().call_echo_list_s16(store, &v))
+            },
+        )
+    }
+
+    #[test]
+    fn list_u32s() -> Result<()> {
+        echoes::all_eq(
+            &proptest::collection::vec(proptest::num::u32::ANY, size_range()),
+            |v, instance, store, runtime| {
+                runtime.block_on(instance.exports().call_echo_list_u32(store, &v))
+            },
+        )
+    }
+
+    #[test]
+    fn list_s32s() -> Result<()> {
+        echoes::all_eq(
+            &proptest::collection::vec(proptest::num::i32::ANY, size_range()),
+            |v, instance, store, runtime| {
+                runtime.block_on(instance.exports().call_echo_list_s32(store, &v))
+            },
+        )
+    }
+
+    #[test]
+    fn list_u64s() -> Result<()> {
+        echoes::all_eq(
+            &proptest::collection::vec(proptest::num::u64::ANY, size_range()),
+            |v, instance, store, runtime| {
+                runtime.block_on(instance.exports().call_echo_list_u64(store, &v))
+            },
+        )
+    }
+
+    #[test]
+    fn list_s64s() -> Result<()> {
+        echoes::all_eq(
+            &proptest::collection::vec(proptest::num::i64::ANY, size_range()),
+            |v, instance, store, runtime| {
+                runtime.block_on(instance.exports().call_echo_list_s64(store, &v))
+            },
+        )
+    }
+
+    #[test]
+    fn list_chars() -> Result<()> {
+        echoes::all_eq(
+            &proptest::collection::vec(proptest::char::any(), size_range()),
+            |v, instance, store, runtime| {
+                runtime.block_on(instance.exports().call_echo_list_char(store, &v))
+            },
+        )
+    }
+
+    #[test]
+    fn list_float32s() -> Result<()> {
+        echoes::all_eq(
+            &proptest::collection::vec(proptest::num::f32::ANY.prop_map(MyFloat32), size_range()),
+            |v, instance, store, runtime| {
+                Ok(runtime
+                    .block_on(instance.exports().call_echo_list_float32(
+                        store,
+                        &v.into_iter().map(|v| v.0).collect::<Vec<_>>(),
+                    ))?
+                    .into_iter()
+                    .map(MyFloat32)
+                    .collect())
+            },
+        )
+    }
+
+    #[test]
+    fn list_float64s() -> Result<()> {
+        echoes::all_eq(
+            &proptest::collection::vec(proptest::num::f64::ANY.prop_map(MyFloat64), size_range()),
+            |v, instance, store, runtime| {
+                Ok(runtime
+                    .block_on(instance.exports().call_echo_list_float64(
+                        store,
+                        &v.into_iter().map(|v| v.0).collect::<Vec<_>>(),
+                    ))?
+                    .into_iter()
+                    .map(MyFloat64)
+                    .collect())
+            },
+        )
     }
 }

@@ -136,8 +136,12 @@ impl<'a> FunctionBindgen<'a> {
 
                 self.lower(ty, context, value);
 
+                for local in locals[lift_index..][..abi.flattened.len()].iter().rev() {
+                    self.push(Ins::LocalSet(*local));
+                }
+
                 for local in &locals[lift_index..][..abi.flattened.len()] {
-                    self.push(Ins::LocalTee(*local));
+                    self.push(Ins::LocalGet(*local));
                 }
 
                 lift_index += abi.flattened.len();
@@ -542,6 +546,11 @@ impl<'a> FunctionBindgen<'a> {
 
                     self.store(*ty, context, element_value, element_destination);
 
+                    self.push(Ins::LocalGet(index));
+                    self.push(Ins::I32Const(1));
+                    self.push(Ins::I32Add);
+                    self.push(Ins::LocalSet(index));
+
                     self.push(Ins::Br(loop_));
 
                     self.push(Ins::End);
@@ -887,6 +896,11 @@ impl<'a> FunctionBindgen<'a> {
                     self.load(*ty, context, element_source);
 
                     self.link_call(Link::ListAppend);
+
+                    self.push(Ins::LocalGet(index));
+                    self.push(Ins::I32Const(1));
+                    self.push(Ins::I32Add);
+                    self.push(Ins::LocalSet(index));
 
                     self.push(Ins::Br(loop_));
 
@@ -1279,6 +1293,11 @@ impl<'a> FunctionBindgen<'a> {
 
                     self.free_stored(*ty, element_pointer);
 
+                    self.push(Ins::LocalGet(index));
+                    self.push(Ins::I32Const(1));
+                    self.push(Ins::I32Add);
+                    self.push(Ins::LocalSet(index));
+
                     self.push(Ins::Br(loop_));
 
                     self.push(Ins::End);
@@ -1384,6 +1403,11 @@ impl<'a> FunctionBindgen<'a> {
                     self.push(Ins::LocalSet(element_value));
 
                     self.free_stored(*ty, element_value);
+
+                    self.push(Ins::LocalGet(index));
+                    self.push(Ins::I32Const(1));
+                    self.push(Ins::I32Add);
+                    self.push(Ins::LocalSet(index));
 
                     self.push(Ins::Br(loop_));
 

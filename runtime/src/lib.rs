@@ -176,6 +176,8 @@ fn do_init() -> Result<()> {
 
 #[export_name = "wizer.initialize"]
 pub extern "C" fn init() {
+    run_ctors();
+
     do_init().unwrap();
 }
 
@@ -190,6 +192,8 @@ pub unsafe extern "C" fn componentize_py_dispatch(
     params: *const c_void,
     results: *mut c_void,
 ) {
+    run_ctors();
+
     Python::with_gil(|py| {
         let mut params_lifted =
             vec![MaybeUninit::<&PyAny>::uninit(); param_count.try_into().unwrap()];
@@ -227,6 +231,15 @@ pub unsafe extern "C" fn componentize_py_dispatch(
             lower,
         );
     });
+}
+
+pub fn run_ctors() {
+    unsafe {
+        extern "C" {
+            fn __wasm_call_ctors();
+        }
+        __wasm_call_ctors();
+    }
 }
 
 /// # Safety
