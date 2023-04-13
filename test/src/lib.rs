@@ -271,7 +271,6 @@ def exports_foo(v):
             }
 
             async fn echo_list_list_u8(&mut self, v: Vec<Vec<u8>>) -> Result<Vec<Vec<u8>>> {
-                eprintln!("got {v:?}");
                 Ok(v)
             }
 
@@ -771,13 +770,43 @@ def exports_echo_many(v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v1
     }
 
     #[test]
-    fn list_strings() -> Result<()> {
+    fn many() -> Result<()> {
         echoes::all_eq(
-            &proptest::collection::vec(proptest::string::string_regex(".*")?, 0..MAX_SIZE),
-            |v, instance, store, runtime| {
-                runtime.block_on(instance.exports().call_echo_list_string(
-                    store,
-                    &v.iter().map(String::as_str).collect::<Vec<_>>(),
+            &(
+                (
+                    proptest::bool::ANY,
+                    proptest::num::u8::ANY,
+                    proptest::num::u16::ANY,
+                    proptest::num::u32::ANY,
+                    proptest::num::u64::ANY,
+                    proptest::num::i8::ANY,
+                    proptest::num::i16::ANY,
+                    proptest::num::i32::ANY,
+                ),
+                (
+                    proptest::num::i64::ANY,
+                    proptest::num::f32::ANY.prop_map(MyFloat32),
+                    proptest::num::f64::ANY.prop_map(MyFloat64),
+                    proptest::char::any(),
+                    proptest::string::string_regex(".*")?,
+                    proptest::collection::vec(proptest::bool::ANY, 0..MAX_SIZE),
+                    proptest::collection::vec(proptest::num::u8::ANY, 0..MAX_SIZE),
+                    proptest::collection::vec(proptest::num::u16::ANY, 0..MAX_SIZE),
+                ),
+            ),
+            |((v1, v2, v3, v4, v5, v6, v7, v8), (v9, v10, v11, v12, v13, v14, v15, v16)),
+             instance,
+             store,
+             runtime| {
+                let (v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16) =
+                    runtime.block_on(instance.exports().call_echo_many(
+                        store, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10.0, v11.0, v12, &v13, &v14,
+                        &v15, &v16,
+                    ))?;
+
+                Ok((
+                    (v1, v2, v3, v4, v5, v6, v7, v8),
+                    (v9, MyFloat32(v10), MyFloat64(v11), v12, v13, v14, v15, v16),
                 ))
             },
         )

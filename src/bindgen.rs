@@ -14,6 +14,8 @@ use {
 const WORD_SIZE: usize = 4;
 const WORD_ALIGN: usize = 2; // as a power of two
 
+const STACK_ALIGNMENT: usize = 8;
+
 pub(crate) const DISPATCHABLE_CORE_PARAM_COUNT: usize = 3;
 pub(crate) const DISPATCH_CORE_PARAM_COUNT: usize = DISPATCHABLE_CORE_PARAM_COUNT + 1;
 
@@ -378,7 +380,7 @@ impl<'a> FunctionBindgen<'a> {
     fn push_stack(&mut self, size: usize) {
         self.push(Ins::GlobalGet(self.stack_pointer));
         self.push(Ins::I32Const(
-            abi::align(size, WORD_SIZE).try_into().unwrap(),
+            abi::align(size, STACK_ALIGNMENT).try_into().unwrap(),
         ));
         self.push(Ins::I32Sub);
         self.push(Ins::GlobalSet(self.stack_pointer));
@@ -387,7 +389,7 @@ impl<'a> FunctionBindgen<'a> {
     fn pop_stack(&mut self, size: usize) {
         self.push(Ins::GlobalGet(self.stack_pointer));
         self.push(Ins::I32Const(
-            abi::align(size, WORD_SIZE).try_into().unwrap(),
+            abi::align(size, STACK_ALIGNMENT).try_into().unwrap(),
         ));
         self.push(Ins::I32Add);
         self.push(Ins::GlobalSet(self.stack_pointer));
