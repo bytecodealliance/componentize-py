@@ -259,6 +259,13 @@ pub unsafe extern "C" fn cabi_realloc(
 
 /// # Safety
 /// TODO
+#[export_name = "componentize-py#Allocate"]
+pub unsafe extern "C" fn componentize_py_allocate(size: usize, align: usize) -> *mut u8 {
+    alloc::alloc(Layout::from_size_align(size, align).unwrap())
+}
+
+/// # Safety
+/// TODO
 #[export_name = "componentize-py#Free"]
 pub unsafe extern "C" fn componentize_py_free(ptr: *mut u8, size: usize, align: usize) {
     alloc::dealloc(ptr, Layout::from_size_align(size, align).unwrap())
@@ -331,17 +338,6 @@ pub extern "C" fn componentize_py_get_list_element<'a>(
     value.downcast::<PyList>().unwrap().get_item(index).unwrap()
 }
 
-/// # Safety
-/// TODO
-#[export_name = "componentize-py#Allocate"]
-pub unsafe extern "C" fn componentize_py_allocate(
-    _py: &Python,
-    size: usize,
-    align: usize,
-) -> *mut u8 {
-    alloc::alloc(Layout::from_size_align(size, align).unwrap())
-}
-
 #[export_name = "componentize-py#LiftI32"]
 pub extern "C" fn componentize_py_lift_i32<'a>(py: &'a Python<'a>, value: i32) -> &'a PyAny {
     value.to_object(*py).into_ref(*py).downcast().unwrap()
@@ -408,5 +404,6 @@ pub extern "C" fn componentize_py_make_list<'a>(py: &'a Python) -> &'a PyList {
 
 #[export_name = "componentize-py#ListAppend"]
 pub extern "C" fn componentize_py_list_append(_py: &Python, list: &PyList, element: &PyAny) {
+    assert!(list.len() < 100);
     list.append(element).unwrap();
 }

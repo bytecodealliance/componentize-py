@@ -271,6 +271,7 @@ def exports_foo(v):
             }
 
             async fn echo_list_list_u8(&mut self, v: Vec<Vec<u8>>) -> Result<Vec<Vec<u8>>> {
+                eprintln!("got {v:?}");
                 Ok(v)
             }
 
@@ -583,14 +584,12 @@ def exports_echo_many(v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v1
         )
     }
 
-    fn size_range() -> proptest::collection::SizeRange {
-        (0..100).into()
-    }
+    const MAX_SIZE: usize = 100;
 
     #[test]
     fn list_bools() -> Result<()> {
         echoes::all_eq(
-            &proptest::collection::vec(proptest::bool::ANY, size_range()),
+            &proptest::collection::vec(proptest::bool::ANY, 0..MAX_SIZE),
             |v, instance, store, runtime| {
                 runtime.block_on(instance.exports().call_echo_list_bool(store, &v))
             },
@@ -600,7 +599,7 @@ def exports_echo_many(v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v1
     #[test]
     fn list_u8s() -> Result<()> {
         echoes::all_eq(
-            &proptest::collection::vec(proptest::num::u8::ANY, size_range()),
+            &proptest::collection::vec(proptest::num::u8::ANY, 0..MAX_SIZE),
             |v, instance, store, runtime| {
                 runtime.block_on(instance.exports().call_echo_list_u8(store, &v))
             },
@@ -608,9 +607,49 @@ def exports_echo_many(v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v1
     }
 
     #[test]
+    fn list_list_u8s() -> Result<()> {
+        echoes::all_eq(
+            &proptest::collection::vec(
+                proptest::collection::vec(proptest::num::u8::ANY, 0..MAX_SIZE / 2),
+                0..MAX_SIZE,
+            ),
+            |v, instance, store, runtime| {
+                runtime.block_on(instance.exports().call_echo_list_list_u8(
+                    store,
+                    &v.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                ))
+            },
+        )
+    }
+
+    #[test]
+    fn list_list_list_u8s() -> Result<()> {
+        echoes::all_eq(
+            &proptest::collection::vec(
+                proptest::collection::vec(
+                    proptest::collection::vec(proptest::num::u8::ANY, 0..MAX_SIZE / 4),
+                    0..MAX_SIZE / 2,
+                ),
+                0..MAX_SIZE,
+            ),
+            |v, instance, store, runtime| {
+                let slices = v
+                    .iter()
+                    .map(|v| v.iter().map(Vec::as_slice).collect::<Vec<_>>())
+                    .collect::<Vec<_>>();
+
+                runtime.block_on(instance.exports().call_echo_list_list_list_u8(
+                    store,
+                    &slices.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                ))
+            },
+        )
+    }
+
+    #[test]
     fn list_s8s() -> Result<()> {
         echoes::all_eq(
-            &proptest::collection::vec(proptest::num::i8::ANY, size_range()),
+            &proptest::collection::vec(proptest::num::i8::ANY, 0..MAX_SIZE),
             |v, instance, store, runtime| {
                 runtime.block_on(instance.exports().call_echo_list_s8(store, &v))
             },
@@ -620,7 +659,7 @@ def exports_echo_many(v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v1
     #[test]
     fn list_u16s() -> Result<()> {
         echoes::all_eq(
-            &proptest::collection::vec(proptest::num::u16::ANY, size_range()),
+            &proptest::collection::vec(proptest::num::u16::ANY, 0..MAX_SIZE),
             |v, instance, store, runtime| {
                 runtime.block_on(instance.exports().call_echo_list_u16(store, &v))
             },
@@ -630,7 +669,7 @@ def exports_echo_many(v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v1
     #[test]
     fn list_s16s() -> Result<()> {
         echoes::all_eq(
-            &proptest::collection::vec(proptest::num::i16::ANY, size_range()),
+            &proptest::collection::vec(proptest::num::i16::ANY, 0..MAX_SIZE),
             |v, instance, store, runtime| {
                 runtime.block_on(instance.exports().call_echo_list_s16(store, &v))
             },
@@ -640,7 +679,7 @@ def exports_echo_many(v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v1
     #[test]
     fn list_u32s() -> Result<()> {
         echoes::all_eq(
-            &proptest::collection::vec(proptest::num::u32::ANY, size_range()),
+            &proptest::collection::vec(proptest::num::u32::ANY, 0..MAX_SIZE),
             |v, instance, store, runtime| {
                 runtime.block_on(instance.exports().call_echo_list_u32(store, &v))
             },
@@ -650,7 +689,7 @@ def exports_echo_many(v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v1
     #[test]
     fn list_s32s() -> Result<()> {
         echoes::all_eq(
-            &proptest::collection::vec(proptest::num::i32::ANY, size_range()),
+            &proptest::collection::vec(proptest::num::i32::ANY, 0..MAX_SIZE),
             |v, instance, store, runtime| {
                 runtime.block_on(instance.exports().call_echo_list_s32(store, &v))
             },
@@ -660,7 +699,7 @@ def exports_echo_many(v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v1
     #[test]
     fn list_u64s() -> Result<()> {
         echoes::all_eq(
-            &proptest::collection::vec(proptest::num::u64::ANY, size_range()),
+            &proptest::collection::vec(proptest::num::u64::ANY, 0..MAX_SIZE),
             |v, instance, store, runtime| {
                 runtime.block_on(instance.exports().call_echo_list_u64(store, &v))
             },
@@ -670,7 +709,7 @@ def exports_echo_many(v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v1
     #[test]
     fn list_s64s() -> Result<()> {
         echoes::all_eq(
-            &proptest::collection::vec(proptest::num::i64::ANY, size_range()),
+            &proptest::collection::vec(proptest::num::i64::ANY, 0..MAX_SIZE),
             |v, instance, store, runtime| {
                 runtime.block_on(instance.exports().call_echo_list_s64(store, &v))
             },
@@ -680,7 +719,7 @@ def exports_echo_many(v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v1
     #[test]
     fn list_chars() -> Result<()> {
         echoes::all_eq(
-            &proptest::collection::vec(proptest::char::any(), size_range()),
+            &proptest::collection::vec(proptest::char::any(), 0..MAX_SIZE),
             |v, instance, store, runtime| {
                 runtime.block_on(instance.exports().call_echo_list_char(store, &v))
             },
@@ -690,7 +729,7 @@ def exports_echo_many(v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v1
     #[test]
     fn list_float32s() -> Result<()> {
         echoes::all_eq(
-            &proptest::collection::vec(proptest::num::f32::ANY.prop_map(MyFloat32), size_range()),
+            &proptest::collection::vec(proptest::num::f32::ANY.prop_map(MyFloat32), 0..MAX_SIZE),
             |v, instance, store, runtime| {
                 Ok(runtime
                     .block_on(instance.exports().call_echo_list_float32(
@@ -707,7 +746,7 @@ def exports_echo_many(v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v1
     #[test]
     fn list_float64s() -> Result<()> {
         echoes::all_eq(
-            &proptest::collection::vec(proptest::num::f64::ANY.prop_map(MyFloat64), size_range()),
+            &proptest::collection::vec(proptest::num::f64::ANY.prop_map(MyFloat64), 0..MAX_SIZE),
             |v, instance, store, runtime| {
                 Ok(runtime
                     .block_on(instance.exports().call_echo_list_float64(

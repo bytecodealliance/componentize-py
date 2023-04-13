@@ -72,7 +72,6 @@ pub(crate) struct FunctionBindgen<'a> {
     params_abi: Abi,
     results_abi: Abi,
     local_stack: Vec<bool>,
-    top_block: u32,
     param_count: usize,
 }
 
@@ -97,7 +96,6 @@ impl<'a> FunctionBindgen<'a> {
             results_abi: abi::record_abi(resolve, results.types()),
             local_types: Vec::new(),
             local_stack: Vec::new(),
-            top_block: 0,
             instructions: Vec::new(),
             param_count,
         }
@@ -274,16 +272,20 @@ impl<'a> FunctionBindgen<'a> {
             self.push(Ins::LocalGet(0));
         };
 
-        let mut result = None;
-        if self.results_abi.flattened.len() <= MAX_FLAT_RESULTS {
+        let result = if self.results_abi.flattened.len() <= MAX_FLAT_RESULTS {
             self.push_stack(self.results_abi.size);
-
             self.get_stack();
+
+            None
         } else {
-            let my_result = self.push_local(ValType::I32);
-            result = Some(my_result);
-            self.push(Ins::LocalGet(my_result));
-        }
+            let result = self.push_local(ValType::I32);
+            self.push(Ins::I32Const(self.results_abi.size.try_into().unwrap()));
+            self.push(Ins::I32Const(self.results_abi.align.try_into().unwrap()));
+            self.link_call(Link::Allocate);
+            self.push(Ins::LocalTee(result));
+
+            Some(result)
+        };
 
         self.link_call(Link::Dispatch);
 
@@ -435,16 +437,6 @@ impl<'a> FunctionBindgen<'a> {
         }
     }
 
-    fn push_block(&mut self) -> u32 {
-        self.top_block += 1;
-        self.top_block
-    }
-
-    fn pop_block(&mut self, block: u32) {
-        assert!(block == self.top_block);
-        self.top_block -= 1;
-    }
-
     fn lower(&mut self, ty: Type, context: u32, value: u32) {
         match ty {
             Type::Bool
@@ -514,7 +506,6 @@ impl<'a> FunctionBindgen<'a> {
                     self.push(Ins::I32Const(0));
                     self.push(Ins::LocalSet(index));
 
-                    self.push(Ins::LocalGet(context));
                     self.push(Ins::LocalGet(length));
                     self.push(Ins::I32Const(abi.size.try_into().unwrap()));
                     self.push(Ins::I32Mul);
@@ -522,7 +513,6 @@ impl<'a> FunctionBindgen<'a> {
                     self.link_call(Link::Allocate);
                     self.push(Ins::LocalSet(destination));
 
-                    let loop_ = self.push_block();
                     self.push(Ins::Loop(BlockType::Empty));
 
                     self.push(Ins::LocalGet(index));
@@ -551,12 +541,11 @@ impl<'a> FunctionBindgen<'a> {
                     self.push(Ins::I32Add);
                     self.push(Ins::LocalSet(index));
 
-                    self.push(Ins::Br(loop_));
+                    self.push(Ins::Br(1));
 
                     self.push(Ins::End);
 
                     self.push(Ins::End);
-                    self.pop_block(loop_);
 
                     self.push(Ins::LocalGet(destination));
                     self.push(Ins::LocalGet(length));
@@ -874,7 +863,6 @@ impl<'a> FunctionBindgen<'a> {
                     self.push(Ins::I32Const(0));
                     self.push(Ins::LocalSet(index));
 
-                    let loop_ = self.push_block();
                     self.push(Ins::Loop(BlockType::Empty));
 
                     self.push(Ins::LocalGet(index));
@@ -902,12 +890,11 @@ impl<'a> FunctionBindgen<'a> {
                     self.push(Ins::I32Add);
                     self.push(Ins::LocalSet(index));
 
-                    self.push(Ins::Br(loop_));
+                    self.push(Ins::Br(1));
 
                     self.push(Ins::End);
 
                     self.push(Ins::End);
-                    self.pop_block(loop_);
 
                     self.push(Ins::LocalGet(destination));
 
@@ -1275,7 +1262,6 @@ impl<'a> FunctionBindgen<'a> {
                     self.push(Ins::I32Const(0));
                     self.push(Ins::LocalSet(index));
 
-                    let loop_ = self.push_block();
                     self.push(Ins::Loop(BlockType::Empty));
 
                     self.push(Ins::LocalGet(index));
@@ -1298,15 +1284,14 @@ impl<'a> FunctionBindgen<'a> {
                     self.push(Ins::I32Add);
                     self.push(Ins::LocalSet(index));
 
-                    self.push(Ins::Br(loop_));
+                    self.push(Ins::Br(1));
 
                     self.push(Ins::End);
 
                     self.push(Ins::End);
-                    self.pop_block(loop_);
 
                     self.push(Ins::LocalGet(pointer));
-                    self.push(Ins::LocalGet(index));
+                    self.push(Ins::LocalGet(length));
                     self.push(Ins::I32Const(abi.size.try_into().unwrap()));
                     self.push(Ins::I32Mul);
                     self.push(Ins::I32Const(abi.align.try_into().unwrap()));
@@ -1386,7 +1371,9 @@ impl<'a> FunctionBindgen<'a> {
                     )));
                     self.push(Ins::LocalSet(length));
 
-                    let loop_ = self.push_block();
+                    self.push(Ins::I32Const(0));
+                    self.push(Ins::LocalSet(index));
+
                     self.push(Ins::Loop(BlockType::Empty));
 
                     self.push(Ins::LocalGet(index));
@@ -1395,7 +1382,7 @@ impl<'a> FunctionBindgen<'a> {
 
                     self.push(Ins::If(BlockType::Empty));
 
-                    self.push(Ins::LocalGet(value));
+                    self.push(Ins::LocalGet(body));
                     self.push(Ins::LocalGet(index));
                     self.push(Ins::I32Const(abi.size.try_into().unwrap()));
                     self.push(Ins::I32Mul);
@@ -1409,12 +1396,11 @@ impl<'a> FunctionBindgen<'a> {
                     self.push(Ins::I32Add);
                     self.push(Ins::LocalSet(index));
 
-                    self.push(Ins::Br(loop_));
+                    self.push(Ins::Br(1));
 
                     self.push(Ins::End);
 
                     self.push(Ins::End);
-                    self.pop_block(loop_);
 
                     self.push(Ins::LocalGet(body));
                     self.push(Ins::LocalGet(length));
