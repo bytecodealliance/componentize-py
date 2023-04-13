@@ -2,7 +2,7 @@
 
 use {
     anyhow::{Error, Result},
-    componentize_py_shared::{self as symbols, Direction, Symbols},
+    componentize_py_shared::{self as symbols, Symbols},
     heck::{ToSnakeCase, ToUpperCamelCase},
     once_cell::sync::OnceCell,
     pyo3::{
@@ -131,11 +131,7 @@ fn do_init() -> Result<()> {
                         Ok(match ty {
                             symbols::Type::Owned(ty) => Type::Owned {
                                 constructor: py
-                                    .import(match ty.direction {
-                                        Direction::Import => "imports",
-                                        Direction::Export => "exports",
-                                    })?
-                                    .getattr(ty.interface)?
+                                    .import(ty.interface)?
                                     .getattr(
                                         if let Some(name) = ty.name {
                                             name.to_upper_camel_case()
@@ -404,6 +400,6 @@ pub extern "C" fn componentize_py_make_list<'a>(py: &'a Python) -> &'a PyList {
 
 #[export_name = "componentize-py#ListAppend"]
 pub extern "C" fn componentize_py_list_append(_py: &Python, list: &PyList, element: &PyAny) {
-    assert!(list.len() < 100);
+    assert!(list.len() < 200); // temporary, for debugging; remove this
     list.append(element).unwrap();
 }

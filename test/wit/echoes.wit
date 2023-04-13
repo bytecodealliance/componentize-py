@@ -1,4 +1,5 @@
 interface foo {
+  echo-nothing: func()
   echo-bool: func(v: bool) -> bool
   echo-u8: func(v: u8) -> u8
   echo-s8: func(v: s8) -> s8

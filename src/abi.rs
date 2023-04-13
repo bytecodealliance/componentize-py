@@ -32,7 +32,7 @@ pub(crate) fn record_abi(resolve: &Resolve, types: impl IntoIterator<Item = Type
     }
 
     Abi {
-        size,
+        size: align(size, align_),
         align: align_,
         flattened,
     }
