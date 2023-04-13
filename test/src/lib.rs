@@ -587,6 +587,16 @@ def exports_echo_many(v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v1
     const MAX_SIZE: usize = 100;
 
     #[test]
+    fn strings() -> Result<()> {
+        echoes::all_eq(
+            &proptest::string::string_regex(".*")?,
+            |v, instance, store, runtime| {
+                runtime.block_on(instance.exports().call_echo_string(store, &v))
+            },
+        )
+    }
+
+    #[test]
     fn list_bools() -> Result<()> {
         echoes::all_eq(
             &proptest::collection::vec(proptest::bool::ANY, 0..MAX_SIZE),
@@ -756,6 +766,19 @@ def exports_echo_many(v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v1
                     .into_iter()
                     .map(MyFloat64)
                     .collect())
+            },
+        )
+    }
+
+    #[test]
+    fn list_strings() -> Result<()> {
+        echoes::all_eq(
+            &proptest::collection::vec(proptest::string::string_regex(".*")?, 0..MAX_SIZE),
+            |v, instance, store, runtime| {
+                runtime.block_on(instance.exports().call_echo_list_string(
+                    store,
+                    &v.iter().map(String::as_str).collect::<Vec<_>>(),
+                ))
             },
         )
     }
