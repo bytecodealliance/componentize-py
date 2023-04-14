@@ -1,0 +1,16 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "componentize-py"
+version = "0.1.0"
+description = "Tool to package Python applications as WebAssembly components"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [ { name = "Fermyon Engineering", email = "engineering@fermyon.com" } ]
+maintainers = [ { name = "Fermyon Engineering", email = "engineering@fermyon.com" } ]
+keywords = [ "webassembly", "wasm", "component" ]
+
+[project.urls]
+repository = "https://github.com/dicej/componentize-py"

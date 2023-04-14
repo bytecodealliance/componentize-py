@@ -4,10 +4,10 @@ use {
         strategy::{Just, Strategy, ValueTree},
         test_runner::{Config, TestRng, TestRunner},
     },
-    std::{env, fmt::Write, fs, path::PathBuf},
+    std::{env, fmt::Write, fs, path::PathBuf, process::Command, str::FromStr},
 };
 
-const TEST_COUNT: usize = 10;
+const DEFAULT_TEST_COUNT: usize = 10;
 const MAX_PARAM_COUNT: usize = 8;
 const MAX_SIZE: usize = 20;
 const MAX_TUPLE_SIZE: usize = 12;
@@ -87,11 +87,11 @@ fn wit_type_name(wit: &mut String, test_index: usize, ty: &Type, ty_index: &mut 
                     format!("f{index}: {ty}")
                 })
                 .collect::<Vec<_>>()
-                .join(",\n");
+                .join(",\n        ");
 
             write!(
                 wit,
-                "\
+                "
     record record-test{test_index}-type{ty_index} {{
         {types}
     }}
@@ -440,12 +440,23 @@ fn main() -> Result<()> {
         "cargo:warning=using seed {} (set COMPONENTIZE_PY_TEST_SEED env var to override)",
         hex::encode(&seed)
     );
-
     println!("cargo:rerun-if-env-changed=COMPONENTIZE_PY_TEST_SEED");
     println!(
         "cargo:rustc-env=COMPONENTIZE_PY_TEST_SEED={}",
         hex::encode(&seed)
     );
+
+    let count = if let Ok(count) = env::var("COMPONENTIZE_PY_TEST_COUNT") {
+        usize::from_str(&count)?
+    } else {
+        DEFAULT_TEST_COUNT
+    };
+
+    println!(
+        "cargo:warning=using count {count} (set COMPONENTIZE_PY_TEST_COUNT env var to override)",
+    );
+    println!("cargo:rerun-if-env-changed=COMPONENTIZE_PY_TEST_COUNT");
+    println!("cargo:rustc-env=COMPONENTIZE_PY_TEST_COUNT={count}",);
 
     let config = Config::default();
     let algorithm = config.rng_algorithm;
@@ -456,7 +467,7 @@ fn main() -> Result<()> {
     let mut guest_functions = String::new();
     let mut test_functions = String::new();
 
-    for test_index in 0..TEST_COUNT {
+    for test_index in 0..count {
         let params = param_strategy
             .new_tree(&mut runner)
             .map_err(|reason| anyhow!("unable to generate params: {reason:?}"))?
@@ -487,7 +498,7 @@ fn main() -> Result<()> {
                 .collect::<Vec<_>>()
                 .join(", ");
 
-            writeln!(&mut wit, "    echo{test_index}: func({params}){result}").unwrap();
+            writeln!(&mut wit, "\n    echo{test_index}: func({params}){result}").unwrap();
         }
 
         // Guest function implementations
@@ -729,6 +740,12 @@ static TESTER: Lazy<Tester<Host>> = Lazy::new(|| {{
     );
 
     fs::write(out_dir.join("echoes_generated.rs"), rust.as_bytes())?;
+
+    _ = Command::new("rustfmt")
+        .arg("--edition")
+        .arg("2021")
+        .arg(out_dir.join("echoes_generated.rs"))
+        .status();
 
     Ok(())
 }
