@@ -117,7 +117,7 @@ fn wit_type_name(wit: &mut String, test_index: usize, ty: &Type, ty_index: &mut 
     }
 }
 
-fn borrows(ty: &Type) -> bool {
+fn borrow_depth(ty: &Type) -> usize {
     match ty {
         Type::Bool
         | Type::U8
@@ -130,9 +130,12 @@ fn borrows(ty: &Type) -> bool {
         | Type::S64
         | Type::Float32
         | Type::Float64
-        | Type::Char => false,
-        Type::String | Type::List(_) => true,
-        Type::Record(types) | Type::Tuple(types) => types.iter().any(borrows),
+        | Type::Char => 0,
+        Type::String => 1,
+        Type::Record(types) | Type::Tuple(types) => {
+            types.iter().map(borrow_depth).max().unwrap_or(0)
+        }
+        Type::List(ty) => 1 + borrow_depth(ty),
     }
 }
 
@@ -157,7 +160,7 @@ fn rust_type_name(module: &str, test_index: usize, ty: &Type, ty_index: &mut usi
             }
             let name = format!(
                 "{module}::RecordTest{test_index}Type{ty_index}{}",
-                if borrows(ty) { "Result" } else { "" }
+                if borrow_depth(ty) > 0 { "Result" } else { "" }
             );
             *ty_index += 1;
             name
@@ -183,6 +186,7 @@ fn test_arg(
     ty: &Type,
     ty_index: &mut usize,
     tmp_index: &mut usize,
+    depth: Option<usize>,
 ) -> String {
     match ty {
         Type::Bool
@@ -211,7 +215,8 @@ fn test_arg(
                             test_index,
                             ty,
                             ty_index,
-                            tmp_index
+                            tmp_index,
+                            depth
                         )
                     )
                 })
@@ -220,7 +225,7 @@ fn test_arg(
 
             let arg = format!(
                 "exports::RecordTest{test_index}Type{ty_index}{} {{ {inits} }}",
-                if borrows(ty) { "Param" } else { "" }
+                if borrow_depth(ty) > 0 { "Param" } else { "" }
             );
             *ty_index += 1;
             arg
@@ -238,7 +243,8 @@ fn test_arg(
                             test_index,
                             ty,
                             ty_index,
-                            tmp_index
+                            tmp_index,
+                            depth
                         )
                     )
                 })
@@ -247,21 +253,61 @@ fn test_arg(
             format!("({args})")
         }
         Type::List(ty) => {
-            if borrows(ty) {
-                let tmp = format!("tmp{tmp_index}");
-                *tmp_index += 1;
+            if let Some(depth) = depth {
+                if depth == 0 {
+                    format!("{base}.as_slice()")
+                } else {
+                    let mut ty_index = *ty_index;
+                    let arg = test_arg(
+                        temporaries,
+                        "v",
+                        test_index,
+                        ty,
+                        &mut ty_index,
+                        tmp_index,
+                        Some(depth - 1),
+                    );
 
-                let arg = test_arg(temporaries, "v", test_index, ty, ty_index, tmp_index);
-                writeln!(
-                    temporaries,
-                    "let {tmp} = {base}.iter().map(|v| {arg}).collect::<Vec<_>>();"
-                )
-                .unwrap();
-
-                format!("{tmp}.as_slice()")
+                    format!("{base}.iter().map(|v| {arg}).collect::<Vec<_>>()")
+                }
             } else {
-                test_arg(temporaries, "v", test_index, ty, ty_index, tmp_index);
-                format!("{base}.as_slice()")
+                let borrow_depth = borrow_depth(ty);
+                if borrow_depth == 0 {
+                    test_arg(temporaries, "v", test_index, ty, ty_index, tmp_index, None);
+                    format!("{base}.as_slice()")
+                } else {
+                    let mut last_tmp = None;
+                    for depth in (0..borrow_depth).rev() {
+                        let mut my_ty_index = *ty_index;
+                        let arg = test_arg(
+                            temporaries,
+                            "v",
+                            test_index,
+                            ty,
+                            &mut my_ty_index,
+                            tmp_index,
+                            Some(depth),
+                        );
+
+                        *ty_index = my_ty_index.max(*ty_index);
+
+                        let tmp = format!("tmp{tmp_index}");
+                        *tmp_index += 1;
+
+                        let prev = last_tmp.as_deref().unwrap_or(base);
+
+                        writeln!(
+                            temporaries,
+                            "let {tmp} = {prev}.iter().map(|v| {arg}).collect::<Vec<_>>();"
+                        )
+                        .unwrap();
+
+                        last_tmp = Some(tmp)
+                    }
+
+                    let tmp = last_tmp.unwrap();
+                    format!("{tmp}.as_slice()")
+                }
             }
         }
     }
@@ -398,7 +444,7 @@ fn strategy(test_index: usize, ty: &Type, ty_index: &mut usize, max_size: usize)
                 format!(
                     "({strategies}).prop_map(|({params})| \
                      exports::RecordTest{test_index}Type{ty_index}{} {{ {inits} }})",
-                    if borrows(ty) { "Result" } else { "" }
+                    if borrow_depth(ty) > 0 { "Result" } else { "" }
                 )
             };
             *ty_index += 1;
@@ -586,6 +632,7 @@ def exports_echo{test_index}({params}):
                             ty,
                             &mut ty_index,
                             &mut tmp_index,
+                            None,
                         )
                     })
                     .collect::<Vec<_>>()
