@@ -1,15 +1,17 @@
+#![deny(warnings)]
+
 use {
     anyhow::{anyhow, Result},
     proptest::{
         strategy::{Just, Strategy, ValueTree},
         test_runner::{Config, TestRng, TestRunner},
     },
-    std::{env, fmt::Write, fs, path::PathBuf, process::Command, str::FromStr},
+    std::{cell::Cell, env, fmt::Write, fs, path::PathBuf, process::Command, rc::Rc, str::FromStr},
 };
 
 const DEFAULT_TEST_COUNT: usize = 10;
-const MAX_PARAM_COUNT: usize = 8;
-const MAX_SIZE: usize = 20;
+const MAX_PARAM_COUNT: usize = 12;
+const MAX_LIST_SIZE: usize = 100;
 const MAX_TUPLE_SIZE: usize = 12;
 
 #[derive(Clone, Debug)]
@@ -27,12 +29,31 @@ enum Type {
     Float64,
     Char,
     String,
-    Record(Vec<Type>),
+    Record { id: usize, fields: Vec<Type> },
     Tuple(Vec<Type>),
     List(Box<Type>),
 }
 
-fn any_type(max_size: usize) -> impl Strategy<Value = Type> {
+fn borrows(ty: &Type) -> bool {
+    match ty {
+        Type::Bool
+        | Type::U8
+        | Type::S8
+        | Type::U16
+        | Type::S16
+        | Type::U32
+        | Type::S32
+        | Type::U64
+        | Type::S64
+        | Type::Float32
+        | Type::Float64
+        | Type::Char => false,
+        Type::String | Type::List(_) => true,
+        Type::Record { fields, .. } | Type::Tuple(fields) => fields.iter().any(borrows),
+    }
+}
+
+fn any_type(max_size: usize, next_id: Rc<Cell<usize>>) -> impl Strategy<Value = Type> {
     (0..16).prop_flat_map(move |index| match index {
         0 => Just(Type::Bool).boxed(),
         1 => Just(Type::U8).boxed(),
@@ -47,23 +68,31 @@ fn any_type(max_size: usize) -> impl Strategy<Value = Type> {
         10 => Just(Type::Float64).boxed(),
         11 => Just(Type::Char).boxed(),
         12 => Just(Type::String).boxed(),
-        13 => proptest::collection::vec(any_type(max_size / 2), 0..max_size.max(1))
-            .prop_map(Type::Record)
-            .boxed(),
-        14 => proptest::collection::vec(
-            any_type(max_size / 2),
-            0..max_size.max(2).min(MAX_TUPLE_SIZE),
-        )
-        .prop_map(Type::Tuple)
-        .boxed(),
-        15 => any_type(max_size)
+        13 => {
+            proptest::collection::vec(any_type(max_size / 2, next_id.clone()), 0..max_size.max(1))
+                .prop_map({
+                    let next_id = next_id.clone();
+                    move |fields| {
+                        let id = next_id.get();
+                        next_id.set(id + 1);
+                        Type::Record { id, fields }
+                    }
+                })
+                .boxed()
+        }
+        14 => {
+            proptest::collection::vec(any_type(max_size / 2, next_id.clone()), 0..max_size.max(2))
+                .prop_map(Type::Tuple)
+                .boxed()
+        }
+        15 => any_type(max_size, next_id.clone())
             .prop_map(|ty| Type::List(Box::new(ty)))
             .boxed(),
         _ => unreachable!(),
     })
 }
 
-fn wit_type_name(wit: &mut String, test_index: usize, ty: &Type, ty_index: &mut usize) -> String {
+fn wit_type_name(wit: &mut String, ty: &Type) -> String {
     match ty {
         Type::Bool => "bool".into(),
         Type::U8 => "u8".into(),
@@ -78,12 +107,12 @@ fn wit_type_name(wit: &mut String, test_index: usize, ty: &Type, ty_index: &mut 
         Type::Float64 => "float64".into(),
         Type::Char => "char".into(),
         Type::String => "string".into(),
-        Type::Record(types) => {
-            let types = types
+        Type::Record { id, fields } => {
+            let types = fields
                 .iter()
                 .enumerate()
                 .map(|(index, ty)| {
-                    let ty = wit_type_name(wit, test_index, ty, ty_index);
+                    let ty = wit_type_name(wit, ty);
                     format!("f{index}: {ty}")
                 })
                 .collect::<Vec<_>>()
@@ -92,54 +121,30 @@ fn wit_type_name(wit: &mut String, test_index: usize, ty: &Type, ty_index: &mut 
             write!(
                 wit,
                 "
-    record record-test{test_index}-type{ty_index} {{
+    record record-type{id} {{
         {types}
     }}
 "
             )
             .unwrap();
 
-            let name = format!("record-test{test_index}-type{ty_index}");
-            *ty_index += 1;
-            name
+            format!("record-type{id}")
         }
         Type::Tuple(types) => {
             let types = types
                 .iter()
-                .map(|ty| wit_type_name(wit, test_index, ty, ty_index))
+                .map(|ty| wit_type_name(wit, ty))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("tuple<{types}>")
         }
         Type::List(ty) => {
-            format!("list<{}>", wit_type_name(wit, test_index, ty, ty_index))
+            format!("list<{}>", wit_type_name(wit, ty))
         }
     }
 }
 
-fn borrow_depth(ty: &Type) -> usize {
-    match ty {
-        Type::Bool
-        | Type::U8
-        | Type::S8
-        | Type::U16
-        | Type::S16
-        | Type::U32
-        | Type::S32
-        | Type::U64
-        | Type::S64
-        | Type::Float32
-        | Type::Float64
-        | Type::Char => 0,
-        Type::String => 1,
-        Type::Record(types) | Type::Tuple(types) => {
-            types.iter().map(borrow_depth).max().unwrap_or(0)
-        }
-        Type::List(ty) => 1 + borrow_depth(ty),
-    }
-}
-
-fn rust_type_name(module: &str, test_index: usize, ty: &Type, ty_index: &mut usize) -> String {
+fn rust_type_name(module: &str, ty: &Type) -> String {
     match ty {
         Type::Bool => "bool".into(),
         Type::U8 => "u8".into(),
@@ -154,161 +159,22 @@ fn rust_type_name(module: &str, test_index: usize, ty: &Type, ty_index: &mut usi
         Type::Float64 => "f64".into(),
         Type::Char => "char".into(),
         Type::String => "String".into(),
-        Type::Record(types) => {
-            for ty in types {
-                rust_type_name(module, test_index, ty, ty_index);
-            }
-            let name = format!(
-                "{module}::RecordTest{test_index}Type{ty_index}{}",
-                if borrow_depth(ty) > 0 { "Result" } else { "" }
-            );
-            *ty_index += 1;
-            name
+        Type::Record { id, .. } => {
+            format!(
+                "{module}::RecordType{id}{}",
+                if borrows(ty) { "Result" } else { "" }
+            )
         }
         Type::Tuple(types) => {
             let types = types
                 .iter()
-                .map(|ty| format!("{},", rust_type_name(module, test_index, ty, ty_index)))
+                .map(|ty| format!("{},", rust_type_name(module, ty)))
                 .collect::<Vec<_>>()
                 .join(" ");
             format!("({types})")
         }
         Type::List(ty) => {
-            format!("Vec<{}>", rust_type_name(module, test_index, ty, ty_index))
-        }
-    }
-}
-
-fn test_arg(
-    temporaries: &mut String,
-    base: &str,
-    test_index: usize,
-    ty: &Type,
-    ty_index: &mut usize,
-    tmp_index: &mut usize,
-    depth: Option<usize>,
-) -> String {
-    match ty {
-        Type::Bool
-        | Type::U8
-        | Type::S8
-        | Type::U16
-        | Type::S16
-        | Type::U32
-        | Type::S32
-        | Type::U64
-        | Type::S64
-        | Type::Float32
-        | Type::Float64
-        | Type::Char => base.to_owned(),
-        Type::String => format!("{base}.as_str()"),
-        Type::Record(types) => {
-            let inits = types
-                .iter()
-                .enumerate()
-                .map(|(index, ty)| {
-                    format!(
-                        "f{index}: {}",
-                        test_arg(
-                            temporaries,
-                            &format!("{base}.f{index}"),
-                            test_index,
-                            ty,
-                            ty_index,
-                            tmp_index,
-                            depth
-                        )
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-
-            let arg = format!(
-                "exports::RecordTest{test_index}Type{ty_index}{} {{ {inits} }}",
-                if borrow_depth(ty) > 0 { "Param" } else { "" }
-            );
-            *ty_index += 1;
-            arg
-        }
-        Type::Tuple(types) => {
-            let args = types
-                .iter()
-                .enumerate()
-                .map(|(index, ty)| {
-                    format!(
-                        "{},",
-                        test_arg(
-                            temporaries,
-                            &format!("{base}.{index}"),
-                            test_index,
-                            ty,
-                            ty_index,
-                            tmp_index,
-                            depth
-                        )
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(" ");
-            format!("({args})")
-        }
-        Type::List(ty) => {
-            if let Some(depth) = depth {
-                if depth == 0 {
-                    format!("{base}.as_slice()")
-                } else {
-                    let mut ty_index = *ty_index;
-                    let arg = test_arg(
-                        temporaries,
-                        "v",
-                        test_index,
-                        ty,
-                        &mut ty_index,
-                        tmp_index,
-                        Some(depth - 1),
-                    );
-
-                    format!("{base}.iter().map(|v| {arg}).collect::<Vec<_>>()")
-                }
-            } else {
-                let borrow_depth = borrow_depth(ty);
-                if borrow_depth == 0 {
-                    test_arg(temporaries, "v", test_index, ty, ty_index, tmp_index, None);
-                    format!("{base}.as_slice()")
-                } else {
-                    let mut last_tmp = None;
-                    for depth in (0..borrow_depth).rev() {
-                        let mut my_ty_index = *ty_index;
-                        let arg = test_arg(
-                            temporaries,
-                            "v",
-                            test_index,
-                            ty,
-                            &mut my_ty_index,
-                            tmp_index,
-                            Some(depth),
-                        );
-
-                        *ty_index = my_ty_index.max(*ty_index);
-
-                        let tmp = format!("tmp{tmp_index}");
-                        *tmp_index += 1;
-
-                        let prev = last_tmp.as_deref().unwrap_or(base);
-
-                        writeln!(
-                            temporaries,
-                            "let {tmp} = {prev}.iter().map(|v| {arg}).collect::<Vec<_>>();"
-                        )
-                        .unwrap();
-
-                        last_tmp = Some(tmp)
-                    }
-
-                    let tmp = last_tmp.unwrap();
-                    format!("{tmp}.as_slice()")
-                }
-            }
+            format!("Vec<{}>", rust_type_name(module, ty))
         }
     }
 }
@@ -327,11 +193,11 @@ fn equality(a: &str, b: &str, ty: &Type) -> String {
         | Type::Char
         | Type::String => format!("({a} == {b})"),
         Type::Float32 | Type::Float64 => format!("(({a}.is_nan() && {b}.is_nan()) || {a} == {b})"),
-        Type::Record(types) => {
-            if types.is_empty() {
+        Type::Record { fields, .. } => {
+            if fields.is_empty() {
                 "true".into()
             } else {
-                types
+                fields
                     .iter()
                     .enumerate()
                     .map(|(index, ty)| {
@@ -362,7 +228,7 @@ fn equality(a: &str, b: &str, ty: &Type) -> String {
     }
 }
 
-fn strategy(test_index: usize, ty: &Type, ty_index: &mut usize, max_size: usize) -> String {
+fn strategy(ty: &Type, max_list_size: usize) -> String {
     match ty {
         Type::Bool => "proptest::bool::ANY".into(),
         Type::U8 => "proptest::num::u8::ANY".into(),
@@ -377,78 +243,37 @@ fn strategy(test_index: usize, ty: &Type, ty_index: &mut usize, max_size: usize)
         Type::Float64 => "proptest::num::f64::ANY".into(),
         Type::Char => "proptest::char::any()".into(),
         Type::String => r#"proptest::string::string_regex(".*").unwrap()"#.into(),
-        Type::Record(types) => {
-            let strategy = if types.is_empty() {
-                format!("Just(exports::RecordTest{test_index}Type{ty_index} {{}})")
+        Type::Record { id, fields } => {
+            if fields.is_empty() {
+                format!("Just(exports::RecordType{id} {{}})")
             } else {
-                let strategies = types
+                let strategies = fields
                     .iter()
-                    .map(|ty| strategy(test_index, ty, ty_index, max_size))
+                    .map(|ty| strategy(ty, max_list_size))
                     .collect::<Vec<_>>();
 
-                let (strategies, params) = match (strategies.len() - 1) / 10 {
-                    0 => (
-                        strategies
-                            .iter()
-                            .map(|s| format!("{s},"))
-                            .collect::<Vec<_>>()
-                            .join(" "),
-                        (0..strategies.len())
-                            .map(|index| format!("f{index},"))
-                            .collect::<Vec<_>>()
-                            .join(" "),
-                    ),
-                    1..=10 => (
-                        strategies
-                            .chunks(10)
-                            .map(|s| {
-                                format!(
-                                    "({}),",
-                                    s.iter()
-                                        .map(|s| format!("{s},"))
-                                        .collect::<Vec<_>>()
-                                        .join(" ")
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join(" "),
-                        {
-                            let mut index = 0;
-                            strategies
-                                .chunks(10)
-                                .map(|s| {
-                                    format!(
-                                        "({}),",
-                                        s.iter()
-                                            .map(|_| {
-                                                let param = format!("f{index},");
-                                                index += 1;
-                                                param
-                                            })
-                                            .collect::<Vec<_>>()
-                                            .join(" ")
-                                    )
-                                })
-                                .collect::<Vec<_>>()
-                                .join(" ")
-                        },
-                    ),
-                    _ => unreachable!("expected MAX_SIZE <= 109, was {MAX_SIZE}"),
-                };
+                let params = (0..strategies.len())
+                    .map(|index| format!("f{index},"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
 
-                let inits = (0..types.len())
+                let strategies = strategies
+                    .iter()
+                    .map(|s| format!("{s},"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+
+                let inits = (0..fields.len())
                     .map(|index| format!("f{index}"))
                     .collect::<Vec<_>>()
                     .join(", ");
 
                 format!(
                     "({strategies}).prop_map(|({params})| \
-                     exports::RecordTest{test_index}Type{ty_index}{} {{ {inits} }})",
-                    if borrow_depth(ty) > 0 { "Result" } else { "" }
+                     exports::RecordType{id}{} {{ {inits} }})",
+                    if borrows(ty) { "Result" } else { "" }
                 )
-            };
-            *ty_index += 1;
-            strategy
+            }
         }
         Type::Tuple(types) => {
             if types.is_empty() {
@@ -458,7 +283,7 @@ fn strategy(test_index: usize, ty: &Type, ty_index: &mut usize, max_size: usize)
                     "({})",
                     types
                         .iter()
-                        .map(|ty| format!("{},", strategy(test_index, ty, ty_index, max_size)))
+                        .map(|ty| format!("{},", strategy(ty, max_list_size)))
                         .collect::<Vec<_>>()
                         .join(" ")
                 )
@@ -466,8 +291,8 @@ fn strategy(test_index: usize, ty: &Type, ty_index: &mut usize, max_size: usize)
         }
         Type::List(ty) => {
             format!(
-                "proptest::collection::vec({}, 0..{max_size}.max(1))",
-                strategy(test_index, ty, ty_index, max_size / 2)
+                "proptest::collection::vec({}, 0..{max_list_size}.max(1))",
+                strategy(ty, max_list_size / 2)
             )
         }
     }
@@ -507,11 +332,16 @@ fn main() -> Result<()> {
     let config = Config::default();
     let algorithm = config.rng_algorithm;
     let mut runner = TestRunner::new_with_rng(config, TestRng::from_seed(algorithm, &seed));
-    let param_strategy = proptest::collection::vec(any_type(MAX_SIZE), 1..MAX_PARAM_COUNT);
+    let param_strategy = proptest::collection::vec(
+        any_type(MAX_TUPLE_SIZE, Rc::new(Cell::new(0))),
+        1..MAX_PARAM_COUNT,
+    );
     let mut wit = String::new();
     let mut host_functions = String::new();
     let mut guest_functions = String::new();
     let mut test_functions = String::new();
+    let mut typed_function_fields = String::new();
+    let mut typed_function_inits = String::new();
 
     for test_index in 0..count {
         let params = param_strategy
@@ -523,13 +353,10 @@ fn main() -> Result<()> {
 
         // WIT type and function declarations
         {
-            let types = {
-                let mut ty_index = 0;
-                params
-                    .iter()
-                    .map(|ty| wit_type_name(&mut wit, test_index, ty, &mut ty_index))
-                    .collect::<Vec<_>>()
-            };
+            let types = params
+                .iter()
+                .map(|ty| wit_type_name(&mut wit, ty))
+                .collect::<Vec<_>>();
 
             let result = match types.len() {
                 0 => String::new(),
@@ -566,13 +393,10 @@ def exports_echo{test_index}({params}):
 
         // Host function implementations
         {
-            let types = {
-                let mut ty_index = 0;
-                params
-                    .iter()
-                    .map(|ty| rust_type_name("imports", test_index, ty, &mut ty_index))
-                    .collect::<Vec<_>>()
-            };
+            let types = params
+                .iter()
+                .map(|ty| rust_type_name("imports", ty))
+                .collect::<Vec<_>>();
 
             let result_type = match types.len() {
                 0 => "()".to_owned(),
@@ -603,41 +427,52 @@ def exports_echo{test_index}({params}):
                 &mut host_functions,
                 "async fn echo{test_index}(&mut self, {params}) -> Result<{result_type}> {{ Ok({result}) }}"
             )
+                .unwrap();
+        }
+
+        // Typed function fields and inits
+        {
+            let types = params
+                .iter()
+                .map(|ty| rust_type_name("exports", ty))
+                .collect::<Vec<_>>();
+
+            let result_type = match types.len() {
+                0 => "()".to_owned(),
+                1 => types[0].clone(),
+                _ => format!("({})", types.join(", ")),
+            };
+
+            let params = types
+                .iter()
+                .map(|ty| format!("{ty},"))
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            writeln!(
+                &mut typed_function_fields,
+                "echo{test_index}: TypedFunc<({params}), ({result_type},)>,"
+            )
+            .unwrap();
+
+            writeln!(
+                &mut typed_function_inits,
+                r#"echo{test_index}: instance.typed_func::<({params}), ({result_type},)>("echo{test_index}")?,"#
+            )
             .unwrap();
         }
 
         // Test function implementations
         {
-            let types = {
-                let mut ty_index = 0;
-                params
-                    .iter()
-                    .map(|ty| rust_type_name("exports", test_index, ty, &mut ty_index))
-                    .collect::<Vec<_>>()
-            };
+            let types = params
+                .iter()
+                .map(|ty| rust_type_name("exports", ty))
+                .collect::<Vec<_>>();
 
-            let mut temporaries = String::new();
-
-            let args = {
-                let mut ty_index = 0;
-                let mut tmp_index = 0;
-                params
-                    .iter()
-                    .enumerate()
-                    .map(|(index, ty)| {
-                        test_arg(
-                            &mut temporaries,
-                            &format!("v.0.{index}"),
-                            test_index,
-                            ty,
-                            &mut ty_index,
-                            &mut tmp_index,
-                            None,
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            };
+            let args = (0..params.len())
+                .map(|index| format!("v.0.{index},"))
+                .collect::<Vec<_>>()
+                .join(" ");
 
             let equality = params
                 .iter()
@@ -648,14 +483,11 @@ def exports_echo{test_index}({params}):
                 .collect::<Vec<_>>()
                 .join(" && ");
 
-            let strategies = {
-                let mut ty_index = 0;
-                params
-                    .iter()
-                    .map(|ty| format!("{},", strategy(test_index, ty, &mut ty_index, MAX_SIZE)))
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            };
+            let strategies = params
+                .iter()
+                .map(|ty| format!("{},", strategy(ty, MAX_LIST_SIZE)))
+                .collect::<Vec<_>>()
+                .join(" ");
 
             let types = types
                 .iter()
@@ -664,7 +496,7 @@ def exports_echo{test_index}({params}):
                 .join(" ");
 
             let mut call = format!(
-                "runtime.block_on(instance.exports().call_echo{test_index}(store, {args}))?"
+                "runtime.block_on(instance.echo{test_index}.call_async(&mut *store, ({args})))?"
             );
 
             if params.len() == 1 {
@@ -692,8 +524,9 @@ impl PartialEq<TestType{test_index}> for TestType{test_index} {{
 #[test]
 fn test{test_index}() -> Result<()> {{
     TESTER.all_eq(&TestType{test_index}::strategy(), |v, instance, store, runtime| {{
-        {temporaries}
-        Ok(TestType{test_index}({call}))
+        let result = {call}.0;
+        runtime.block_on(instance.echo{test_index}.post_return_async(store))?;
+        Ok(TestType{test_index}(result))
     }})
 }}
 "#
@@ -730,7 +563,7 @@ use {{
     proptest::strategy::{{Just, Strategy}},
     wasi_preview2::WasiCtx,
     wasmtime::{{
-        component::{{InstancePre, Linker}},
+        component::{{InstancePre, Linker, TypedFunc}},
         Store,
     }},
 }};
@@ -740,6 +573,10 @@ wasmtime::component::bindgen!({{
     world: "echoes-generated",
     async: true
 }});
+
+pub struct Exports {{
+   {typed_function_fields}
+}}
 
 pub struct Host {{
     wasi: WasiCtx,
@@ -752,7 +589,7 @@ impl imports::Host for Host {{
 
 #[async_trait]
 impl tests::Host for Host {{
-    type World = EchoesGenerated;
+    type World = Exports;
 
     fn new(wasi: WasiCtx) -> Self {{
         Self {{ wasi }}
@@ -768,7 +605,12 @@ impl tests::Host for Host {{
         store: &mut Store<Self>,
         pre: &InstancePre<Self>,
     ) -> Result<Self::World> {{
-        Ok(EchoesGenerated::instantiate_pre(store, pre).await?.0)
+        let instance = pre.instantiate_async(&mut *store).await?;
+        let mut exports = instance.exports(&mut *store);
+        let mut instance = exports.instance("exports").unwrap();
+        Ok(Self::World {{
+           {typed_function_inits}
+        }})
     }}
 }}
 

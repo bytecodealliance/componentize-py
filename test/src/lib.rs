@@ -19,9 +19,8 @@ mod tests {
     };
 
     mod echoes;
-    // TODO: The generated tests are broken for nested lists.
-    // #[allow(warnings)]
-    // mod echoes_generated;
+    #[allow(warnings)]
+    mod echoes_generated;
 
     fn get_seed() -> Result<[u8; 32]> {
         let seed =
