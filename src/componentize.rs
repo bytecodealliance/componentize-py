@@ -28,7 +28,7 @@ fn types_eq(
     a == b
 }
 
-pub(crate) fn componentize(
+pub fn componentize(
     module: &[u8],
     resolve: &Resolve,
     world: WorldId,

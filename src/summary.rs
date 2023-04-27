@@ -15,7 +15,7 @@ use {
     },
 };
 
-pub(crate) enum FunctionKind {
+pub enum FunctionKind {
     Import,
     Export,
     ExportLift,
@@ -23,16 +23,16 @@ pub(crate) enum FunctionKind {
     ExportPostReturn,
 }
 
-pub(crate) struct MyFunction<'a> {
-    pub(crate) kind: FunctionKind,
-    pub(crate) interface: Option<&'a str>,
-    pub(crate) name: &'a str,
-    pub(crate) params: &'a [(String, Type)],
-    pub(crate) results: &'a Results,
+pub struct MyFunction<'a> {
+    pub kind: FunctionKind,
+    pub interface: Option<&'a str>,
+    pub name: &'a str,
+    pub params: &'a [(String, Type)],
+    pub results: &'a Results,
 }
 
 impl<'a> MyFunction<'a> {
-    pub(crate) fn internal_name(&self) -> String {
+    pub fn internal_name(&self) -> String {
         if let Some(interface) = self.interface {
             format!(
                 "{}#{}{}",
@@ -50,7 +50,7 @@ impl<'a> MyFunction<'a> {
         }
     }
 
-    pub(crate) fn core_import_type(&self, resolve: &Resolve) -> (Vec<ValType>, Vec<ValType>) {
+    pub fn core_import_type(&self, resolve: &Resolve) -> (Vec<ValType>, Vec<ValType>) {
         let mut params =
             abi::record_abi_limit(resolve, self.params.types(), MAX_FLAT_PARAMS).flattened;
 
@@ -64,7 +64,7 @@ impl<'a> MyFunction<'a> {
         (params, results)
     }
 
-    pub(crate) fn core_export_type(&self, resolve: &Resolve) -> (Vec<ValType>, Vec<ValType>) {
+    pub fn core_export_type(&self, resolve: &Resolve) -> (Vec<ValType>, Vec<ValType>) {
         match self.kind {
             FunctionKind::Export => (
                 abi::record_abi_limit(resolve, self.params.types(), MAX_FLAT_PARAMS).flattened,
@@ -78,7 +78,7 @@ impl<'a> MyFunction<'a> {
         }
     }
 
-    pub(crate) fn is_dispatchable(&self) -> bool {
+    pub fn is_dispatchable(&self) -> bool {
         match self.kind {
             FunctionKind::Import | FunctionKind::ExportLift | FunctionKind::ExportLower => true,
             FunctionKind::Export | FunctionKind::ExportPostReturn => false,
@@ -86,16 +86,16 @@ impl<'a> MyFunction<'a> {
     }
 }
 
-pub(crate) struct Summary<'a> {
-    pub(crate) resolve: &'a Resolve,
-    pub(crate) functions: Vec<MyFunction<'a>>,
-    pub(crate) types: IndexSet<TypeId>,
-    pub(crate) imported_interfaces: HashMap<InterfaceId, &'a str>,
-    pub(crate) exported_interfaces: HashMap<InterfaceId, &'a str>,
+pub struct Summary<'a> {
+    pub resolve: &'a Resolve,
+    pub functions: Vec<MyFunction<'a>>,
+    pub types: IndexSet<TypeId>,
+    pub imported_interfaces: HashMap<InterfaceId, &'a str>,
+    pub exported_interfaces: HashMap<InterfaceId, &'a str>,
 }
 
 impl<'a> Summary<'a> {
-    pub(crate) fn try_new(resolve: &'a Resolve, world: WorldId) -> Result<Self> {
+    pub fn try_new(resolve: &'a Resolve, world: WorldId) -> Result<Self> {
         let mut me = Self {
             resolve,
             functions: Vec::new(),
@@ -130,6 +130,14 @@ impl<'a> Summary<'a> {
                     self.types.insert(id);
                     for field in &record.fields {
                         self.visit_type(field.ty);
+                    }
+                }
+                TypeDefKind::Variant(variant) => {
+                    self.types.insert(id);
+                    for case in &variant.cases {
+                        if let Some(ty) = case.ty {
+                            self.visit_type(ty);
+                        }
                     }
                 }
                 TypeDefKind::Tuple(tuple) => {
@@ -229,7 +237,7 @@ impl<'a> Summary<'a> {
         Ok(())
     }
 
-    pub(crate) fn collect_symbols(&self) -> Symbols<'a> {
+    pub fn collect_symbols(&self) -> Symbols<'a> {
         let mut exports = Vec::new();
         for function in &self.functions {
             if let FunctionKind::Export = function.kind {
@@ -260,6 +268,9 @@ impl<'a> Summary<'a> {
                             TypeDefKind::Record(record) => {
                                 record.fields.iter().map(|f| f.name.as_str()).collect()
                             }
+                            TypeDefKind::Variant(_) => {
+                                vec!["discriminant", "payload"]
+                            }
                             TypeDefKind::List(_) => Vec::new(),
                             _ => todo!(),
                         },
@@ -278,7 +289,7 @@ impl<'a> Summary<'a> {
         Symbols { exports, types }
     }
 
-    pub(crate) fn generate_code(&self, path: &Path) -> Result<()> {
+    pub fn generate_code(&self, path: &Path) -> Result<()> {
         let mut interface_imports = HashMap::<_, Vec<_>>::new();
         let mut interface_exports = HashMap::<_, Vec<_>>::new();
         let mut world_imports = Vec::new();
@@ -362,6 +373,31 @@ def {snake}({params}):
                             if inits.is_empty() {
                                 inits = "pass".to_owned()
                             }
+
+                            Some(format!(
+                                r#"
+class {camel}:
+    def __init__({params}):
+        {inits}
+
+"#
+                            ))
+                        }
+                        TypeDefKind::Variant(_) => {
+                            let camel = camel();
+
+                            let snakes = ["discriminant", "payload"];
+
+                            let params = iter::once("self")
+                                .chain(snakes)
+                                .collect::<Vec<_>>()
+                                .join(", ");
+
+                            let inits = snakes
+                                .iter()
+                                .map(|snake| format!("self.{snake} = {snake}"))
+                                .collect::<Vec<_>>()
+                                .join("\n        ");
 
                             Some(format!(
                                 r#"

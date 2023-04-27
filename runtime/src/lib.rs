@@ -403,3 +403,8 @@ pub extern "C" fn componentize_py_list_append(_py: &Python, list: &PyList, eleme
     assert!(list.len() < 200); // temporary, for debugging; remove this
     list.append(element).unwrap();
 }
+
+#[export_name = "componentize-py#None"]
+pub extern "C" fn componentize_py_none<'a>(py: &'a Python) -> &'a PyAny {
+    py.None().into_ref(*py)
+}

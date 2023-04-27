@@ -16,17 +16,20 @@ const WORD_ALIGN: usize = 2; // as a power of two
 
 const STACK_ALIGNMENT: usize = 8;
 
-pub(crate) const DISPATCHABLE_CORE_PARAM_COUNT: usize = 3;
-pub(crate) const DISPATCH_CORE_PARAM_COUNT: usize = DISPATCHABLE_CORE_PARAM_COUNT + 1;
+pub const DISPATCHABLE_CORE_PARAM_COUNT: usize = 3;
+pub const DISPATCH_CORE_PARAM_COUNT: usize = DISPATCHABLE_CORE_PARAM_COUNT + 1;
+
+const DISCRIMINANT_FIELD_INDEX: i32 = 0;
+const PAYLOAD_FIELD_INDEX: i32 = 1;
 
 macro_rules! declare_enum {
     ($name:ident { $( $variant:ident ),* } $list:ident) => {
         #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-        pub(crate) enum $name {
+        pub enum $name {
             $( $variant ),*
         }
 
-        pub(crate) static $list: &[$name] = &[$( $name::$variant ),*];
+        pub static $list: &[$name] = &[$( $name::$variant ),*];
     }
 }
 
@@ -50,7 +53,8 @@ declare_enum! {
         LiftString,
         Init,
         MakeList,
-        ListAppend
+        ListAppend,
+        None
     } LINK_LIST
 }
 
@@ -62,9 +66,9 @@ fn mem_arg(offset: u64, align: u32) -> MemArg {
     }
 }
 
-pub(crate) struct FunctionBindgen<'a> {
-    pub(crate) local_types: Vec<ValType>,
-    pub(crate) instructions: Vec<Ins<'static>>,
+pub struct FunctionBindgen<'a> {
+    pub local_types: Vec<ValType>,
+    pub instructions: Vec<Ins<'static>>,
     resolve: &'a Resolve,
     stack_pointer: u32,
     link_map: &'a HashMap<Link, u32>,
@@ -78,7 +82,7 @@ pub(crate) struct FunctionBindgen<'a> {
 }
 
 impl<'a> FunctionBindgen<'a> {
-    pub(crate) fn new(
+    pub fn new(
         resolve: &'a Resolve,
         stack_pointer: u32,
         link_map: &'a HashMap<Link, u32>,
@@ -103,7 +107,7 @@ impl<'a> FunctionBindgen<'a> {
         }
     }
 
-    pub(crate) fn compile_import(&mut self, index: u32) {
+    pub fn compile_import(&mut self, index: u32) {
         // Arg 0: *const Python
         let context = 0;
         // Arg 1: *const &PyAny
@@ -246,7 +250,7 @@ impl<'a> FunctionBindgen<'a> {
         }
     }
 
-    pub(crate) fn compile_export(&mut self, index: i32, lift: i32, lower: i32) {
+    pub fn compile_export(&mut self, index: i32, lift: i32, lower: i32) {
         self.push(Ins::I32Const(index));
         self.push(Ins::I32Const(lift));
         self.push(Ins::I32Const(lower));
@@ -311,7 +315,7 @@ impl<'a> FunctionBindgen<'a> {
         }
     }
 
-    pub(crate) fn compile_export_lift(&mut self) {
+    pub fn compile_export_lift(&mut self) {
         // Arg 0: *const Python
         let context = 0;
         // Arg 1: *const MyParams
@@ -322,7 +326,7 @@ impl<'a> FunctionBindgen<'a> {
         self.load_record(self.params.types(), context, source, destination);
     }
 
-    pub(crate) fn compile_export_lower(&mut self) {
+    pub fn compile_export_lower(&mut self) {
         // Arg 0: *const Python
         let context = 0;
         // Arg 1: *const &PyAny
@@ -361,7 +365,7 @@ impl<'a> FunctionBindgen<'a> {
         }
     }
 
-    pub(crate) fn compile_export_post_return(&mut self) {
+    pub fn compile_export_post_return(&mut self) {
         if self.results_abi.flattened.len() > MAX_FLAT_RESULTS {
             // Arg 0: *mut MyResults
             let value = 0;
@@ -487,6 +491,15 @@ impl<'a> FunctionBindgen<'a> {
                 TypeDefKind::Record(record) => {
                     self.lower_record(id, record.fields.iter().map(|f| f.ty), context, value);
                 }
+                TypeDefKind::Variant(variant) => {
+                    self.lower_variant(
+                        id,
+                        &abi::abi(self.resolve, ty),
+                        variant.cases.iter().map(|c| c.ty),
+                        context,
+                        value,
+                    );
+                }
                 TypeDefKind::Tuple(tuple) => {
                     self.lower_record(id, tuple.types.iter().copied(), context, value);
                 }
@@ -587,6 +600,32 @@ impl<'a> FunctionBindgen<'a> {
         }
     }
 
+    fn lower_variant(
+        &mut self,
+        id: TypeId,
+        abi: &Abi,
+        types: impl IntoIterator<Item = Option<Type>>,
+        context: u32,
+        value: u32,
+    ) {
+        // TODO: instead of storing to and then loading from memory, lower directly to the primary stack (and/or
+        // locals)
+
+        let destination = self.push_local(ValType::I32);
+        self.push_stack(abi.size);
+        self.get_stack();
+        self.push(Ins::LocalSet(destination));
+
+        let types = types.into_iter().collect::<Vec<_>>();
+
+        self.store_variant(id, abi, types.clone(), context, value, destination);
+
+        self.load_copy_variant(abi, types, destination);
+
+        self.pop_stack(abi.size);
+        self.pop_local(destination, ValType::I32);
+    }
+
     fn store(&mut self, ty: Type, context: u32, value: u32, destination: u32) {
         match ty {
             Type::Bool | Type::U8 | Type::S8 => {
@@ -630,6 +669,16 @@ impl<'a> FunctionBindgen<'a> {
                     self.store_record(
                         id,
                         record.fields.iter().map(|f| f.ty),
+                        context,
+                        value,
+                        destination,
+                    );
+                }
+                TypeDefKind::Variant(variant) => {
+                    self.store_variant(
+                        id,
+                        &abi::abi(self.resolve, ty),
+                        variant.cases.iter().map(|c| c.ty),
                         context,
                         value,
                         destination,
@@ -697,6 +746,97 @@ impl<'a> FunctionBindgen<'a> {
         }
     }
 
+    fn search_variant(
+        &mut self,
+        block_type: BlockType,
+        types: &[Option<Type>],
+        discriminant: u32,
+        fun: impl Fn(&mut Self, Option<Type>) + Copy,
+    ) {
+        match types {
+            [] => unreachable!(),
+            [ty] => fun(self, *ty),
+            types => {
+                if types.iter().any(Option::is_some) {
+                    let middle = types.len() / 2;
+                    self.push(Ins::LocalGet(discriminant));
+                    self.push(Ins::I32Const(middle.try_into().unwrap()));
+                    self.push(Ins::I32LtU);
+                    self.push(Ins::If(block_type));
+                    self.search_variant(block_type, &types[..middle], discriminant, fun);
+                    self.push(Ins::Else);
+                    self.search_variant(block_type, &types[middle..], discriminant, fun);
+                    self.push(Ins::End);
+                } else {
+                    fun(self, None);
+                }
+            }
+        }
+    }
+
+    fn store_variant(
+        &mut self,
+        id: TypeId,
+        abi: &Abi,
+        types: impl IntoIterator<Item = Option<Type>>,
+        context: u32,
+        value: u32,
+        destination: u32,
+    ) {
+        let type_index = self.types.get_index_of(&id).unwrap();
+        let types = types.into_iter().collect::<Vec<_>>();
+        let discriminant_size = abi::discriminant_size(types.len());
+        let discriminant = self.push_local(ValType::I32);
+
+        self.push(Ins::LocalGet(context));
+        self.push(Ins::LocalGet(context));
+        self.push(Ins::LocalGet(value));
+        self.push(Ins::I32Const(type_index.try_into().unwrap()));
+        self.push(Ins::I32Const(DISCRIMINANT_FIELD_INDEX));
+        self.link_call(Link::GetField);
+        self.link_call(Link::LowerI32);
+        self.push(Ins::LocalSet(discriminant));
+
+        self.push(Ins::LocalGet(destination));
+        self.push(Ins::LocalGet(discriminant));
+        match discriminant_size {
+            1 => self.push(Ins::I32Store8(mem_arg(0, 0))),
+            2 => self.push(Ins::I32Store16(mem_arg(0, 1))),
+            4 => self.push(Ins::I32Store(mem_arg(0, 2))),
+            _ => unreachable!(),
+        }
+
+        if types.iter().any(Option::is_some) {
+            let payload = self.push_local(ValType::I32);
+            let payload_destination = self.push_local(ValType::I32);
+
+            self.push(Ins::LocalGet(context));
+            self.push(Ins::LocalGet(value));
+            self.push(Ins::I32Const(type_index.try_into().unwrap()));
+            self.push(Ins::I32Const(PAYLOAD_FIELD_INDEX));
+            self.link_call(Link::GetField);
+            self.push(Ins::LocalSet(payload));
+
+            self.push(Ins::LocalGet(destination));
+            self.push(Ins::I32Const(
+                abi::align(discriminant_size, abi.align).try_into().unwrap(),
+            ));
+            self.push(Ins::I32Add);
+            self.push(Ins::LocalSet(payload_destination));
+
+            self.search_variant(BlockType::Empty, &types, discriminant, |this, ty| {
+                if let Some(ty) = ty {
+                    this.store(ty, context, payload, payload_destination);
+                }
+            });
+
+            self.pop_local(payload_destination, ValType::I32);
+            self.pop_local(payload, ValType::I32);
+        }
+
+        self.pop_local(discriminant, ValType::I32);
+    }
+
     fn store_copy(&mut self, ty: Type, source: &[u32], destination: u32) {
         match ty {
             Type::Bool | Type::U8 | Type::S8 => {
@@ -742,8 +882,12 @@ impl<'a> FunctionBindgen<'a> {
             }
             Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
-                    self.store_copy_record(
-                        record.fields.iter().map(|field| field.ty),
+                    self.store_copy_record(record.fields.iter().map(|f| f.ty), source, destination);
+                }
+                TypeDefKind::Variant(variant) => {
+                    self.store_copy_variant(
+                        &abi::abi(self.resolve, ty),
+                        variant.cases.iter().map(|c| c.ty),
                         source,
                         destination,
                     );
@@ -799,6 +943,102 @@ impl<'a> FunctionBindgen<'a> {
         }
     }
 
+    fn convert(&mut self, source_type: ValType, destination_type: ValType) {
+        match (source_type, destination_type) {
+            (ValType::I32, ValType::I64) => self.push(Ins::I64ExtendI32U),
+            (ValType::I64, ValType::I32) => self.push(Ins::I32WrapI64),
+            (ValType::I32, ValType::F32) => self.push(Ins::F32ReinterpretI32),
+            (ValType::F32, ValType::I32) => self.push(Ins::I32ReinterpretF32),
+            (ValType::I64, ValType::F64) => self.push(Ins::F64ReinterpretI64),
+            (ValType::F64, ValType::I64) => self.push(Ins::I64ReinterpretF64),
+            (ValType::F32, ValType::I64) => {
+                self.push(Ins::I32ReinterpretF32);
+                self.push(Ins::I64ExtendI32U);
+            }
+            (ValType::I64, ValType::F32) => {
+                self.push(Ins::I32WrapI64);
+                self.push(Ins::F32ReinterpretI32);
+            }
+            _ => unreachable!("can't convert {source_type:?} to {destination_type:?}"),
+        }
+    }
+
+    fn convert_all(
+        &mut self,
+        abi: &Abi,
+        payload_type: Type,
+        value: &[u32],
+    ) -> (Vec<u32>, Vec<(u32, ValType)>) {
+        let payload_abi = abi::abi(self.resolve, payload_type);
+        let mut my_value = Vec::new();
+        let locals = payload_abi
+            .flattened
+            .iter()
+            .zip(abi.flattened.iter().skip(1))
+            .zip(value)
+            .filter_map(|((payload_type, joined_type), value)| {
+                if payload_type == joined_type {
+                    my_value.push(*value);
+                    None
+                } else {
+                    let local = self.push_local(*payload_type);
+                    self.push(Ins::LocalGet(*value));
+                    self.convert(*joined_type, *payload_type);
+                    self.push(Ins::LocalSet(local));
+                    my_value.push(local);
+                    Some((local, *payload_type))
+                }
+            })
+            .collect::<Vec<_>>();
+
+        (my_value, locals)
+    }
+
+    fn store_copy_variant(
+        &mut self,
+        abi: &Abi,
+        types: impl IntoIterator<Item = Option<Type>>,
+        source: &[u32],
+        destination: u32,
+    ) {
+        let types = types.into_iter().collect::<Vec<_>>();
+        let discriminant_size = abi::discriminant_size(types.len());
+
+        self.push(Ins::LocalGet(destination));
+        self.push(Ins::LocalGet(source[0]));
+        match discriminant_size {
+            1 => self.push(Ins::I32Store8(mem_arg(0, 0))),
+            2 => self.push(Ins::I32Store16(mem_arg(0, 1))),
+            4 => self.push(Ins::I32Store(mem_arg(0, 2))),
+            _ => unreachable!(),
+        }
+
+        if types.iter().any(Option::is_some) {
+            let payload_destination = self.push_local(ValType::I32);
+
+            self.push(Ins::LocalGet(destination));
+            self.push(Ins::I32Const(
+                abi::align(discriminant_size, abi.align).try_into().unwrap(),
+            ));
+            self.push(Ins::I32Add);
+            self.push(Ins::LocalSet(payload_destination));
+
+            self.search_variant(BlockType::Empty, &types, source[0], |this, ty| {
+                if let Some(ty) = ty {
+                    let (source, locals) = this.convert_all(abi, ty, &source[1..]);
+
+                    this.store_copy(ty, &source, payload_destination);
+
+                    for (local, ty) in locals.into_iter().rev() {
+                        this.pop_local(local, ty);
+                    }
+                }
+            });
+
+            self.pop_local(payload_destination, ValType::I32);
+        }
+    }
+
     fn lift(&mut self, ty: Type, context: u32, value: &[u32]) {
         match ty {
             Type::Bool
@@ -838,7 +1078,16 @@ impl<'a> FunctionBindgen<'a> {
                 TypeDefKind::Record(record) => {
                     self.lift_record_onto_stack(
                         id,
-                        record.fields.iter().map(|field| field.ty),
+                        record.fields.iter().map(|f| f.ty),
+                        context,
+                        value,
+                    );
+                }
+                TypeDefKind::Variant(variant) => {
+                    self.lift_variant(
+                        id,
+                        &abi::abi(self.resolve, ty),
+                        variant.cases.iter().map(|c| c.ty),
                         context,
                         value,
                     );
@@ -961,6 +1210,61 @@ impl<'a> FunctionBindgen<'a> {
         self.pop_stack(len * WORD_SIZE);
     }
 
+    fn lift_variant(
+        &mut self,
+        id: TypeId,
+        abi: &Abi,
+        types: impl IntoIterator<Item = Option<Type>>,
+        context: u32,
+        source: &[u32],
+    ) {
+        self.push_stack(WORD_SIZE * 2);
+
+        let types = types.into_iter().collect::<Vec<_>>();
+
+        self.push(Ins::LocalGet(context));
+        self.push(Ins::I32Const(
+            self.types.get_index_of(&id).unwrap().try_into().unwrap(),
+        ));
+        self.get_stack();
+        self.push(Ins::I32Const(2));
+
+        self.get_stack();
+        self.push(Ins::LocalGet(context));
+        self.push(Ins::LocalGet(source[0]));
+        self.link_call(Link::LiftI32);
+        self.push(Ins::I32Store(mem_arg(0, WORD_ALIGN.try_into().unwrap())));
+
+        self.get_stack();
+        self.search_variant(
+            BlockType::Result(ValType::I32),
+            &types,
+            source[0],
+            |this, ty| {
+                if let Some(ty) = ty {
+                    let (source, locals) = this.convert_all(abi, ty, &source[1..]);
+
+                    this.lift(ty, context, &source);
+
+                    for (local, ty) in locals.into_iter().rev() {
+                        this.pop_local(local, ty);
+                    }
+                } else {
+                    this.push(Ins::LocalGet(context));
+                    this.link_call(Link::None);
+                }
+            },
+        );
+        self.push(Ins::I32Store(mem_arg(
+            WORD_SIZE.try_into().unwrap(),
+            WORD_ALIGN.try_into().unwrap(),
+        )));
+
+        self.link_call(Link::Init);
+
+        self.pop_stack(WORD_SIZE * 2);
+    }
+
     fn load(&mut self, ty: Type, context: u32, source: u32) {
         match ty {
             Type::Bool | Type::U8 => {
@@ -1042,7 +1346,16 @@ impl<'a> FunctionBindgen<'a> {
                 TypeDefKind::Record(record) => {
                     self.load_record_onto_stack(
                         id,
-                        record.fields.iter().map(|field| field.ty),
+                        record.fields.iter().map(|f| f.ty),
+                        context,
+                        source,
+                    );
+                }
+                TypeDefKind::Variant(variant) => {
+                    self.load_variant(
+                        id,
+                        &abi::abi(self.resolve, ty),
+                        variant.cases.iter().map(|c| c.ty),
                         context,
                         source,
                     );
@@ -1136,6 +1449,81 @@ impl<'a> FunctionBindgen<'a> {
         self.pop_stack(len * WORD_SIZE);
     }
 
+    fn load_variant(
+        &mut self,
+        id: TypeId,
+        abi: &Abi,
+        types: impl IntoIterator<Item = Option<Type>>,
+        context: u32,
+        source: u32,
+    ) {
+        self.push_stack(WORD_SIZE * 2);
+
+        let types = types.into_iter().collect::<Vec<_>>();
+        let discriminant_size = abi::discriminant_size(types.len());
+        let discriminant = self.push_local(ValType::I32);
+
+        self.push(Ins::LocalGet(context));
+        self.push(Ins::I32Const(
+            self.types.get_index_of(&id).unwrap().try_into().unwrap(),
+        ));
+        self.get_stack();
+        self.push(Ins::I32Const(2));
+
+        self.get_stack();
+        self.push(Ins::LocalGet(context));
+        self.push(Ins::LocalGet(source));
+        match discriminant_size {
+            1 => self.push(Ins::I32Load8U(mem_arg(0, 0))),
+            2 => self.push(Ins::I32Load16U(mem_arg(0, 1))),
+            4 => self.push(Ins::I32Load(mem_arg(0, 2))),
+            _ => unreachable!(),
+        }
+        self.push(Ins::LocalTee(discriminant));
+        self.link_call(Link::LiftI32);
+        self.push(Ins::I32Store(mem_arg(0, WORD_ALIGN.try_into().unwrap())));
+
+        self.get_stack();
+        if types.iter().any(Option::is_some) {
+            let payload_source = self.push_local(ValType::I32);
+
+            self.push(Ins::LocalGet(source));
+            self.push(Ins::I32Const(
+                abi::align(discriminant_size, abi.align).try_into().unwrap(),
+            ));
+            self.push(Ins::I32Add);
+            self.push(Ins::LocalSet(payload_source));
+
+            self.search_variant(
+                BlockType::Result(ValType::I32),
+                &types,
+                discriminant,
+                |this, ty| {
+                    if let Some(ty) = ty {
+                        this.load(ty, context, payload_source);
+                    } else {
+                        this.push(Ins::LocalGet(context));
+                        this.link_call(Link::None);
+                    }
+                },
+            );
+
+            self.pop_local(payload_source, ValType::I32);
+        } else {
+            self.push(Ins::LocalGet(context));
+            self.link_call(Link::None);
+        }
+        self.push(Ins::I32Store(mem_arg(
+            WORD_SIZE.try_into().unwrap(),
+            WORD_ALIGN.try_into().unwrap(),
+        )));
+
+        self.link_call(Link::Init);
+
+        self.pop_stack(WORD_SIZE * 2);
+        self.pop_local(discriminant, ValType::I32);
+    }
+
     fn load_copy(&mut self, ty: Type, source: u32) {
         match ty {
             Type::Bool | Type::U8 => {
@@ -1181,7 +1569,14 @@ impl<'a> FunctionBindgen<'a> {
             }
             Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
-                    self.load_copy_record(record.fields.iter().map(|field| field.ty), source);
+                    self.load_copy_record(record.fields.iter().map(|f| f.ty), source);
+                }
+                TypeDefKind::Variant(variant) => {
+                    self.load_copy_variant(
+                        &abi::abi(self.resolve, ty),
+                        variant.cases.iter().map(|c| c.ty),
+                        source,
+                    );
                 }
                 TypeDefKind::Tuple(tuple) => {
                     self.load_copy_record(tuple.types.iter().copied(), source);
@@ -1221,6 +1616,99 @@ impl<'a> FunctionBindgen<'a> {
         }
     }
 
+    fn zero(&mut self, ty: ValType) {
+        self.push(match ty {
+            ValType::I32 => Ins::I32Const(0),
+            ValType::I64 => Ins::I64Const(0),
+            ValType::F32 => Ins::F32Const(0.0),
+            ValType::F64 => Ins::F64Const(0.0),
+            _ => unreachable!(),
+        })
+    }
+
+    fn load_copy_variant(
+        &mut self,
+        abi: &Abi,
+        types: impl IntoIterator<Item = Option<Type>>,
+        source: u32,
+    ) {
+        let types = types.into_iter().collect::<Vec<_>>();
+        let discriminant_size = abi::discriminant_size(types.len());
+
+        self.push(Ins::LocalGet(source));
+        match discriminant_size {
+            1 => self.push(Ins::I32Load8U(mem_arg(0, 0))),
+            2 => self.push(Ins::I32Load16U(mem_arg(0, 1))),
+            4 => self.push(Ins::I32Load(mem_arg(0, 2))),
+            _ => unreachable!(),
+        }
+
+        if types.iter().any(Option::is_some) {
+            let discriminant = self.push_local(ValType::I32);
+            let payload_source = self.push_local(ValType::I32);
+            let destination = abi
+                .flattened
+                .iter()
+                .skip(1)
+                .map(|&ty| self.push_local(ty))
+                .collect::<Vec<_>>();
+
+            self.push(Ins::LocalTee(discriminant));
+
+            self.push(Ins::LocalGet(source));
+            self.push(Ins::I32Const(
+                abi::align(discriminant_size, abi.align).try_into().unwrap(),
+            ));
+            self.push(Ins::I32Add);
+            self.push(Ins::LocalSet(payload_source));
+
+            self.search_variant(BlockType::Empty, &types, discriminant, |this, ty| {
+                if let Some(ty) = ty {
+                    this.load_copy(ty, payload_source);
+
+                    let payload_abi = abi::abi(this.resolve, ty);
+                    for ((payload_type, joined_type), local) in payload_abi
+                        .flattened
+                        .iter()
+                        .zip(abi.flattened.iter().skip(1))
+                        .zip(&destination)
+                        .rev()
+                    {
+                        if payload_type != joined_type {
+                            this.convert(*payload_type, *joined_type);
+                        }
+                        this.push(Ins::LocalSet(*local));
+                    }
+
+                    for (joined_type, local) in abi
+                        .flattened
+                        .iter()
+                        .skip(1)
+                        .zip(&destination)
+                        .skip(payload_abi.flattened.len())
+                    {
+                        this.zero(*joined_type);
+                        this.push(Ins::LocalSet(*local));
+                    }
+                }
+            });
+
+            for &local in &destination {
+                self.push(Ins::LocalGet(local));
+            }
+
+            for (local, ty) in destination
+                .into_iter()
+                .zip(abi.flattened.iter().skip(1))
+                .rev()
+            {
+                self.pop_local(local, *ty);
+            }
+            self.pop_local(payload_source, ValType::I32);
+            self.pop_local(discriminant, ValType::I32);
+        }
+    }
+
     fn free_lowered(&mut self, ty: Type, value: &[u32]) {
         match ty {
             Type::Bool
@@ -1245,7 +1733,14 @@ impl<'a> FunctionBindgen<'a> {
 
             Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
-                    self.free_lowered_record(record.fields.iter().map(|field| field.ty), value);
+                    self.free_lowered_record(record.fields.iter().map(|f| f.ty), value);
+                }
+                TypeDefKind::Variant(variant) => {
+                    self.free_lowered_variant(
+                        &abi::abi(self.resolve, ty),
+                        variant.cases.iter().map(|c| c.ty),
+                        value,
+                    );
                 }
                 TypeDefKind::Tuple(tuple) => {
                     self.free_lowered_record(tuple.types.iter().copied(), value);
@@ -1318,6 +1813,30 @@ impl<'a> FunctionBindgen<'a> {
         }
     }
 
+    fn free_lowered_variant(
+        &mut self,
+        abi: &Abi,
+        types: impl IntoIterator<Item = Option<Type>>,
+        value: &[u32],
+    ) {
+        self.search_variant(
+            BlockType::Empty,
+            &types.into_iter().collect::<Vec<_>>(),
+            value[0],
+            |this, ty| {
+                if let Some(ty) = ty {
+                    let (value, locals) = this.convert_all(abi, ty, &value[1..]);
+
+                    this.free_lowered(ty, &value);
+
+                    for (local, ty) in locals.into_iter().rev() {
+                        this.pop_local(local, ty);
+                    }
+                }
+            },
+        )
+    }
+
     fn free_stored(&mut self, ty: Type, value: u32) {
         match ty {
             Type::Bool
@@ -1347,7 +1866,14 @@ impl<'a> FunctionBindgen<'a> {
 
             Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
-                    self.free_stored_record(record.fields.iter().map(|field| field.ty), value);
+                    self.free_stored_record(record.fields.iter().map(|f| f.ty), value);
+                }
+                TypeDefKind::Variant(variant) => {
+                    self.free_stored_variant(
+                        &abi::abi(self.resolve, ty),
+                        variant.cases.iter().map(|c| c.ty),
+                        value,
+                    );
                 }
                 TypeDefKind::Tuple(tuple) => {
                     self.free_stored_record(tuple.types.iter().copied(), value);
@@ -1439,6 +1965,47 @@ impl<'a> FunctionBindgen<'a> {
             load_offset += abi.size;
 
             self.pop_local(field_value, ValType::I32);
+        }
+    }
+
+    fn free_stored_variant(
+        &mut self,
+        abi: &Abi,
+        types: impl IntoIterator<Item = Option<Type>>,
+        value: u32,
+    ) {
+        let types = types.into_iter().collect::<Vec<_>>();
+        let discriminant_size = abi::discriminant_size(types.len());
+
+        if types.iter().any(Option::is_some) {
+            let discriminant = self.push_local(ValType::I32);
+
+            self.push(Ins::LocalGet(value));
+            match discriminant_size {
+                1 => self.push(Ins::I32Load8U(mem_arg(0, 0))),
+                2 => self.push(Ins::I32Load16U(mem_arg(0, 1))),
+                4 => self.push(Ins::I32Load(mem_arg(0, 2))),
+                _ => unreachable!(),
+            }
+            self.push(Ins::LocalSet(discriminant));
+
+            let payload_value = self.push_local(ValType::I32);
+
+            self.push(Ins::LocalGet(value));
+            self.push(Ins::I32Const(
+                abi::align(discriminant_size, abi.align).try_into().unwrap(),
+            ));
+            self.push(Ins::I32Add);
+            self.push(Ins::LocalSet(payload_value));
+
+            self.search_variant(BlockType::Empty, &types, discriminant, |this, ty| {
+                if let Some(ty) = ty {
+                    this.free_stored(ty, payload_value);
+                }
+            });
+
+            self.pop_local(payload_value, ValType::I32);
+            self.pop_local(discriminant, ValType::I32);
         }
     }
 }

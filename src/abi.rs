@@ -1,23 +1,24 @@
 use {
+    std::iter,
     wasm_encoder::ValType,
     wit_parser::{Resolve, Type, TypeDefKind},
 };
 
-pub(crate) const MAX_FLAT_PARAMS: usize = 16;
-pub(crate) const MAX_FLAT_RESULTS: usize = 1;
+pub const MAX_FLAT_PARAMS: usize = 16;
+pub const MAX_FLAT_RESULTS: usize = 1;
 
-pub(crate) fn align(a: usize, b: usize) -> usize {
+pub fn align(a: usize, b: usize) -> usize {
     assert!(b.is_power_of_two());
     (a + (b - 1)) & !(b - 1)
 }
 
-pub(crate) struct Abi {
-    pub(crate) size: usize,
-    pub(crate) align: usize,
-    pub(crate) flattened: Vec<ValType>,
+pub struct Abi {
+    pub size: usize,
+    pub align: usize,
+    pub flattened: Vec<ValType>,
 }
 
-pub(crate) fn record_abi(resolve: &Resolve, types: impl IntoIterator<Item = Type>) -> Abi {
+pub fn record_abi(resolve: &Resolve, types: impl IntoIterator<Item = Type>) -> Abi {
     let mut size = 0_usize;
     let mut align_ = 1;
     let mut flattened = Vec::new();
@@ -38,7 +39,7 @@ pub(crate) fn record_abi(resolve: &Resolve, types: impl IntoIterator<Item = Type
     }
 }
 
-pub(crate) fn record_abi_limit(
+pub fn record_abi_limit(
     resolve: &Resolve,
     types: impl IntoIterator<Item = Type>,
     limit: usize,
@@ -50,7 +51,63 @@ pub(crate) fn record_abi_limit(
     abi
 }
 
-pub(crate) fn abi(resolve: &Resolve, ty: Type) -> Abi {
+fn join(a: ValType, b: ValType) -> ValType {
+    if a == b {
+        a
+    } else if let (ValType::I32, ValType::F32) | (ValType::F32, ValType::I32) = (a, b) {
+        ValType::I32
+    } else {
+        ValType::I64
+    }
+}
+
+pub fn discriminant_size(count: usize) -> usize {
+    match count {
+        1..=0xFF => 1,
+        0x100..=0xFFFF => 2,
+        0x1_0000..=0xFFFF_FFFF => 4,
+        _ => unreachable!(),
+    }
+}
+
+fn variant_abi(resolve: &Resolve, types: impl IntoIterator<Item = Option<Type>>) -> Abi {
+    let mut size = 0_usize;
+    let mut align_ = 1;
+    let mut flattened = Vec::new();
+    let mut count = 0;
+    for ty in types {
+        count += 1;
+        if let Some(ty) = ty {
+            let abi = abi(resolve, ty);
+            if abi.size > size {
+                size = abi.size;
+            }
+            if abi.align > align_ {
+                align_ = abi.align;
+            }
+            for (index, ty) in abi.flattened.iter().enumerate() {
+                if index == flattened.len() {
+                    flattened.push(*ty);
+                } else {
+                    flattened[index] = join(flattened[index], *ty);
+                }
+            }
+        }
+    }
+
+    let discriminant_size = discriminant_size(count);
+    let align_ = align_.max(discriminant_size);
+    let size = align(size + align(discriminant_size, align_), align_);
+    let flattened = iter::once(ValType::I32).chain(flattened).collect();
+
+    Abi {
+        size,
+        align: align_,
+        flattened,
+    }
+}
+
+pub fn abi(resolve: &Resolve, ty: Type) -> Abi {
     match ty {
         Type::Bool | Type::U8 | Type::S8 => Abi {
             size: 1,
@@ -90,6 +147,9 @@ pub(crate) fn abi(resolve: &Resolve, ty: Type) -> Abi {
         Type::Id(id) => match &resolve.types[id].kind {
             TypeDefKind::Record(record) => {
                 record_abi(resolve, record.fields.iter().map(|field| field.ty))
+            }
+            TypeDefKind::Variant(variant) => {
+                variant_abi(resolve, variant.cases.iter().map(|case| case.ty))
             }
             TypeDefKind::Tuple(tuple) => record_abi(resolve, tuple.types.iter().copied()),
             TypeDefKind::List(_) => Abi {

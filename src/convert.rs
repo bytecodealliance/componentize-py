@@ -7,7 +7,7 @@ use {
     wasmparser::{BinaryReader, ExternalKind, TypeRef, VisitOperator},
 };
 
-pub(crate) struct IntoGlobalType(pub(crate) wasmparser::GlobalType);
+pub struct IntoGlobalType(pub wasmparser::GlobalType);
 
 impl From<IntoGlobalType> for GlobalType {
     fn from(val: IntoGlobalType) -> Self {
@@ -18,7 +18,7 @@ impl From<IntoGlobalType> for GlobalType {
     }
 }
 
-pub(crate) struct IntoBlockType(pub(crate) wasmparser::BlockType);
+pub struct IntoBlockType(pub wasmparser::BlockType);
 
 impl From<IntoBlockType> for BlockType {
     fn from(val: IntoBlockType) -> Self {
@@ -30,7 +30,7 @@ impl From<IntoBlockType> for BlockType {
     }
 }
 
-pub(crate) struct IntoMemArg(pub(crate) wasmparser::MemArg);
+pub struct IntoMemArg(pub wasmparser::MemArg);
 
 impl From<IntoMemArg> for MemArg {
     fn from(val: IntoMemArg) -> Self {
@@ -42,7 +42,7 @@ impl From<IntoMemArg> for MemArg {
     }
 }
 
-pub(crate) struct IntoTableType(pub(crate) wasmparser::TableType);
+pub struct IntoTableType(pub wasmparser::TableType);
 
 impl From<IntoTableType> for TableType {
     fn from(val: IntoTableType) -> Self {
@@ -54,7 +54,7 @@ impl From<IntoTableType> for TableType {
     }
 }
 
-pub(crate) struct IntoHeapType(pub(crate) wasmparser::HeapType);
+pub struct IntoHeapType(pub wasmparser::HeapType);
 
 impl From<IntoHeapType> for HeapType {
     fn from(val: IntoHeapType) -> Self {
@@ -66,7 +66,7 @@ impl From<IntoHeapType> for HeapType {
     }
 }
 
-pub(crate) struct IntoRefType(pub(crate) wasmparser::RefType);
+pub struct IntoRefType(pub wasmparser::RefType);
 
 impl From<IntoRefType> for RefType {
     fn from(val: IntoRefType) -> Self {
@@ -77,7 +77,7 @@ impl From<IntoRefType> for RefType {
     }
 }
 
-pub(crate) struct IntoValType(pub(crate) wasmparser::ValType);
+pub struct IntoValType(pub wasmparser::ValType);
 
 impl From<IntoValType> for ValType {
     fn from(val: IntoValType) -> Self {
@@ -92,7 +92,7 @@ impl From<IntoValType> for ValType {
     }
 }
 
-pub(crate) struct IntoTagKind(pub(crate) wasmparser::TagKind);
+pub struct IntoTagKind(pub wasmparser::TagKind);
 
 impl From<IntoTagKind> for TagKind {
     fn from(val: IntoTagKind) -> Self {
@@ -102,7 +102,7 @@ impl From<IntoTagKind> for TagKind {
     }
 }
 
-pub(crate) struct IntoEntityType(pub(crate) TypeRef);
+pub struct IntoEntityType(pub TypeRef);
 
 impl From<IntoEntityType> for EntityType {
     fn from(val: IntoEntityType) -> Self {
@@ -131,7 +131,7 @@ impl From<IntoEntityType> for EntityType {
     }
 }
 
-pub(crate) struct IntoExportKind(pub(crate) ExternalKind);
+pub struct IntoExportKind(pub ExternalKind);
 
 impl From<IntoExportKind> for ExportKind {
     fn from(val: IntoExportKind) -> Self {
@@ -244,7 +244,7 @@ impl<'a, F: Fn(u32) -> u32> VisitOperator<'a> for Visitor<F> {
     wasmparser::for_each_operator!(define_encode);
 }
 
-pub(crate) fn visit(mut reader: BinaryReader<'_>, remap: impl Fn(u32) -> u32) -> Result<Vec<u8>> {
+pub fn visit(mut reader: BinaryReader<'_>, remap: impl Fn(u32) -> u32) -> Result<Vec<u8>> {
     let mut visitor = Visitor {
         remap,
         buffer: Vec::new(),
@@ -255,7 +255,7 @@ pub(crate) fn visit(mut reader: BinaryReader<'_>, remap: impl Fn(u32) -> u32) ->
     Ok(visitor.buffer)
 }
 
-pub(crate) fn const_expr(
+pub fn const_expr(
     reader: BinaryReader<'_>,
     remap: impl Fn(u32) -> u32,
 ) -> Result<ConstExpr> {
@@ -264,13 +264,13 @@ pub(crate) fn const_expr(
     Ok(ConstExpr::raw(bytes))
 }
 
-pub(crate) enum MyElements {
+pub enum MyElements {
     Functions(Vec<u32>),
     Expressions(Vec<ConstExpr>),
 }
 
 impl MyElements {
-    pub(crate) fn as_elements(&self) -> Elements {
+    pub fn as_elements(&self) -> Elements {
         match self {
             Self::Functions(v) => Elements::Functions(v),
             Self::Expressions(v) => Elements::Expressions(v),

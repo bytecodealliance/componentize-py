@@ -3,7 +3,7 @@ use {
     wit_parser::{Results, Type},
 };
 
-pub(crate) trait Types {
+pub trait Types {
     fn types(&self) -> Box<dyn Iterator<Item = Type>>;
 }
 
