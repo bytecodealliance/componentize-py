@@ -418,6 +418,9 @@ pub fn componentize(
                             function.params,
                             function.results,
                             function.core_export_type(resolve).0.len(),
+                            &summary.tuple_types,
+                            summary.option_type,
+                            summary.result_type,
                         );
 
                         match function.kind {

@@ -6,7 +6,10 @@ use {
         strategy::{Just, Strategy, ValueTree},
         test_runner::{Config, TestRng, TestRunner},
     },
-    std::{cell::Cell, env, fmt::Write, fs, path::PathBuf, process::Command, rc::Rc, str::FromStr},
+    std::{
+        cell::Cell, collections::HashMap, env, fmt::Write, fs, path::PathBuf, process::Command,
+        rc::Rc, str::FromStr,
+    },
 };
 
 const DEFAULT_TEST_COUNT: usize = 10;
@@ -14,6 +17,7 @@ const MAX_PARAM_COUNT: usize = 12;
 const MAX_LIST_SIZE: usize = 100;
 const MAX_TUPLE_SIZE: usize = 12;
 const MAX_FLAG_COUNT: u32 = 100;
+const MAX_ENUM_COUNT: u32 = 100;
 
 #[derive(Clone, Debug)]
 enum Type {
@@ -30,11 +34,83 @@ enum Type {
     Float64,
     Char,
     String,
-    Record { id: usize, fields: Vec<Type> },
-    Variant { id: usize, cases: Vec<Option<Type>> },
-    Flags { id: usize, count: u32 },
+    Record {
+        id: usize,
+        fields: Vec<Type>,
+    },
+    Variant {
+        id: usize,
+        cases: Vec<Option<Type>>,
+    },
+    Flags {
+        id: usize,
+        count: u32,
+    },
+    Enum {
+        id: usize,
+        count: u32,
+    },
+    Union {
+        id: usize,
+        cases: Vec<Type>,
+    },
+    Option(Box<Type>),
+    Result {
+        ok: Option<Box<Type>>,
+        err: Option<Box<Type>>,
+    },
     Tuple(Vec<Type>),
     List(Box<Type>),
+}
+
+fn union_case_name(ty: &Type) -> String {
+    match ty {
+        Type::Bool => "Bool".into(),
+        Type::U8 => "U8".into(),
+        Type::U16 => "U16".into(),
+        Type::U32 => "U32".into(),
+        Type::U64 => "U64".into(),
+        Type::S8 => "I8".into(),
+        Type::S16 => "I16".into(),
+        Type::S32 => "I32".into(),
+        Type::S64 => "I64".into(),
+        Type::Float32 => "F32".into(),
+        Type::Float64 => "F64".into(),
+        Type::Char => "Char".into(),
+        Type::String => "String".into(),
+        Type::Record { id, .. } => format!("Record{id}"),
+        Type::Variant { id, .. } => format!("Variant{id}"),
+        Type::Flags { id, .. } => format!("Flags{id}"),
+        Type::Enum { id, .. } => format!("Enum{id}"),
+        Type::Union { id, .. } => format!("Union{id}"),
+        Type::Option(ty) => format!("Optional{}", union_case_name(ty)),
+        Type::Result { .. } => "Result".into(),
+        Type::Tuple(_) => "Tuple".into(),
+        Type::List(ty) => format!("{}List", union_case_name(ty)),
+    }
+}
+
+fn union_case_names(types: &[Type]) -> Vec<String> {
+    let mut indexes = HashMap::<_, Vec<_>>::new();
+    let mut names = types
+        .iter()
+        .enumerate()
+        .map(|(index, ty)| {
+            let name = union_case_name(ty);
+            indexes.entry(name.clone()).or_default().push(index);
+            name
+        })
+        .collect::<Vec<_>>();
+
+    for indexes in indexes.into_values() {
+        if indexes.len() > 1 {
+            for (n, index) in indexes.into_iter().enumerate() {
+                names[index] = format!("{}{n}", names[index]);
+            }
+        }
+    }
+
+    names
 }
 
 fn borrows(ty: &Type) -> bool {
@@ -51,17 +127,24 @@ fn borrows(ty: &Type) -> bool {
         | Type::Float32
         | Type::Float64
         | Type::Char
-        | Type::Flags { .. } => false,
+        | Type::Flags { .. }
+        | Type::Enum { .. } => false,
         Type::String | Type::List(_) => true,
         Type::Record { fields, .. } | Type::Tuple(fields) => fields.iter().any(borrows),
         Type::Variant { cases, .. } => cases
             .iter()
             .any(|ty| ty.as_ref().map(borrows).unwrap_or(false)),
+        Type::Union { cases, .. } => cases.iter().any(borrows),
+        Type::Option(ty) => borrows(ty),
+        Type::Result { ok, err } => {
+            ok.as_ref().map(|ty| borrows(ty)).unwrap_or(false)
+                || err.as_ref().map(|ty| borrows(ty)).unwrap_or(false)
+        }
     }
 }
 
 fn any_type(max_size: usize, next_id: Rc<Cell<usize>>) -> impl Strategy<Value = Type> {
-    (0..18).prop_flat_map(move |index| match index {
+    (0..22).prop_flat_map(move |index| match index {
         0 => Just(Type::Bool).boxed(),
         1 => Just(Type::U8).boxed(),
         2 => Just(Type::S8).boxed(),
@@ -110,12 +193,46 @@ fn any_type(max_size: usize, next_id: Rc<Cell<usize>>) -> impl Strategy<Value = 
                 }
             })
             .boxed(),
-        16 => {
+        16 => (1..MAX_ENUM_COUNT)
+            .prop_map({
+                let next_id = next_id.clone();
+                move |count| {
+                    let id = next_id.get();
+                    next_id.set(id + 1);
+                    Type::Enum { id, count }
+                }
+            })
+            .boxed(),
+        17 => {
+            proptest::collection::vec(any_type(max_size / 2, next_id.clone()), 1..max_size.max(2))
+                .prop_map({
+                    let next_id = next_id.clone();
+                    move |cases| {
+                        let id = next_id.get();
+                        next_id.set(id + 1);
+                        Type::Union { id, cases }
+                    }
+                })
+                .boxed()
+        }
+        18 => any_type(max_size, next_id.clone())
+            .prop_map(|ty| Type::Option(Box::new(ty)))
+            .boxed(),
+        19 => (
+            proptest::option::of(any_type(max_size, next_id.clone())),
+            proptest::option::of(any_type(max_size, next_id.clone())),
+        )
+            .prop_map(|(ok, err)| Type::Result {
+                ok: ok.map(Box::new),
+                err: err.map(Box::new),
+            })
+            .boxed(),
+        20 => {
             proptest::collection::vec(any_type(max_size / 2, next_id.clone()), 0..max_size.max(2))
                 .prop_map(Type::Tuple)
                 .boxed()
         }
-        17 => any_type(max_size, next_id.clone())
+        21 => any_type(max_size, next_id.clone())
             .prop_map(|ty| Type::List(Box::new(ty)))
             .boxed(),
         _ => unreachable!(),
@@ -205,6 +322,56 @@ fn wit_type_name(wit: &mut String, ty: &Type) -> String {
 
             format!("flags{id}")
         }
+        Type::Enum { id, count } => {
+            let cases = (0..*count)
+                .map(|index| format!("c{index}"))
+                .collect::<Vec<_>>()
+                .join(",\n        ");
+
+            write!(
+                wit,
+                "
+    enum enum{id} {{
+        {cases}
+    }}
+"
+            )
+            .unwrap();
+
+            format!("enum{id}")
+        }
+        Type::Union { id, cases } => {
+            let cases = cases
+                .iter()
+                .map(|ty| wit_type_name(wit, ty))
+                .collect::<Vec<_>>()
+                .join(",\n        ");
+
+            write!(
+                wit,
+                "
+    union union{id} {{
+        {cases}
+    }}
+"
+            )
+            .unwrap();
+
+            format!("union{id}")
+        }
+        Type::Option(ty) => {
+            format!("option<{}>", wit_type_name(wit, ty))
+        }
+        Type::Result { ok, err } => {
+            let ok = ok.as_ref().map(|ty| wit_type_name(wit, ty));
+            let err = err.as_ref().map(|ty| wit_type_name(wit, ty));
+            match (ok, err) {
+                (Some(ok), Some(err)) => format!("result<{ok}, {err}>"),
+                (Some(ok), None) => format!("result<{ok}>"),
+                (None, Some(err)) => format!("result<_, {err}>"),
+                (None, None) => "result".into(),
+            }
+        }
         Type::Tuple(types) => {
             let types = types
                 .iter()
@@ -249,6 +416,29 @@ fn rust_type_name(module: &str, ty: &Type) -> String {
         Type::Flags { id, .. } => {
             format!("{module}::Flags{id}")
         }
+        Type::Enum { id, .. } => {
+            format!("{module}::Enum{id}")
+        }
+        Type::Union { id, .. } => {
+            format!(
+                "{module}::Union{id}{}",
+                if borrows(ty) { "Result" } else { "" }
+            )
+        }
+        Type::Option(ty) => {
+            format!("Option<{}>", rust_type_name(module, ty))
+        }
+        Type::Result { ok, err } => {
+            let ok = ok
+                .as_ref()
+                .map(|ty| rust_type_name(module, ty))
+                .unwrap_or_else(|| "()".to_owned());
+            let err = err
+                .as_ref()
+                .map(|ty| rust_type_name(module, ty))
+                .unwrap_or_else(|| "()".to_owned());
+            format!("Result<{ok}, {err}>")
+        }
         Type::Tuple(types) => {
             let types = types
                 .iter()
@@ -276,7 +466,8 @@ fn equality(a: &str, b: &str, ty: &Type) -> String {
         | Type::S64
         | Type::Char
         | Type::String
-        | Type::Flags { .. } => format!("({a} == {b})"),
+        | Type::Flags { .. }
+        | Type::Enum { .. } => format!("({a} == {b})"),
         Type::Float32 | Type::Float64 => format!("(({a}.is_nan() && {b}.is_nan()) || {a} == {b})"),
         Type::Record { fields, .. } => {
             if fields.is_empty() {
@@ -312,6 +503,38 @@ fn equality(a: &str, b: &str, ty: &Type) -> String {
                 .collect::<Vec<_>>()
                 .join(" ");
             format!("(match (&{a}, &{b}) {{ {cases} _ => false }})")
+        }
+        Type::Union { id, cases } => {
+            assert!(!cases.is_empty());
+            let name = format!(
+                "exports::Union{id}{}",
+                if borrows(ty) { "Result" } else { "" }
+            );
+            let cases = union_case_names(cases)
+                .iter()
+                .zip(cases)
+                .map(|(case_name, ty)| {
+                    let test = equality("a", "b", ty);
+                    format!("({name}::{case_name}(a), {name}::{case_name}(b)) => {{ {test} }}")
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("(match (&{a}, &{b}) {{ {cases} _ => false }})")
+        }
+        Type::Option(ty) => {
+            let test = equality("a", "b", ty);
+            format!("(match (&{a}, &{b}) {{ (Some(a), Some(b)) => {test}, (None, None) => true, _ => false }})")
+        }
+        Type::Result { ok, err } => {
+            let ok = ok
+                .as_ref()
+                .map(|ty| equality("a", "b", ty))
+                .unwrap_or_else(|| "true".to_owned());
+            let err = err
+                .as_ref()
+                .map(|ty| equality("a", "b", ty))
+                .unwrap_or_else(|| "true".to_owned());
+            format!("(match (&{a}, &{b}) {{ (Ok(a), Ok(b)) => {ok}, (Err(a), Err(b)) => {err}, _ => false }})")
         }
         Type::Tuple(types) => {
             if types.is_empty() {
@@ -417,6 +640,46 @@ fn strategy(ty: &Type, max_list_size: usize) -> String {
                 "proptest::collection::vec(proptest::bool::ANY, {count})\
                  .prop_map(|v| {name}::empty(){flags})"
             )
+        }
+        Type::Enum { id, count } => {
+            let name = format!("exports::Enum{id}",);
+            let cases = (0..*count)
+                .map(|index| format!("index => {name}::C{index}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("(0..{count}).prop_map(move |index| match index {{ {cases}, _ => unreachable!() }})")
+        }
+        Type::Union { id, cases } => {
+            assert!(!cases.is_empty());
+            let name = format!(
+                "exports::Union{id}{}",
+                if borrows(ty) { "Result" } else { "" }
+            );
+            let length = cases.len();
+            let cases = union_case_names(cases)
+                .iter()
+                .zip(cases)
+                .map(|(case_name, ty)| {
+                    let strategy = strategy(ty, max_list_size);
+                    format!("index => {strategy}.prop_map({name}::{case_name}).boxed()")
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("(0..{length}).prop_flat_map(move |index| match index {{ {cases}, _ => unreachable!() }})")
+        }
+        Type::Option(ty) => {
+            format!("proptest::option::of({})", strategy(ty, max_list_size))
+        }
+        Type::Result { ok, err } => {
+            let ok = ok
+                .as_ref()
+                .map(|ty| strategy(ty, max_list_size))
+                .unwrap_or_else(|| "Just(())".to_owned());
+            let err = err
+                .as_ref()
+                .map(|ty| strategy(ty, max_list_size))
+                .unwrap_or_else(|| "Just(())".to_owned());
+            format!("proptest::result::maybe_err({ok}, {err})")
         }
         Type::Tuple(types) => {
             if types.is_empty() {

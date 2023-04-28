@@ -213,8 +213,6 @@ fn componentize(options: PrivateOptions) -> Result<()> {
 
     let component = componentize::componentize(&module, &resolve, world, &summary)?;
 
-    fs::write("/tmp/component.wasm", &component)?;
-
     fs::write(&options.output, component)?;
 
     Ok(())

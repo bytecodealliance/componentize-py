@@ -79,6 +79,9 @@ pub struct FunctionBindgen<'a> {
     results_abi: Abi,
     local_stack: Vec<bool>,
     param_count: usize,
+    tuple_types: &'a HashMap<usize, TypeId>,
+    option_type: Option<TypeId>,
+    result_type: Option<TypeId>,
 }
 
 impl<'a> FunctionBindgen<'a> {
@@ -90,6 +93,9 @@ impl<'a> FunctionBindgen<'a> {
         params: &'a [(String, Type)],
         results: &'a Results,
         param_count: usize,
+        tuple_types: &'a HashMap<usize, TypeId>,
+        option_type: Option<TypeId>,
+        result_type: Option<TypeId>,
     ) -> Self {
         Self {
             resolve,
@@ -104,6 +110,9 @@ impl<'a> FunctionBindgen<'a> {
             local_stack: Vec::new(),
             instructions: Vec::new(),
             param_count,
+            tuple_types,
+            option_type,
+            result_type,
         }
     }
 
@@ -500,10 +509,49 @@ impl<'a> FunctionBindgen<'a> {
                         value,
                     );
                 }
+                TypeDefKind::Enum(en) => {
+                    self.lower_variant(
+                        id,
+                        &abi::abi(self.resolve, ty),
+                        en.cases.iter().map(|_| None),
+                        context,
+                        value,
+                    );
+                }
+                TypeDefKind::Union(un) => {
+                    self.lower_variant(
+                        id,
+                        &abi::abi(self.resolve, ty),
+                        un.cases.iter().map(|c| Some(c.ty)),
+                        context,
+                        value,
+                    );
+                }
+                TypeDefKind::Option(some) => {
+                    let id = self.option_type.unwrap();
+                    self.lower_variant(
+                        id,
+                        &abi::abi(self.resolve, ty),
+                        [None, Some(*some)],
+                        context,
+                        value,
+                    );
+                }
+                TypeDefKind::Result(result) => {
+                    let id = self.result_type.unwrap();
+                    self.lower_variant(
+                        id,
+                        &abi::abi(self.resolve, ty),
+                        [result.ok, result.err],
+                        context,
+                        value,
+                    );
+                }
                 TypeDefKind::Flags(flags) => {
                     self.lower_record(id, flags.types(), context, value);
                 }
                 TypeDefKind::Tuple(tuple) => {
+                    let id = *self.tuple_types.get(&tuple.types.len()).unwrap();
                     self.lower_record(id, tuple.types.iter().copied(), context, value);
                 }
                 TypeDefKind::List(ty) => {
@@ -687,10 +735,53 @@ impl<'a> FunctionBindgen<'a> {
                         destination,
                     );
                 }
+                TypeDefKind::Enum(en) => {
+                    self.store_variant(
+                        id,
+                        &abi::abi(self.resolve, ty),
+                        en.cases.iter().map(|_| None),
+                        context,
+                        value,
+                        destination,
+                    );
+                }
+                TypeDefKind::Union(un) => {
+                    self.store_variant(
+                        id,
+                        &abi::abi(self.resolve, ty),
+                        un.cases.iter().map(|c| Some(c.ty)),
+                        context,
+                        value,
+                        destination,
+                    );
+                }
+                TypeDefKind::Option(some) => {
+                    let id = self.option_type.unwrap();
+                    self.store_variant(
+                        id,
+                        &abi::abi(self.resolve, ty),
+                        [None, Some(*some)],
+                        context,
+                        value,
+                        destination,
+                    );
+                }
+                TypeDefKind::Result(result) => {
+                    let id = self.result_type.unwrap();
+                    self.store_variant(
+                        id,
+                        &abi::abi(self.resolve, ty),
+                        [result.ok, result.err],
+                        context,
+                        value,
+                        destination,
+                    );
+                }
                 TypeDefKind::Flags(flags) => {
                     self.store_record(id, flags.types(), context, value, destination);
                 }
                 TypeDefKind::Tuple(tuple) => {
+                    let id = *self.tuple_types.get(&tuple.types.len()).unwrap();
                     self.store_record(id, tuple.types.iter().copied(), context, value, destination);
                 }
                 TypeDefKind::List(_) => {
@@ -898,6 +989,38 @@ impl<'a> FunctionBindgen<'a> {
                         destination,
                     );
                 }
+                TypeDefKind::Enum(en) => {
+                    self.store_copy_variant(
+                        &abi::abi(self.resolve, ty),
+                        en.cases.iter().map(|_| None),
+                        source,
+                        destination,
+                    );
+                }
+                TypeDefKind::Union(un) => {
+                    self.store_copy_variant(
+                        &abi::abi(self.resolve, ty),
+                        un.cases.iter().map(|c| Some(c.ty)),
+                        source,
+                        destination,
+                    );
+                }
+                TypeDefKind::Option(some) => {
+                    self.store_copy_variant(
+                        &abi::abi(self.resolve, ty),
+                        [None, Some(*some)],
+                        source,
+                        destination,
+                    );
+                }
+                TypeDefKind::Result(result) => {
+                    self.store_copy_variant(
+                        &abi::abi(self.resolve, ty),
+                        [result.ok, result.err],
+                        source,
+                        destination,
+                    );
+                }
                 TypeDefKind::Flags(flags) => {
                     self.store_copy_record(flags.types(), source, destination);
                 }
@@ -1101,6 +1224,44 @@ impl<'a> FunctionBindgen<'a> {
                         value,
                     );
                 }
+                TypeDefKind::Enum(en) => {
+                    self.lift_variant(
+                        id,
+                        &abi::abi(self.resolve, ty),
+                        en.cases.iter().map(|_| None),
+                        context,
+                        value,
+                    );
+                }
+                TypeDefKind::Union(un) => {
+                    self.lift_variant(
+                        id,
+                        &abi::abi(self.resolve, ty),
+                        un.cases.iter().map(|c| Some(c.ty)),
+                        context,
+                        value,
+                    );
+                }
+                TypeDefKind::Option(some) => {
+                    let id = self.option_type.unwrap();
+                    self.lift_variant(
+                        id,
+                        &abi::abi(self.resolve, ty),
+                        [None, Some(*some)],
+                        context,
+                        value,
+                    );
+                }
+                TypeDefKind::Result(result) => {
+                    let id = self.result_type.unwrap();
+                    self.lift_variant(
+                        id,
+                        &abi::abi(self.resolve, ty),
+                        [result.ok, result.err],
+                        context,
+                        value,
+                    );
+                }
                 TypeDefKind::Flags(flags) => {
                     self.lift_record_onto_stack(
                         id,
@@ -1110,6 +1271,7 @@ impl<'a> FunctionBindgen<'a> {
                     );
                 }
                 TypeDefKind::Tuple(tuple) => {
+                    let id = *self.tuple_types.get(&tuple.types.len()).unwrap();
                     self.lift_record_onto_stack(id, tuple.types.iter().copied(), context, value);
                 }
                 TypeDefKind::List(ty) => {
@@ -1377,6 +1539,44 @@ impl<'a> FunctionBindgen<'a> {
                         source,
                     );
                 }
+                TypeDefKind::Enum(en) => {
+                    self.load_variant(
+                        id,
+                        &abi::abi(self.resolve, ty),
+                        en.cases.iter().map(|_| None),
+                        context,
+                        source,
+                    );
+                }
+                TypeDefKind::Union(un) => {
+                    self.load_variant(
+                        id,
+                        &abi::abi(self.resolve, ty),
+                        un.cases.iter().map(|c| Some(c.ty)),
+                        context,
+                        source,
+                    );
+                }
+                TypeDefKind::Option(some) => {
+                    let id = self.option_type.unwrap();
+                    self.load_variant(
+                        id,
+                        &abi::abi(self.resolve, ty),
+                        [None, Some(*some)],
+                        context,
+                        source,
+                    );
+                }
+                TypeDefKind::Result(result) => {
+                    let id = self.result_type.unwrap();
+                    self.load_variant(
+                        id,
+                        &abi::abi(self.resolve, ty),
+                        [result.ok, result.err],
+                        context,
+                        source,
+                    );
+                }
                 TypeDefKind::Flags(flags) => {
                     self.load_record_onto_stack(
                         id,
@@ -1386,6 +1586,7 @@ impl<'a> FunctionBindgen<'a> {
                     );
                 }
                 TypeDefKind::Tuple(tuple) => {
+                    let id = *self.tuple_types.get(&tuple.types.len()).unwrap();
                     self.load_record_onto_stack(id, tuple.types.iter().copied(), context, source);
                 }
                 TypeDefKind::List(_) => {
@@ -1603,6 +1804,34 @@ impl<'a> FunctionBindgen<'a> {
                         source,
                     );
                 }
+                TypeDefKind::Enum(en) => {
+                    self.load_copy_variant(
+                        &abi::abi(self.resolve, ty),
+                        en.cases.iter().map(|_| None),
+                        source,
+                    );
+                }
+                TypeDefKind::Union(un) => {
+                    self.load_copy_variant(
+                        &abi::abi(self.resolve, ty),
+                        un.cases.iter().map(|c| Some(c.ty)),
+                        source,
+                    );
+                }
+                TypeDefKind::Option(some) => {
+                    self.load_copy_variant(
+                        &abi::abi(self.resolve, ty),
+                        [None, Some(*some)],
+                        source,
+                    );
+                }
+                TypeDefKind::Result(result) => {
+                    self.load_copy_variant(
+                        &abi::abi(self.resolve, ty),
+                        [result.ok, result.err],
+                        source,
+                    );
+                }
                 TypeDefKind::Flags(flags) => {
                     self.load_copy_record(flags.types(), source);
                 }
@@ -1770,6 +1999,34 @@ impl<'a> FunctionBindgen<'a> {
                         value,
                     );
                 }
+                TypeDefKind::Enum(en) => {
+                    self.free_lowered_variant(
+                        &abi::abi(self.resolve, ty),
+                        en.cases.iter().map(|_| None),
+                        value,
+                    );
+                }
+                TypeDefKind::Union(un) => {
+                    self.free_lowered_variant(
+                        &abi::abi(self.resolve, ty),
+                        un.cases.iter().map(|c| Some(c.ty)),
+                        value,
+                    );
+                }
+                TypeDefKind::Option(some) => {
+                    self.free_lowered_variant(
+                        &abi::abi(self.resolve, ty),
+                        [None, Some(*some)],
+                        value,
+                    );
+                }
+                TypeDefKind::Result(result) => {
+                    self.free_lowered_variant(
+                        &abi::abi(self.resolve, ty),
+                        [result.ok, result.err],
+                        value,
+                    );
+                }
                 TypeDefKind::Flags(flags) => {
                     self.free_lowered_record(flags.types(), value);
                 }
@@ -1903,6 +2160,34 @@ impl<'a> FunctionBindgen<'a> {
                     self.free_stored_variant(
                         &abi::abi(self.resolve, ty),
                         variant.cases.iter().map(|c| c.ty),
+                        value,
+                    );
+                }
+                TypeDefKind::Enum(en) => {
+                    self.free_stored_variant(
+                        &abi::abi(self.resolve, ty),
+                        en.cases.iter().map(|_| None),
+                        value,
+                    );
+                }
+                TypeDefKind::Union(un) => {
+                    self.free_stored_variant(
+                        &abi::abi(self.resolve, ty),
+                        un.cases.iter().map(|c| Some(c.ty)),
+                        value,
+                    );
+                }
+                TypeDefKind::Option(some) => {
+                    self.free_stored_variant(
+                        &abi::abi(self.resolve, ty),
+                        [None, Some(*some)],
+                        value,
+                    );
+                }
+                TypeDefKind::Result(result) => {
+                    self.free_stored_variant(
+                        &abi::abi(self.resolve, ty),
+                        [result.ok, result.err],
                         value,
                     );
                 }

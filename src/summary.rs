@@ -92,6 +92,9 @@ pub struct Summary<'a> {
     pub types: IndexSet<TypeId>,
     pub imported_interfaces: HashMap<InterfaceId, &'a str>,
     pub exported_interfaces: HashMap<InterfaceId, &'a str>,
+    pub tuple_types: HashMap<usize, TypeId>,
+    pub option_type: Option<TypeId>,
+    pub result_type: Option<TypeId>,
 }
 
 impl<'a> Summary<'a> {
@@ -102,6 +105,9 @@ impl<'a> Summary<'a> {
             types: IndexSet::new(),
             exported_interfaces: HashMap::new(),
             imported_interfaces: HashMap::new(),
+            tuple_types: HashMap::new(),
+            option_type: None,
+            result_type: None,
         };
 
         me.visit_functions(&resolve.worlds[world].imports, Direction::Import)?;
@@ -140,11 +146,39 @@ impl<'a> Summary<'a> {
                         }
                     }
                 }
-                TypeDefKind::Flags(_) => {
+                TypeDefKind::Enum(_) | TypeDefKind::Flags(_) => {
                     self.types.insert(id);
                 }
-                TypeDefKind::Tuple(tuple) => {
+                TypeDefKind::Union(un) => {
                     self.types.insert(id);
+                    for case in &un.cases {
+                        self.visit_type(case.ty);
+                    }
+                }
+                TypeDefKind::Option(ty) => {
+                    if self.option_type.is_none() {
+                        self.types.insert(id);
+                        self.option_type = Some(id);
+                    }
+                    self.visit_type(*ty);
+                }
+                TypeDefKind::Result(result) => {
+                    if self.result_type.is_none() {
+                        self.types.insert(id);
+                        self.result_type = Some(id);
+                    }
+                    if let Some(ty) = result.ok {
+                        self.visit_type(ty);
+                    }
+                    if let Some(ty) = result.err {
+                        self.visit_type(ty);
+                    }
+                }
+                TypeDefKind::Tuple(tuple) => {
+                    if !self.tuple_types.contains_key(&tuple.types.len()) {
+                        self.types.insert(id);
+                        self.tuple_types.insert(tuple.types.len(), id);
+                    }
                     for ty in &tuple.types {
                         self.visit_type(*ty);
                     }
@@ -240,6 +274,46 @@ impl<'a> Summary<'a> {
         Ok(())
     }
 
+    fn summarize_type(&self, ty: TypeId) -> symbols::Type<'a> {
+        let ty = &self.resolve.types[ty];
+        match ty.owner {
+            TypeOwner::Interface(interface) => {
+                let (direction, interface) =
+                    if let Some(name) = self.imported_interfaces.get(&interface) {
+                        (Direction::Import, *name)
+                    } else {
+                        (Direction::Export, self.exported_interfaces[&interface])
+                    };
+
+                symbols::Type::Owned(symbols::OwnedType {
+                    direction,
+                    interface,
+                    name: ty.name.as_deref(),
+                    fields: match &ty.kind {
+                        TypeDefKind::Record(record) => {
+                            record.fields.iter().map(|f| f.name.clone()).collect()
+                        }
+                        TypeDefKind::Variant(_) | TypeDefKind::Enum(_) | TypeDefKind::Union(_) => {
+                            vec!["discriminant".to_owned(), "payload".to_owned()]
+                        }
+                        TypeDefKind::Flags(flags) => (0..flags.repr().count())
+                            .map(|index| format!("word{index}"))
+                            .collect(),
+                        _ => todo!(),
+                    },
+                })
+            }
+
+            TypeOwner::None => match &ty.kind {
+                TypeDefKind::Tuple(tuple) => symbols::Type::Tuple(tuple.types.len()),
+                TypeDefKind::Option(_) | TypeDefKind::Result(_) => symbols::Type::Tuple(2),
+                _ => todo!(),
+            },
+
+            TypeOwner::World(_) => todo!("handle types exported directly from a world: {ty:?}"),
+        }
+    }
+
     pub fn collect_symbols(&self) -> Symbols<'a> {
         let mut exports = Vec::new();
         for function in &self.functions {
@@ -253,43 +327,7 @@ impl<'a> Summary<'a> {
 
         let mut types = Vec::new();
         for ty in &self.types {
-            let ty = &self.resolve.types[*ty];
-            types.push(match ty.owner {
-                TypeOwner::Interface(interface) => {
-                    let (direction, interface) =
-                        if let Some(name) = self.imported_interfaces.get(&interface) {
-                            (Direction::Import, *name)
-                        } else {
-                            (Direction::Export, self.exported_interfaces[&interface])
-                        };
-
-                    symbols::Type::Owned(symbols::OwnedType {
-                        direction,
-                        interface,
-                        name: ty.name.as_deref(),
-                        fields: match &ty.kind {
-                            TypeDefKind::Record(record) => {
-                                record.fields.iter().map(|f| f.name.clone()).collect()
-                            }
-                            TypeDefKind::Variant(_) => {
-                                vec!["discriminant".to_owned(), "payload".to_owned()]
-                            }
-                            TypeDefKind::Flags(flags) => (0..flags.repr().count())
-                                .map(|index| format!("word{index}"))
-                                .collect(),
-                            TypeDefKind::List(_) => Vec::new(),
-                            _ => todo!(),
-                        },
-                    })
-                }
-
-                TypeOwner::None => match &ty.kind {
-                    TypeDefKind::Tuple(tuple) => symbols::Type::Tuple(tuple.types.len()),
-                    _ => todo!(),
-                },
-
-                TypeOwner::World(_) => todo!("handle types exported directly from a world: {ty:?}"),
-            });
+            types.push(self.summarize_type(*ty));
         }
 
         Symbols { exports, types }
@@ -392,7 +430,11 @@ class {camel}:
                                 .map(|field| field.name.to_snake_case())
                                 .collect::<Vec<_>>(),
                         ),
-                        TypeDefKind::Variant(_) => {
+                        TypeDefKind::Variant(_)
+                        | TypeDefKind::Enum(_)
+                        | TypeDefKind::Union(_)
+                        | TypeDefKind::Option(_)
+                        | TypeDefKind::Result(_) => {
                             make_class(vec!["discriminant".to_owned(), "payload".to_owned()])
                         }
                         TypeDefKind::Flags(flags) => make_class(

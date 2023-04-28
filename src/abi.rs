@@ -151,6 +151,12 @@ pub fn abi(resolve: &Resolve, ty: Type) -> Abi {
             TypeDefKind::Variant(variant) => {
                 variant_abi(resolve, variant.cases.iter().map(|case| case.ty))
             }
+            TypeDefKind::Enum(en) => variant_abi(resolve, en.cases.iter().map(|_| None)),
+            TypeDefKind::Union(un) => {
+                variant_abi(resolve, un.cases.iter().map(|case| Some(case.ty)))
+            }
+            TypeDefKind::Option(ty) => variant_abi(resolve, [None, Some(*ty)]),
+            TypeDefKind::Result(result) => variant_abi(resolve, [result.ok, result.err]),
             TypeDefKind::Flags(flags) => {
                 let repr = flags.repr();
 
