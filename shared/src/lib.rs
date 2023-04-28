@@ -19,8 +19,7 @@ pub struct OwnedType<'a> {
     pub interface: &'a str,
     #[serde(borrow)]
     pub name: Option<&'a str>,
-    #[serde(borrow)]
-    pub fields: Vec<&'a str>,
+    pub fields: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize)]

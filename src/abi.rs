@@ -1,7 +1,7 @@
 use {
     std::iter,
     wasm_encoder::ValType,
-    wit_parser::{Resolve, Type, TypeDefKind},
+    wit_parser::{FlagsRepr, Resolve, Type, TypeDefKind},
 };
 
 pub const MAX_FLAT_PARAMS: usize = 16;
@@ -150,6 +150,23 @@ pub fn abi(resolve: &Resolve, ty: Type) -> Abi {
             }
             TypeDefKind::Variant(variant) => {
                 variant_abi(resolve, variant.cases.iter().map(|case| case.ty))
+            }
+            TypeDefKind::Flags(flags) => {
+                let repr = flags.repr();
+
+                Abi {
+                    size: match &repr {
+                        FlagsRepr::U8 => 1,
+                        FlagsRepr::U16 => 2,
+                        FlagsRepr::U32(count) => 4 * *count,
+                    },
+                    align: match &repr {
+                        FlagsRepr::U8 | FlagsRepr::U32(0) => 1,
+                        FlagsRepr::U16 => 2,
+                        FlagsRepr::U32(_) => 4,
+                    },
+                    flattened: vec![ValType::I32; repr.count()],
+                }
             }
             TypeDefKind::Tuple(tuple) => record_abi(resolve, tuple.types.iter().copied()),
             TypeDefKind::List(_) => Abi {

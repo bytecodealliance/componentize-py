@@ -13,6 +13,7 @@ const DEFAULT_TEST_COUNT: usize = 10;
 const MAX_PARAM_COUNT: usize = 12;
 const MAX_LIST_SIZE: usize = 100;
 const MAX_TUPLE_SIZE: usize = 12;
+const MAX_FLAG_COUNT: u32 = 100;
 
 #[derive(Clone, Debug)]
 enum Type {
@@ -31,6 +32,7 @@ enum Type {
     String,
     Record { id: usize, fields: Vec<Type> },
     Variant { id: usize, cases: Vec<Option<Type>> },
+    Flags { id: usize, count: u32 },
     Tuple(Vec<Type>),
     List(Box<Type>),
 }
@@ -48,7 +50,8 @@ fn borrows(ty: &Type) -> bool {
         | Type::S64
         | Type::Float32
         | Type::Float64
-        | Type::Char => false,
+        | Type::Char
+        | Type::Flags { .. } => false,
         Type::String | Type::List(_) => true,
         Type::Record { fields, .. } | Type::Tuple(fields) => fields.iter().any(borrows),
         Type::Variant { cases, .. } => cases
@@ -58,7 +61,7 @@ fn borrows(ty: &Type) -> bool {
 }
 
 fn any_type(max_size: usize, next_id: Rc<Cell<usize>>) -> impl Strategy<Value = Type> {
-    (0..17).prop_flat_map(move |index| match index {
+    (0..18).prop_flat_map(move |index| match index {
         0 => Just(Type::Bool).boxed(),
         1 => Just(Type::U8).boxed(),
         2 => Just(Type::S8).boxed(),
@@ -97,12 +100,22 @@ fn any_type(max_size: usize, next_id: Rc<Cell<usize>>) -> impl Strategy<Value = 
             }
         })
         .boxed(),
-        15 => {
+        15 => (0..MAX_FLAG_COUNT)
+            .prop_map({
+                let next_id = next_id.clone();
+                move |count| {
+                    let id = next_id.get();
+                    next_id.set(id + 1);
+                    Type::Flags { id, count }
+                }
+            })
+            .boxed(),
+        16 => {
             proptest::collection::vec(any_type(max_size / 2, next_id.clone()), 0..max_size.max(2))
                 .prop_map(Type::Tuple)
                 .boxed()
         }
-        16 => any_type(max_size, next_id.clone())
+        17 => any_type(max_size, next_id.clone())
             .prop_map(|ty| Type::List(Box::new(ty)))
             .boxed(),
         _ => unreachable!(),
@@ -174,6 +187,24 @@ fn wit_type_name(wit: &mut String, ty: &Type) -> String {
 
             format!("variant{id}")
         }
+        Type::Flags { id, count } => {
+            let flags = (0..*count)
+                .map(|index| format!("f{index}"))
+                .collect::<Vec<_>>()
+                .join(",\n        ");
+
+            write!(
+                wit,
+                "
+    flags flags{id} {{
+        {flags}
+    }}
+"
+            )
+            .unwrap();
+
+            format!("flags{id}")
+        }
         Type::Tuple(types) => {
             let types = types
                 .iter()
@@ -215,6 +246,9 @@ fn rust_type_name(module: &str, ty: &Type) -> String {
                 if borrows(ty) { "Result" } else { "" }
             )
         }
+        Type::Flags { id, .. } => {
+            format!("{module}::Flags{id}")
+        }
         Type::Tuple(types) => {
             let types = types
                 .iter()
@@ -241,7 +275,8 @@ fn equality(a: &str, b: &str, ty: &Type) -> String {
         | Type::U64
         | Type::S64
         | Type::Char
-        | Type::String => format!("({a} == {b})"),
+        | Type::String
+        | Type::Flags { .. } => format!("({a} == {b})"),
         Type::Float32 | Type::Float64 => format!("(({a}.is_nan() && {b}.is_nan()) || {a} == {b})"),
         Type::Record { fields, .. } => {
             if fields.is_empty() {
@@ -367,6 +402,21 @@ fn strategy(ty: &Type, max_list_size: usize) -> String {
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("(0..{length}).prop_flat_map(move |index| match index {{ {cases}, _ => unreachable!() }})")
+        }
+        Type::Flags { id, count } => {
+            let name = format!("exports::Flags{id}");
+
+            let flags = (0..*count)
+                .map(|index| {
+                    format!(" | if v[{index}] {{ {name}::F{index} }} else {{ {name}::empty() }}")
+                })
+                .collect::<Vec<_>>()
+                .concat();
+
+            format!(
+                "proptest::collection::vec(proptest::bool::ANY, {count})\
+                 .prop_map(|v| {name}::empty(){flags})"
+            )
         }
         Type::Tuple(types) => {
             if types.is_empty() {

@@ -140,6 +140,9 @@ impl<'a> Summary<'a> {
                         }
                     }
                 }
+                TypeDefKind::Flags(_) => {
+                    self.types.insert(id);
+                }
                 TypeDefKind::Tuple(tuple) => {
                     self.types.insert(id);
                     for ty in &tuple.types {
@@ -266,11 +269,14 @@ impl<'a> Summary<'a> {
                         name: ty.name.as_deref(),
                         fields: match &ty.kind {
                             TypeDefKind::Record(record) => {
-                                record.fields.iter().map(|f| f.name.as_str()).collect()
+                                record.fields.iter().map(|f| f.name.clone()).collect()
                             }
                             TypeDefKind::Variant(_) => {
-                                vec!["discriminant", "payload"]
+                                vec!["discriminant".to_owned(), "payload".to_owned()]
                             }
+                            TypeDefKind::Flags(flags) => (0..flags.repr().count())
+                                .map(|index| format!("word{index}"))
+                                .collect(),
                             TypeDefKind::List(_) => Vec::new(),
                             _ => todo!(),
                         },
@@ -344,70 +350,56 @@ def {snake}({params}):
             let ty = &self.resolve.types[*ty];
             match ty.owner {
                 TypeOwner::Interface(interface) => {
-                    // todo: generate `dataclass` with typings
-                    let camel = || {
-                        if let Some(name) = &ty.name {
+                    // todo: reuse `wasmtime-py`'s code generation machinery
+
+                    let make_class = |field_names: Vec<String>| {
+                        let camel = if let Some(name) = &ty.name {
                             name.to_upper_camel_case()
                         } else {
                             format!("AnonymousType{index}")
+                        };
+
+                        let params = iter::once("self")
+                            .chain(field_names.iter().map(String::as_str))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+
+                        let mut inits = field_names
+                            .iter()
+                            .map(|field_name| format!("self.{field_name} = {field_name}"))
+                            .collect::<Vec<_>>()
+                            .join("\n        ");
+
+                        if inits.is_empty() {
+                            inits = "pass".to_owned()
                         }
+
+                        Some(format!(
+                            r#"
+class {camel}:
+    def __init__({params}):
+        {inits}
+
+"#
+                        ))
                     };
 
                     let code = match &ty.kind {
-                        TypeDefKind::Record(record) => {
-                            let camel = camel();
-
-                            let snakes =
-                                || record.fields.iter().map(|field| field.name.to_snake_case());
-
-                            let params = iter::once("self".to_owned())
-                                .chain(snakes())
-                                .collect::<Vec<_>>()
-                                .join(", ");
-
-                            let mut inits = snakes()
-                                .map(|snake| format!("self.{snake} = {snake}"))
-                                .collect::<Vec<_>>()
-                                .join("\n        ");
-
-                            if inits.is_empty() {
-                                inits = "pass".to_owned()
-                            }
-
-                            Some(format!(
-                                r#"
-class {camel}:
-    def __init__({params}):
-        {inits}
-
-"#
-                            ))
-                        }
-                        TypeDefKind::Variant(_) => {
-                            let camel = camel();
-
-                            let snakes = ["discriminant", "payload"];
-
-                            let params = iter::once("self")
-                                .chain(snakes)
-                                .collect::<Vec<_>>()
-                                .join(", ");
-
-                            let inits = snakes
+                        TypeDefKind::Record(record) => make_class(
+                            record
+                                .fields
                                 .iter()
-                                .map(|snake| format!("self.{snake} = {snake}"))
-                                .collect::<Vec<_>>()
-                                .join("\n        ");
-
-                            Some(format!(
-                                r#"
-class {camel}:
-    def __init__({params}):
-        {inits}
-
-"#
-                            ))
+                                .map(|field| field.name.to_snake_case())
+                                .collect::<Vec<_>>(),
+                        ),
+                        TypeDefKind::Variant(_) => {
+                            make_class(vec!["discriminant".to_owned(), "payload".to_owned()])
                         }
+                        TypeDefKind::Flags(flags) => make_class(
+                            (0..flags.repr().count())
+                                .map(|index| format!("word{index}"))
+                                .collect(),
+                        ),
                         TypeDefKind::Tuple(_) | TypeDefKind::List(_) => None,
                         _ => todo!(),
                     };

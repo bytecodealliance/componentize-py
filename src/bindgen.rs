@@ -500,6 +500,9 @@ impl<'a> FunctionBindgen<'a> {
                         value,
                     );
                 }
+                TypeDefKind::Flags(flags) => {
+                    self.lower_record(id, flags.types(), context, value);
+                }
                 TypeDefKind::Tuple(tuple) => {
                     self.lower_record(id, tuple.types.iter().copied(), context, value);
                 }
@@ -683,6 +686,9 @@ impl<'a> FunctionBindgen<'a> {
                         value,
                         destination,
                     );
+                }
+                TypeDefKind::Flags(flags) => {
+                    self.store_record(id, flags.types(), context, value, destination);
                 }
                 TypeDefKind::Tuple(tuple) => {
                     self.store_record(id, tuple.types.iter().copied(), context, value, destination);
@@ -892,6 +898,9 @@ impl<'a> FunctionBindgen<'a> {
                         destination,
                     );
                 }
+                TypeDefKind::Flags(flags) => {
+                    self.store_copy_record(flags.types(), source, destination);
+                }
                 TypeDefKind::Tuple(tuple) => {
                     self.store_copy_record(tuple.types.iter().copied(), source, destination);
                 }
@@ -1088,6 +1097,14 @@ impl<'a> FunctionBindgen<'a> {
                         id,
                         &abi::abi(self.resolve, ty),
                         variant.cases.iter().map(|c| c.ty),
+                        context,
+                        value,
+                    );
+                }
+                TypeDefKind::Flags(flags) => {
+                    self.lift_record_onto_stack(
+                        id,
+                        flags.types().collect::<Vec<_>>().into_iter(),
                         context,
                         value,
                     );
@@ -1360,6 +1377,14 @@ impl<'a> FunctionBindgen<'a> {
                         source,
                     );
                 }
+                TypeDefKind::Flags(flags) => {
+                    self.load_record_onto_stack(
+                        id,
+                        flags.types().collect::<Vec<_>>().into_iter(),
+                        context,
+                        source,
+                    );
+                }
                 TypeDefKind::Tuple(tuple) => {
                     self.load_record_onto_stack(id, tuple.types.iter().copied(), context, source);
                 }
@@ -1578,6 +1603,9 @@ impl<'a> FunctionBindgen<'a> {
                         source,
                     );
                 }
+                TypeDefKind::Flags(flags) => {
+                    self.load_copy_record(flags.types(), source);
+                }
                 TypeDefKind::Tuple(tuple) => {
                     self.load_copy_record(tuple.types.iter().copied(), source);
                 }
@@ -1742,6 +1770,9 @@ impl<'a> FunctionBindgen<'a> {
                         value,
                     );
                 }
+                TypeDefKind::Flags(flags) => {
+                    self.free_lowered_record(flags.types(), value);
+                }
                 TypeDefKind::Tuple(tuple) => {
                     self.free_lowered_record(tuple.types.iter().copied(), value);
                 }
@@ -1874,6 +1905,9 @@ impl<'a> FunctionBindgen<'a> {
                         variant.cases.iter().map(|c| c.ty),
                         value,
                     );
+                }
+                TypeDefKind::Flags(flags) => {
+                    self.free_stored_record(flags.types(), value);
                 }
                 TypeDefKind::Tuple(tuple) => {
                     self.free_stored_record(tuple.types.iter().copied(), value);

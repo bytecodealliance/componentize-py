@@ -125,7 +125,7 @@ fn do_init() -> Result<()> {
             .set(
                 symbols
                     .types
-                    .iter()
+                    .into_iter()
                     .enumerate()
                     .map(|(index, ty)| {
                         Ok(match ty {
@@ -142,10 +142,10 @@ fn do_init() -> Result<()> {
                                     )?
                                     .into(),
 
-                                fields: ty.fields.iter().map(|&f| f.to_owned()).collect(),
+                                fields: ty.fields,
                             },
 
-                            symbols::Type::Tuple(length) => Type::Tuple(*length),
+                            symbols::Type::Tuple(length) => Type::Tuple(length),
                         })
                     })
                     .collect::<PyResult<_>>()?,
