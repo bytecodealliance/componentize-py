@@ -107,6 +107,50 @@ fn variant_abi(resolve: &Resolve, types: impl IntoIterator<Item = Option<Type>>)
     }
 }
 
+pub fn has_pointer(resolve: &Resolve, ty: Type) -> bool {
+    match ty {
+        Type::Bool
+        | Type::U8
+        | Type::S8
+        | Type::U16
+        | Type::S16
+        | Type::U32
+        | Type::S32
+        | Type::Char
+        | Type::U64
+        | Type::S64
+        | Type::Float32
+        | Type::Float64 => false,
+        Type::String => true,
+        Type::Id(id) => match &resolve.types[id].kind {
+            TypeDefKind::Record(record) => record
+                .fields
+                .iter()
+                .any(|field| has_pointer(resolve, field.ty)),
+            TypeDefKind::Variant(variant) => variant
+                .cases
+                .iter()
+                .any(|case| case.ty.map(|ty| has_pointer(resolve, ty)).unwrap_or(false)),
+            TypeDefKind::Enum(_) | TypeDefKind::Flags(_) => false,
+            TypeDefKind::Union(un) => un.cases.iter().any(|case| has_pointer(resolve, case.ty)),
+            TypeDefKind::Option(ty) => has_pointer(resolve, *ty),
+            TypeDefKind::Result(result) => {
+                result
+                    .ok
+                    .map(|ty| has_pointer(resolve, ty))
+                    .unwrap_or(false)
+                    || result
+                        .err
+                        .map(|ty| has_pointer(resolve, ty))
+                        .unwrap_or(false)
+            }
+            TypeDefKind::Tuple(tuple) => tuple.types.iter().any(|ty| has_pointer(resolve, *ty)),
+            TypeDefKind::List(_) => true,
+            _ => todo!(),
+        },
+    }
+}
+
 pub fn abi(resolve: &Resolve, ty: Type) -> Abi {
     match ty {
         Type::Bool | Type::U8 | Type::S8 => Abi {

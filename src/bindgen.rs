@@ -54,7 +54,9 @@ declare_enum! {
         Init,
         MakeList,
         ListAppend,
-        None
+        None,
+        GetBytes,
+        MakeBytes
     } LINK_LIST
 }
 
@@ -85,6 +87,7 @@ pub struct FunctionBindgen<'a> {
 }
 
 impl<'a> FunctionBindgen<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         resolve: &'a Resolve,
         stack_pointer: u32,
@@ -555,22 +558,15 @@ impl<'a> FunctionBindgen<'a> {
                     self.lower_record(id, tuple.types.iter().copied(), context, value);
                 }
                 TypeDefKind::List(ty) => {
-                    // TODO: optimize `list<u8>` (and others if appropriate)
-
                     let abi = abi::abi(self.resolve, *ty);
+
                     let length = self.push_local(ValType::I32);
-                    let index = self.push_local(ValType::I32);
                     let destination = self.push_local(ValType::I32);
-                    let element_value = self.push_local(ValType::I32);
-                    let element_destination = self.push_local(ValType::I32);
 
                     self.push(Ins::LocalGet(context));
                     self.push(Ins::LocalGet(value));
                     self.link_call(Link::GetListLength);
                     self.push(Ins::LocalSet(length));
-
-                    self.push(Ins::I32Const(0));
-                    self.push(Ins::LocalSet(index));
 
                     self.push(Ins::LocalGet(length));
                     self.push(Ins::I32Const(abi.size.try_into().unwrap()));
@@ -579,47 +575,63 @@ impl<'a> FunctionBindgen<'a> {
                     self.link_call(Link::Allocate);
                     self.push(Ins::LocalSet(destination));
 
-                    self.push(Ins::Loop(BlockType::Empty));
+                    if let Type::U8 = ty {
+                        self.push(Ins::LocalGet(context));
+                        self.push(Ins::LocalGet(value));
+                        self.push(Ins::LocalGet(destination));
+                        self.push(Ins::LocalGet(length));
+                        self.link_call(Link::GetBytes);
+                    } else {
+                        let index = self.push_local(ValType::I32);
+                        let element_value = self.push_local(ValType::I32);
+                        let element_destination = self.push_local(ValType::I32);
 
-                    self.push(Ins::LocalGet(index));
-                    self.push(Ins::LocalGet(length));
-                    self.push(Ins::I32Ne);
+                        self.push(Ins::I32Const(0));
+                        self.push(Ins::LocalSet(index));
 
-                    self.push(Ins::If(BlockType::Empty));
+                        self.push(Ins::Loop(BlockType::Empty));
 
-                    self.push(Ins::LocalGet(context));
-                    self.push(Ins::LocalGet(value));
-                    self.push(Ins::LocalGet(index));
-                    self.link_call(Link::GetListElement);
-                    self.push(Ins::LocalSet(element_value));
+                        self.push(Ins::LocalGet(index));
+                        self.push(Ins::LocalGet(length));
+                        self.push(Ins::I32Ne);
+
+                        self.push(Ins::If(BlockType::Empty));
+
+                        self.push(Ins::LocalGet(context));
+                        self.push(Ins::LocalGet(value));
+                        self.push(Ins::LocalGet(index));
+                        self.link_call(Link::GetListElement);
+                        self.push(Ins::LocalSet(element_value));
+
+                        self.push(Ins::LocalGet(destination));
+                        self.push(Ins::LocalGet(index));
+                        self.push(Ins::I32Const(abi.size.try_into().unwrap()));
+                        self.push(Ins::I32Mul);
+                        self.push(Ins::I32Add);
+                        self.push(Ins::LocalSet(element_destination));
+
+                        self.store(*ty, context, element_value, element_destination);
+
+                        self.push(Ins::LocalGet(index));
+                        self.push(Ins::I32Const(1));
+                        self.push(Ins::I32Add);
+                        self.push(Ins::LocalSet(index));
+
+                        self.push(Ins::Br(1));
+
+                        self.push(Ins::End);
+
+                        self.push(Ins::End);
+
+                        self.pop_local(element_destination, ValType::I32);
+                        self.pop_local(element_value, ValType::I32);
+                        self.pop_local(index, ValType::I32);
+                    }
 
                     self.push(Ins::LocalGet(destination));
-                    self.push(Ins::LocalGet(index));
-                    self.push(Ins::I32Const(abi.size.try_into().unwrap()));
-                    self.push(Ins::I32Mul);
-                    self.push(Ins::I32Add);
-                    self.push(Ins::LocalSet(element_destination));
-
-                    self.store(*ty, context, element_value, element_destination);
-
-                    self.push(Ins::LocalGet(index));
-                    self.push(Ins::I32Const(1));
-                    self.push(Ins::I32Add);
-                    self.push(Ins::LocalSet(index));
-
-                    self.push(Ins::Br(1));
-
-                    self.push(Ins::End);
-
-                    self.push(Ins::End);
-
-                    self.push(Ins::LocalGet(destination));
                     self.push(Ins::LocalGet(length));
 
-                    self.pop_local(element_destination, ValType::I32);
-                    self.pop_local(element_value, ValType::I32);
                     self.pop_local(destination, ValType::I32);
-                    self.pop_local(index, ValType::I32);
                     self.pop_local(length, ValType::I32);
                 }
                 _ => todo!(),
@@ -848,21 +860,22 @@ impl<'a> FunctionBindgen<'a> {
         block_type: BlockType,
         types: &[Option<Type>],
         discriminant: u32,
+        predicate: impl (Fn(&Self, Option<Type>) -> bool) + Copy,
         fun: impl Fn(&mut Self, Option<Type>) + Copy,
     ) {
         match types {
             [] => unreachable!(),
             [ty] => fun(self, *ty),
             types => {
-                if types.iter().any(Option::is_some) {
+                if types.iter().any(|ty| predicate(self, *ty)) {
                     let middle = types.len() / 2;
                     self.push(Ins::LocalGet(discriminant));
                     self.push(Ins::I32Const(middle.try_into().unwrap()));
                     self.push(Ins::I32LtU);
                     self.push(Ins::If(block_type));
-                    self.search_variant(block_type, &types[..middle], discriminant, fun);
+                    self.search_variant(block_type, &types[..middle], discriminant, predicate, fun);
                     self.push(Ins::Else);
-                    self.search_variant(block_type, &types[middle..], discriminant, fun);
+                    self.search_variant(block_type, &types[middle..], discriminant, predicate, fun);
                     self.push(Ins::End);
                 } else {
                     fun(self, None);
@@ -921,11 +934,17 @@ impl<'a> FunctionBindgen<'a> {
             self.push(Ins::I32Add);
             self.push(Ins::LocalSet(payload_destination));
 
-            self.search_variant(BlockType::Empty, &types, discriminant, |this, ty| {
-                if let Some(ty) = ty {
-                    this.store(ty, context, payload, payload_destination);
-                }
-            });
+            self.search_variant(
+                BlockType::Empty,
+                &types,
+                discriminant,
+                |_, ty| ty.is_some(),
+                |this, ty| {
+                    if let Some(ty) = ty {
+                        this.store(ty, context, payload, payload_destination);
+                    }
+                },
+            );
 
             self.pop_local(payload_destination, ValType::I32);
             self.pop_local(payload, ValType::I32);
@@ -1155,17 +1174,23 @@ impl<'a> FunctionBindgen<'a> {
             self.push(Ins::I32Add);
             self.push(Ins::LocalSet(payload_destination));
 
-            self.search_variant(BlockType::Empty, &types, source[0], |this, ty| {
-                if let Some(ty) = ty {
-                    let (source, locals) = this.convert_all(abi, ty, &source[1..]);
+            self.search_variant(
+                BlockType::Empty,
+                &types,
+                source[0],
+                |_, ty| ty.is_some(),
+                |this, ty| {
+                    if let Some(ty) = ty {
+                        let (source, locals) = this.convert_all(abi, ty, &source[1..]);
 
-                    this.store_copy(ty, &source, payload_destination);
+                        this.store_copy(ty, &source, payload_destination);
 
-                    for (local, ty) in locals.into_iter().rev() {
-                        this.pop_local(local, ty);
+                        for (local, ty) in locals.into_iter().rev() {
+                            this.pop_local(local, ty);
+                        }
                     }
-                }
-            });
+                },
+            );
 
             self.pop_local(payload_destination, ValType::I32);
         }
@@ -1275,62 +1300,67 @@ impl<'a> FunctionBindgen<'a> {
                     self.lift_record_onto_stack(id, tuple.types.iter().copied(), context, value);
                 }
                 TypeDefKind::List(ty) => {
-                    // TODO: optimize using bulk memory operation when list element is primitive
-
                     let source = value[0];
                     let length = value[1];
 
                     let abi = abi::abi(self.resolve, *ty);
 
-                    let index = self.push_local(ValType::I32);
-                    let element_source = self.push_local(ValType::I32);
-                    let destination = self.push_local(ValType::I32);
+                    if let Type::U8 = ty {
+                        self.push(Ins::LocalGet(context));
+                        self.push(Ins::LocalGet(source));
+                        self.push(Ins::LocalGet(length));
+                        self.link_call(Link::MakeBytes);
+                    } else {
+                        let index = self.push_local(ValType::I32);
+                        let element_source = self.push_local(ValType::I32);
+                        let destination = self.push_local(ValType::I32);
 
-                    self.push(Ins::LocalGet(context));
-                    self.link_call(Link::MakeList);
-                    self.push(Ins::LocalSet(destination));
+                        self.push(Ins::LocalGet(context));
+                        self.link_call(Link::MakeList);
+                        self.push(Ins::LocalSet(destination));
 
-                    self.push(Ins::I32Const(0));
-                    self.push(Ins::LocalSet(index));
+                        self.push(Ins::I32Const(0));
+                        self.push(Ins::LocalSet(index));
 
-                    self.push(Ins::Loop(BlockType::Empty));
+                        self.push(Ins::Loop(BlockType::Empty));
 
-                    self.push(Ins::LocalGet(index));
-                    self.push(Ins::LocalGet(length));
-                    self.push(Ins::I32Ne);
+                        self.push(Ins::LocalGet(index));
+                        self.push(Ins::LocalGet(length));
+                        self.push(Ins::I32Ne);
 
-                    self.push(Ins::If(BlockType::Empty));
+                        self.push(Ins::If(BlockType::Empty));
 
-                    self.push(Ins::LocalGet(source));
-                    self.push(Ins::LocalGet(index));
-                    self.push(Ins::I32Const(abi.size.try_into().unwrap()));
-                    self.push(Ins::I32Mul);
-                    self.push(Ins::I32Add);
-                    self.push(Ins::LocalSet(element_source));
+                        self.push(Ins::LocalGet(source));
+                        self.push(Ins::LocalGet(index));
+                        self.push(Ins::I32Const(abi.size.try_into().unwrap()));
+                        self.push(Ins::I32Mul);
+                        self.push(Ins::I32Add);
+                        self.push(Ins::LocalSet(element_source));
 
-                    self.push(Ins::LocalGet(context));
-                    self.push(Ins::LocalGet(destination));
+                        self.push(Ins::LocalGet(context));
+                        self.push(Ins::LocalGet(destination));
 
-                    self.load(*ty, context, element_source);
+                        self.load(*ty, context, element_source);
 
-                    self.link_call(Link::ListAppend);
+                        self.link_call(Link::ListAppend);
 
-                    self.push(Ins::LocalGet(index));
-                    self.push(Ins::I32Const(1));
-                    self.push(Ins::I32Add);
-                    self.push(Ins::LocalSet(index));
+                        self.push(Ins::LocalGet(index));
+                        self.push(Ins::I32Const(1));
+                        self.push(Ins::I32Add);
+                        self.push(Ins::LocalSet(index));
 
-                    self.push(Ins::Br(1));
+                        self.push(Ins::Br(1));
 
-                    self.push(Ins::End);
+                        self.push(Ins::End);
 
-                    self.push(Ins::End);
+                        self.push(Ins::End);
 
-                    self.push(Ins::LocalGet(destination));
+                        self.push(Ins::LocalGet(destination));
 
-                    self.pop_local(destination, ValType::I32);
-                    self.pop_local(element_source, ValType::I32);
-                    self.pop_local(index, ValType::I32);
+                        self.pop_local(destination, ValType::I32);
+                        self.pop_local(element_source, ValType::I32);
+                        self.pop_local(index, ValType::I32);
+                    }
                 }
                 _ => todo!(),
             },
@@ -1419,6 +1449,7 @@ impl<'a> FunctionBindgen<'a> {
             BlockType::Result(ValType::I32),
             &types,
             source[0],
+            |_, ty| ty.is_some(),
             |this, ty| {
                 if let Some(ty) = ty {
                     let (source, locals) = this.convert_all(abi, ty, &source[1..]);
@@ -1724,6 +1755,7 @@ impl<'a> FunctionBindgen<'a> {
                 BlockType::Result(ValType::I32),
                 &types,
                 discriminant,
+                |_, ty| ty.is_some(),
                 |this, ty| {
                     if let Some(ty) = ty {
                         this.load(ty, context, payload_source);
@@ -1919,36 +1951,42 @@ impl<'a> FunctionBindgen<'a> {
             self.push(Ins::I32Add);
             self.push(Ins::LocalSet(payload_source));
 
-            self.search_variant(BlockType::Empty, &types, discriminant, |this, ty| {
-                if let Some(ty) = ty {
-                    this.load_copy(ty, payload_source);
+            self.search_variant(
+                BlockType::Empty,
+                &types,
+                discriminant,
+                |_, ty| ty.is_some(),
+                |this, ty| {
+                    if let Some(ty) = ty {
+                        this.load_copy(ty, payload_source);
 
-                    let payload_abi = abi::abi(this.resolve, ty);
-                    for ((payload_type, joined_type), local) in payload_abi
-                        .flattened
-                        .iter()
-                        .zip(abi.flattened.iter().skip(1))
-                        .zip(&destination)
-                        .rev()
-                    {
-                        if payload_type != joined_type {
-                            this.convert(*payload_type, *joined_type);
+                        let payload_abi = abi::abi(this.resolve, ty);
+                        for ((payload_type, joined_type), local) in payload_abi
+                            .flattened
+                            .iter()
+                            .zip(abi.flattened.iter().skip(1))
+                            .zip(&destination)
+                            .rev()
+                        {
+                            if payload_type != joined_type {
+                                this.convert(*payload_type, *joined_type);
+                            }
+                            this.push(Ins::LocalSet(*local));
                         }
-                        this.push(Ins::LocalSet(*local));
-                    }
 
-                    for (joined_type, local) in abi
-                        .flattened
-                        .iter()
-                        .skip(1)
-                        .zip(&destination)
-                        .skip(payload_abi.flattened.len())
-                    {
-                        this.zero(*joined_type);
-                        this.push(Ins::LocalSet(*local));
+                        for (joined_type, local) in abi
+                            .flattened
+                            .iter()
+                            .skip(1)
+                            .zip(&destination)
+                            .skip(payload_abi.flattened.len())
+                        {
+                            this.zero(*joined_type);
+                            this.push(Ins::LocalSet(*local));
+                        }
                     }
-                }
-            });
+                },
+            );
 
             for &local in &destination {
                 self.push(Ins::LocalGet(local));
@@ -2034,46 +2072,49 @@ impl<'a> FunctionBindgen<'a> {
                     self.free_lowered_record(tuple.types.iter().copied(), value);
                 }
                 TypeDefKind::List(ty) => {
-                    // TODO: optimize (i.e. no loop) when list element is primitive
-
                     let pointer = value[0];
                     let length = value[1];
 
                     let abi = abi::abi(self.resolve, *ty);
 
-                    let index = self.push_local(ValType::I32);
-                    let element_pointer = self.push_local(ValType::I32);
+                    if abi::has_pointer(self.resolve, *ty) {
+                        let index = self.push_local(ValType::I32);
+                        let element_pointer = self.push_local(ValType::I32);
 
-                    self.push(Ins::I32Const(0));
-                    self.push(Ins::LocalSet(index));
+                        self.push(Ins::I32Const(0));
+                        self.push(Ins::LocalSet(index));
 
-                    self.push(Ins::Loop(BlockType::Empty));
+                        self.push(Ins::Loop(BlockType::Empty));
 
-                    self.push(Ins::LocalGet(index));
-                    self.push(Ins::LocalGet(length));
-                    self.push(Ins::I32Ne);
+                        self.push(Ins::LocalGet(index));
+                        self.push(Ins::LocalGet(length));
+                        self.push(Ins::I32Ne);
 
-                    self.push(Ins::If(BlockType::Empty));
+                        self.push(Ins::If(BlockType::Empty));
 
-                    self.push(Ins::LocalGet(pointer));
-                    self.push(Ins::LocalGet(index));
-                    self.push(Ins::I32Const(abi.size.try_into().unwrap()));
-                    self.push(Ins::I32Mul);
-                    self.push(Ins::I32Add);
-                    self.push(Ins::LocalSet(element_pointer));
+                        self.push(Ins::LocalGet(pointer));
+                        self.push(Ins::LocalGet(index));
+                        self.push(Ins::I32Const(abi.size.try_into().unwrap()));
+                        self.push(Ins::I32Mul);
+                        self.push(Ins::I32Add);
+                        self.push(Ins::LocalSet(element_pointer));
 
-                    self.free_stored(*ty, element_pointer);
+                        self.free_stored(*ty, element_pointer);
 
-                    self.push(Ins::LocalGet(index));
-                    self.push(Ins::I32Const(1));
-                    self.push(Ins::I32Add);
-                    self.push(Ins::LocalSet(index));
+                        self.push(Ins::LocalGet(index));
+                        self.push(Ins::I32Const(1));
+                        self.push(Ins::I32Add);
+                        self.push(Ins::LocalSet(index));
 
-                    self.push(Ins::Br(1));
+                        self.push(Ins::Br(1));
 
-                    self.push(Ins::End);
+                        self.push(Ins::End);
 
-                    self.push(Ins::End);
+                        self.push(Ins::End);
+
+                        self.pop_local(element_pointer, ValType::I32);
+                        self.pop_local(index, ValType::I32);
+                    }
 
                     self.push(Ins::LocalGet(pointer));
                     self.push(Ins::LocalGet(length));
@@ -2081,9 +2122,6 @@ impl<'a> FunctionBindgen<'a> {
                     self.push(Ins::I32Mul);
                     self.push(Ins::I32Const(abi.align.try_into().unwrap()));
                     self.link_call(Link::Free);
-
-                    self.pop_local(element_pointer, ValType::I32);
-                    self.pop_local(index, ValType::I32);
                 }
                 _ => todo!(),
             },
@@ -2111,6 +2149,10 @@ impl<'a> FunctionBindgen<'a> {
             BlockType::Empty,
             &types.into_iter().collect::<Vec<_>>(),
             value[0],
+            |this, ty| {
+                ty.map(|ty| abi::has_pointer(this.resolve, ty))
+                    .unwrap_or(false)
+            },
             |this, ty| {
                 if let Some(ty) = ty {
                     let (value, locals) = this.convert_all(abi, ty, &value[1..]);
@@ -2198,14 +2240,10 @@ impl<'a> FunctionBindgen<'a> {
                     self.free_stored_record(tuple.types.iter().copied(), value);
                 }
                 TypeDefKind::List(ty) => {
-                    // TODO: optimize this for primitive element types
-
                     let abi = abi::abi(self.resolve, *ty);
 
-                    let index = self.push_local(ValType::I32);
                     let body = self.push_local(ValType::I32);
                     let length = self.push_local(ValType::I32);
-                    let element_value = self.push_local(ValType::I32);
 
                     self.push(Ins::LocalGet(value));
                     self.push(Ins::I32Load(mem_arg(0, WORD_ALIGN.try_into().unwrap())));
@@ -2218,36 +2256,44 @@ impl<'a> FunctionBindgen<'a> {
                     )));
                     self.push(Ins::LocalSet(length));
 
-                    self.push(Ins::I32Const(0));
-                    self.push(Ins::LocalSet(index));
+                    if abi::has_pointer(self.resolve, *ty) {
+                        let index = self.push_local(ValType::I32);
+                        let element_value = self.push_local(ValType::I32);
 
-                    self.push(Ins::Loop(BlockType::Empty));
+                        self.push(Ins::I32Const(0));
+                        self.push(Ins::LocalSet(index));
 
-                    self.push(Ins::LocalGet(index));
-                    self.push(Ins::LocalGet(length));
-                    self.push(Ins::I32Ne);
+                        self.push(Ins::Loop(BlockType::Empty));
 
-                    self.push(Ins::If(BlockType::Empty));
+                        self.push(Ins::LocalGet(index));
+                        self.push(Ins::LocalGet(length));
+                        self.push(Ins::I32Ne);
 
-                    self.push(Ins::LocalGet(body));
-                    self.push(Ins::LocalGet(index));
-                    self.push(Ins::I32Const(abi.size.try_into().unwrap()));
-                    self.push(Ins::I32Mul);
-                    self.push(Ins::I32Add);
-                    self.push(Ins::LocalSet(element_value));
+                        self.push(Ins::If(BlockType::Empty));
 
-                    self.free_stored(*ty, element_value);
+                        self.push(Ins::LocalGet(body));
+                        self.push(Ins::LocalGet(index));
+                        self.push(Ins::I32Const(abi.size.try_into().unwrap()));
+                        self.push(Ins::I32Mul);
+                        self.push(Ins::I32Add);
+                        self.push(Ins::LocalSet(element_value));
 
-                    self.push(Ins::LocalGet(index));
-                    self.push(Ins::I32Const(1));
-                    self.push(Ins::I32Add);
-                    self.push(Ins::LocalSet(index));
+                        self.free_stored(*ty, element_value);
 
-                    self.push(Ins::Br(1));
+                        self.push(Ins::LocalGet(index));
+                        self.push(Ins::I32Const(1));
+                        self.push(Ins::I32Add);
+                        self.push(Ins::LocalSet(index));
 
-                    self.push(Ins::End);
+                        self.push(Ins::Br(1));
 
-                    self.push(Ins::End);
+                        self.push(Ins::End);
+
+                        self.push(Ins::End);
+
+                        self.pop_local(element_value, ValType::I32);
+                        self.pop_local(index, ValType::I32);
+                    }
 
                     self.push(Ins::LocalGet(body));
                     self.push(Ins::LocalGet(length));
@@ -2256,10 +2302,8 @@ impl<'a> FunctionBindgen<'a> {
                     self.push(Ins::I32Const(abi.align.try_into().unwrap()));
                     self.link_call(Link::Free);
 
-                    self.pop_local(element_value, ValType::I32);
                     self.pop_local(length, ValType::I32);
                     self.pop_local(body, ValType::I32);
-                    self.pop_local(index, ValType::I32);
                 }
                 _ => todo!(),
             },
@@ -2267,23 +2311,27 @@ impl<'a> FunctionBindgen<'a> {
     }
 
     fn free_stored_record(&mut self, types: impl IntoIterator<Item = Type>, value: u32) {
+        let types = types.into_iter().collect::<Vec<_>>();
+
         let mut load_offset = 0;
         for ty in types {
-            let field_value = self.push_local(ValType::I32);
-
             let abi = abi::abi(self.resolve, ty);
             load_offset = abi::align(load_offset, abi.align);
 
-            self.push(Ins::LocalGet(value));
-            self.push(Ins::I32Const(load_offset.try_into().unwrap()));
-            self.push(Ins::I32Add);
-            self.push(Ins::LocalSet(field_value));
+            if abi::has_pointer(self.resolve, ty) {
+                let field_value = self.push_local(ValType::I32);
 
-            self.free_stored(ty, field_value);
+                self.push(Ins::LocalGet(value));
+                self.push(Ins::I32Const(load_offset.try_into().unwrap()));
+                self.push(Ins::I32Add);
+                self.push(Ins::LocalSet(field_value));
+
+                self.free_stored(ty, field_value);
+
+                self.pop_local(field_value, ValType::I32);
+            }
 
             load_offset += abi.size;
-
-            self.pop_local(field_value, ValType::I32);
         }
     }
 
@@ -2295,8 +2343,12 @@ impl<'a> FunctionBindgen<'a> {
     ) {
         let types = types.into_iter().collect::<Vec<_>>();
         let discriminant_size = abi::discriminant_size(types.len());
+        let predicate = |this: &Self, ty: Option<Type>| {
+            ty.map(|ty| abi::has_pointer(this.resolve, ty))
+                .unwrap_or(false)
+        };
 
-        if types.iter().any(Option::is_some) {
+        if types.iter().any(|ty| predicate(self, *ty)) {
             let discriminant = self.push_local(ValType::I32);
 
             self.push(Ins::LocalGet(value));
@@ -2317,11 +2369,17 @@ impl<'a> FunctionBindgen<'a> {
             self.push(Ins::I32Add);
             self.push(Ins::LocalSet(payload_value));
 
-            self.search_variant(BlockType::Empty, &types, discriminant, |this, ty| {
-                if let Some(ty) = ty {
-                    this.free_stored(ty, payload_value);
-                }
-            });
+            self.search_variant(
+                BlockType::Empty,
+                &types,
+                discriminant,
+                predicate,
+                |this, ty| {
+                    if let Some(ty) = ty {
+                        this.free_stored(ty, payload_value);
+                    }
+                },
+            );
 
             self.pop_local(payload_value, ValType::I32);
             self.pop_local(discriminant, ValType::I32);

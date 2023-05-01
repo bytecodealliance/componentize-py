@@ -8,7 +8,14 @@ use {
     componentize_py_shared::{self as symbols, Direction, Symbols},
     heck::{ToSnakeCase, ToUpperCamelCase},
     indexmap::{IndexMap, IndexSet},
-    std::{collections::HashMap, fs::File, io::Write, iter, path::Path, str},
+    std::{
+        collections::{hash_map::Entry, HashMap},
+        fs::File,
+        io::Write,
+        iter,
+        path::Path,
+        str,
+    },
     wasm_encoder::ValType,
     wit_parser::{
         InterfaceId, Resolve, Results, Type, TypeDefKind, TypeId, TypeOwner, WorldId, WorldItem,
@@ -175,9 +182,9 @@ impl<'a> Summary<'a> {
                     }
                 }
                 TypeDefKind::Tuple(tuple) => {
-                    if !self.tuple_types.contains_key(&tuple.types.len()) {
+                    if let Entry::Vacant(entry) = self.tuple_types.entry(tuple.types.len()) {
                         self.types.insert(id);
-                        self.tuple_types.insert(tuple.types.len(), id);
+                        entry.insert(id);
                     }
                     for ty in &tuple.types {
                         self.visit_type(*ty);

@@ -7,7 +7,7 @@ use {
     once_cell::sync::OnceCell,
     pyo3::{
         exceptions::PyAssertionError,
-        types::{PyList, PyMapping, PyModule, PyString, PyTuple},
+        types::{PyBytes, PyList, PyMapping, PyModule, PyString, PyTuple},
         Py, PyAny, PyErr, PyObject, PyResult, Python, ToPyObject,
     },
     std::{
@@ -322,7 +322,11 @@ pub extern "C" fn componentize_py_get_field<'a>(
 
 #[export_name = "componentize-py#GetListLength"]
 pub extern "C" fn componentize_py_get_list_length(_py: &Python, value: &PyAny) -> usize {
-    value.downcast::<PyList>().unwrap().len()
+    if let Ok(bytes) = value.downcast::<PyBytes>() {
+        bytes.len().unwrap()
+    } else {
+        value.downcast::<PyList>().unwrap().len()
+    }
 }
 
 #[export_name = "componentize-py#GetListElement"]
@@ -379,16 +383,13 @@ pub unsafe extern "C" fn componentize_py_init<'a>(
 ) -> &'a PyAny {
     match &TYPES.get().unwrap()[ty] {
         Type::Owned { constructor, .. } => constructor
-            .call1(
-                *py,
-                PyTuple::new(*py, unsafe { slice::from_raw_parts(data, len) }),
-            )
+            .call1(*py, PyTuple::new(*py, slice::from_raw_parts(data, len)))
             .unwrap()
             .into_ref(*py),
 
         Type::Tuple(length) => {
             assert!(*length == len);
-            PyTuple::new(*py, unsafe { slice::from_raw_parts(data, len) })
+            PyTuple::new(*py, slice::from_raw_parts(data, len))
         }
     }
 }
@@ -407,4 +408,32 @@ pub extern "C" fn componentize_py_list_append(_py: &Python, list: &PyList, eleme
 #[export_name = "componentize-py#None"]
 pub extern "C" fn componentize_py_none<'a>(py: &'a Python) -> &'a PyAny {
     py.None().into_ref(*py)
+}
+
+/// # Safety
+/// TODO
+#[export_name = "componentize-py#GetBytes"]
+pub unsafe extern "C" fn componentize_py_get_bytes(
+    _py: &Python,
+    src: &PyBytes,
+    dst: *mut u8,
+    len: usize,
+) {
+    assert_eq!(len, src.len().unwrap());
+    slice::from_raw_parts_mut(dst, len).copy_from_slice(src.as_bytes())
+}
+
+/// # Safety
+/// TODO
+#[export_name = "componentize-py#MakeBytes"]
+pub unsafe extern "C" fn componentize_py_make_bytes<'a>(
+    py: &'a Python,
+    src: *const u8,
+    len: usize,
+) -> &'a PyAny {
+    PyBytes::new_with(*py, len, |dst| {
+        dst.copy_from_slice(slice::from_raw_parts(src, len));
+        Ok(())
+    })
+    .unwrap()
 }
