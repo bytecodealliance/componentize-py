@@ -577,7 +577,7 @@ impl<'a> FunctionBindgen<'a> {
                     self.link_call(Link::Allocate);
                     self.push(Ins::LocalSet(destination));
 
-                    if let Type::U8 = ty {
+                    if let Type::U8 | Type::S8 = ty {
                         self.push(Ins::LocalGet(context));
                         self.push(Ins::LocalGet(value));
                         self.push(Ins::LocalGet(destination));
@@ -1312,7 +1312,7 @@ impl<'a> FunctionBindgen<'a> {
 
                     let abi = abi::abi(self.resolve, *ty);
 
-                    if let Type::U8 = ty {
+                    if let Type::U8 | Type::S8 = ty {
                         self.push(Ins::LocalGet(context));
                         self.push(Ins::LocalGet(source));
                         self.push(Ins::LocalGet(length));
