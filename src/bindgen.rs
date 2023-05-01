@@ -531,9 +531,8 @@ impl<'a> FunctionBindgen<'a> {
                     );
                 }
                 TypeDefKind::Option(some) => {
-                    let id = self.option_type.unwrap();
                     self.lower_variant(
-                        id,
+                        self.option_type.unwrap(),
                         &abi::abi(self.resolve, ty),
                         [None, Some(*some)],
                         context,
@@ -541,9 +540,8 @@ impl<'a> FunctionBindgen<'a> {
                     );
                 }
                 TypeDefKind::Result(result) => {
-                    let id = self.result_type.unwrap();
                     self.lower_variant(
-                        id,
+                        self.result_type.unwrap(),
                         &abi::abi(self.resolve, ty),
                         [result.ok, result.err],
                         context,
@@ -554,8 +552,12 @@ impl<'a> FunctionBindgen<'a> {
                     self.lower_record(id, flags.types(), context, value);
                 }
                 TypeDefKind::Tuple(tuple) => {
-                    let id = *self.tuple_types.get(&tuple.types.len()).unwrap();
-                    self.lower_record(id, tuple.types.iter().copied(), context, value);
+                    self.lower_record(
+                        *self.tuple_types.get(&tuple.types.len()).unwrap(),
+                        tuple.types.iter().copied(),
+                        context,
+                        value,
+                    );
                 }
                 TypeDefKind::List(ty) => {
                     let abi = abi::abi(self.resolve, *ty);
@@ -768,9 +770,8 @@ impl<'a> FunctionBindgen<'a> {
                     );
                 }
                 TypeDefKind::Option(some) => {
-                    let id = self.option_type.unwrap();
                     self.store_variant(
-                        id,
+                        self.option_type.unwrap(),
                         &abi::abi(self.resolve, ty),
                         [None, Some(*some)],
                         context,
@@ -779,9 +780,8 @@ impl<'a> FunctionBindgen<'a> {
                     );
                 }
                 TypeDefKind::Result(result) => {
-                    let id = self.result_type.unwrap();
                     self.store_variant(
-                        id,
+                        self.result_type.unwrap(),
                         &abi::abi(self.resolve, ty),
                         [result.ok, result.err],
                         context,
@@ -793,8 +793,13 @@ impl<'a> FunctionBindgen<'a> {
                     self.store_record(id, flags.types(), context, value, destination);
                 }
                 TypeDefKind::Tuple(tuple) => {
-                    let id = *self.tuple_types.get(&tuple.types.len()).unwrap();
-                    self.store_record(id, tuple.types.iter().copied(), context, value, destination);
+                    self.store_record(
+                        *self.tuple_types.get(&tuple.types.len()).unwrap(),
+                        tuple.types.iter().copied(),
+                        context,
+                        value,
+                        destination,
+                    );
                 }
                 TypeDefKind::List(_) => {
                     let length = self.push_local(ValType::I32);
@@ -1268,9 +1273,8 @@ impl<'a> FunctionBindgen<'a> {
                     );
                 }
                 TypeDefKind::Option(some) => {
-                    let id = self.option_type.unwrap();
                     self.lift_variant(
-                        id,
+                        self.option_type.unwrap(),
                         &abi::abi(self.resolve, ty),
                         [None, Some(*some)],
                         context,
@@ -1278,9 +1282,8 @@ impl<'a> FunctionBindgen<'a> {
                     );
                 }
                 TypeDefKind::Result(result) => {
-                    let id = self.result_type.unwrap();
                     self.lift_variant(
-                        id,
+                        self.result_type.unwrap(),
                         &abi::abi(self.resolve, ty),
                         [result.ok, result.err],
                         context,
@@ -1296,8 +1299,12 @@ impl<'a> FunctionBindgen<'a> {
                     );
                 }
                 TypeDefKind::Tuple(tuple) => {
-                    let id = *self.tuple_types.get(&tuple.types.len()).unwrap();
-                    self.lift_record_onto_stack(id, tuple.types.iter().copied(), context, value);
+                    self.lift_record_onto_stack(
+                        *self.tuple_types.get(&tuple.types.len()).unwrap(),
+                        tuple.types.iter().copied(),
+                        context,
+                        value,
+                    );
                 }
                 TypeDefKind::List(ty) => {
                     let source = value[0];
@@ -1589,9 +1596,8 @@ impl<'a> FunctionBindgen<'a> {
                     );
                 }
                 TypeDefKind::Option(some) => {
-                    let id = self.option_type.unwrap();
                     self.load_variant(
-                        id,
+                        self.option_type.unwrap(),
                         &abi::abi(self.resolve, ty),
                         [None, Some(*some)],
                         context,
@@ -1599,9 +1605,8 @@ impl<'a> FunctionBindgen<'a> {
                     );
                 }
                 TypeDefKind::Result(result) => {
-                    let id = self.result_type.unwrap();
                     self.load_variant(
-                        id,
+                        self.result_type.unwrap(),
                         &abi::abi(self.resolve, ty),
                         [result.ok, result.err],
                         context,
@@ -1617,8 +1622,12 @@ impl<'a> FunctionBindgen<'a> {
                     );
                 }
                 TypeDefKind::Tuple(tuple) => {
-                    let id = *self.tuple_types.get(&tuple.types.len()).unwrap();
-                    self.load_record_onto_stack(id, tuple.types.iter().copied(), context, source);
+                    self.load_record_onto_stack(
+                        *self.tuple_types.get(&tuple.types.len()).unwrap(),
+                        tuple.types.iter().copied(),
+                        context,
+                        source,
+                    );
                 }
                 TypeDefKind::List(_) => {
                     let body = self.push_local(ValType::I32);
