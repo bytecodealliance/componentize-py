@@ -65,14 +65,15 @@ mod tests {
         fs::write(tempdir.path().join("app.py"), python)?;
 
         assert!(Command::new("../target/release/componentize-py")
-            .arg("app")
+            .arg("--quiet")
             .arg("--wit-path")
             .arg(tempdir.path().join("app.wit"))
+            .arg("componentize")
+            .arg("app")
             .arg("--python-path")
             .arg(tempdir.path())
             .arg("--output")
             .arg(tempdir.path().join("app.wasm"))
-            .arg("--quiet")
             .status()?
             .success());
 

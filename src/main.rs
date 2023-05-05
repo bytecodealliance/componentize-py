@@ -8,8 +8,7 @@ use {
         fs::{self, File},
         io::{self, Cursor, Seek},
         path::{Path, PathBuf},
-        process::Command,
-        str,
+        process, str,
     },
     summary::Summary,
     tar::Archive,
@@ -35,9 +34,15 @@ const NATIVE_PATH_DELIMITER: char = ';';
 #[derive(clap::Parser, Debug)]
 #[command(author, version, about)]
 struct Options {
-    /// The name of a Python module containing the app to wrap
-    app_name: String,
+    #[command(flatten)]
+    common: Common,
 
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(clap::Args, Debug)]
+struct Common {
     /// File or directory containing WIT document(s)
     #[arg(short = 'd', long, default_value = "wit")]
     wit_path: PathBuf,
@@ -45,6 +50,25 @@ struct Options {
     /// Name of world to target (or default world if `None`)
     #[arg(short = 'w', long)]
     world: Option<String>,
+
+    /// Disable non-error output
+    #[arg(short = 'q', long)]
+    quiet: bool,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum Command {
+    /// Generate a component from the specified Python app and its dependencies.
+    Componentize(Componentize),
+
+    /// Generate Python bindings for the world and write them to the specified directory.
+    Bindings(Bindings),
+}
+
+#[derive(clap::Args, Debug)]
+struct Componentize {
+    /// The name of a Python module containing the app to wrap
+    app_name: String,
 
     /// `PYTHONPATH` for specifying directory containing the app and optionally other directories containing
     /// dependencies.
@@ -57,10 +81,14 @@ struct Options {
     /// Output file to which to write the resulting component
     #[arg(short = 'o', long, default_value = "index.wasm")]
     output: PathBuf,
+}
 
-    /// Disable non-error output
-    #[arg(short = 'q', long)]
-    quiet: bool,
+#[derive(clap::Args, Debug)]
+struct Bindings {
+    /// Directory to which bindings should be written.
+    ///
+    /// This will be created if it does not already exist.
+    output_dir: PathBuf,
 }
 
 #[derive(clap::Parser, Debug)]
@@ -78,11 +106,24 @@ fn main() -> Result<()> {
     if env::var_os("COMPONENTIZE_PY_COMPONENTIZE").is_some() {
         componentize(PrivateOptions::parse())
     } else {
-        fork(Options::parse())
+        let options = Options::parse();
+        match options.command {
+            Command::Componentize(componentize) => fork(options.common, componentize),
+            Command::Bindings(bindings) => generate_bindings(options.common, bindings),
+        }
     }
 }
 
-fn fork(options: Options) -> Result<()> {
+fn generate_bindings(common: Common, bindings: Bindings) -> Result<()> {
+    let (resolve, world) = parse_wit(&common.wit_path, common.world.as_deref())?;
+    let summary = Summary::try_new(&resolve, world)?;
+    fs::create_dir_all(&bindings.output_dir)?;
+    summary.generate_code(&bindings.output_dir)?;
+
+    Ok(())
+}
+
+fn fork(common: Common, componentize: Componentize) -> Result<()> {
     // Spawn a subcommand to do the real work.  This gives us an opportunity to clear the environment so that
     // build-time environment variables don't end up in the Wasm module we're building.
     //
@@ -99,7 +140,7 @@ fn fork(options: Options) -> Result<()> {
     ))))?)
     .unpack(stdlib.path())?;
 
-    let mut python_path = options.python_path;
+    let mut python_path = componentize.python_path;
 
     if let Some(site_packages) = find_site_packages()? {
         python_path = format!(
@@ -113,10 +154,10 @@ fn fork(options: Options) -> Result<()> {
     let mut stdout = tempfile::tempfile()?;
     let mut stderr = tempfile::tempfile()?;
 
-    let mut cmd = Command::new(env::args().next().unwrap());
+    let mut cmd = process::Command::new(env::args().next().unwrap());
     cmd.env_clear()
         .env("COMPONENTIZE_PY_COMPONENTIZE", "1")
-        .arg(&options.app_name)
+        .arg(&componentize.app_name)
         .arg(
             stdlib
                 .path()
@@ -124,13 +165,13 @@ fn fork(options: Options) -> Result<()> {
                 .context("non-UTF-8 temporary directory name")?,
         )
         .arg(&python_path)
-        .arg(&options.output)
-        .arg(&options.wit_path)
+        .arg(&componentize.output)
+        .arg(&common.wit_path)
         .stdin(tempfile::tempfile()?)
         .stdout(stdout.try_clone()?)
         .stderr(stderr.try_clone()?);
 
-    if let Some(world) = &options.world {
+    if let Some(world) = &common.world {
         cmd.arg("--world").arg(world);
     }
 
@@ -146,7 +187,7 @@ fn fork(options: Options) -> Result<()> {
         bail!("Couldn't create wasm from input");
     }
 
-    if !options.quiet {
+    if !common.quiet {
         println!("Component built successfully");
     }
 
@@ -219,30 +260,32 @@ fn componentize(options: PrivateOptions) -> Result<()> {
 }
 
 fn find_site_packages() -> Result<Option<PathBuf>> {
-    Ok(match Command::new("pipenv").arg("--venv").output() {
-        Ok(output) => {
-            if output.status.success() {
-                let dir = Path::new(str::from_utf8(&output.stdout)?.trim()).join("lib");
+    Ok(
+        match process::Command::new("pipenv").arg("--venv").output() {
+            Ok(output) => {
+                if output.status.success() {
+                    let dir = Path::new(str::from_utf8(&output.stdout)?.trim()).join("lib");
 
-                if let Some(site_packages) = find_dir("site-packages", &dir)? {
-                    Some(site_packages)
+                    if let Some(site_packages) = find_dir("site-packages", &dir)? {
+                        Some(site_packages)
+                    } else {
+                        eprintln!(
+                            "warning: site-packages directory not found under {}",
+                            dir.display()
+                        );
+                        None
+                    }
                 } else {
-                    eprintln!(
-                        "warning: site-packages directory not found under {}",
-                        dir.display()
-                    );
+                    // `pipenv` is in `$PATH`, but this app does not appear to be using it
                     None
                 }
-            } else {
-                // `pipenv` is in `$PATH`, but this app does not appear to be using it
+            }
+            Err(_) => {
+                // `pipenv` is not in `$PATH -- assume this app isn't using it
                 None
             }
-        }
-        Err(_) => {
-            // `pipenv` is not in `$PATH -- assume this app isn't using it
-            None
-        }
-    })
+        },
+    )
 }
 
 fn find_dir(name: &str, path: &Path) -> Result<Option<PathBuf>> {
