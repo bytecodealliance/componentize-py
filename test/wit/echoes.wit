@@ -28,6 +28,8 @@ interface foo {
   echo-list-string: func(v: list<string>) -> list<string>
   echo-list-list-u8: func(v: list<list<u8>>) -> list<list<u8>>
   echo-list-list-list-u8: func(v: list<list<list<u8>>>) -> list<list<list<u8>>>
+  echo-option-u8: func(v: option<u8>) -> option<u8>
+  echo-option-option-u8: func(v: option<option<u8>>) -> option<option<u8>>
   echo-many: func(v1: bool, v2: u8, v3: u16, v4: u32, v5: u64, v6: s8, v7: s16, v8: s32, v9: s64, v10: float32, v11: float64, v12: char, v13: string, v14: list<bool>, v15: list<u8>, v16: list<u16>) -> tuple<bool, u8, u16, u32, u64, s8, s16, s32, s64, float32, float64, char, string, list<bool>, list<u8>, list<u16>>
 }
 

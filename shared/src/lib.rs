@@ -1,37 +1,56 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
-pub struct Function<'a> {
-    #[serde(borrow)]
-    pub interface: Option<&'a str>,
-    pub name: &'a str,
+#[repr(u8)]
+pub enum ReturnStyle {
+    Normal,
+    Result,
 }
 
-#[derive(Serialize, Deserialize, Copy, Clone)]
-pub enum Direction {
-    Import,
-    Export,
+#[derive(Serialize, Deserialize, Debug)]
+pub struct FunctionExport {
+    pub protocol: String,
+    pub name: String,
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct OwnedType<'a> {
-    pub direction: Direction,
-    pub interface: &'a str,
-    #[serde(borrow)]
-    pub name: Option<&'a str>,
-    pub fields: Vec<String>,
+#[derive(Serialize, Deserialize, Copy, Clone, PartialEq, Eq, Hash, Debug)]
+pub enum RawUnionType {
+    Int,
+    Float,
+    Str,
+    Other,
 }
 
-#[derive(Serialize, Deserialize)]
-pub enum Type<'a> {
-    Owned(#[serde(borrow)] OwnedType<'a>),
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Case {
+    pub name: String,
+    pub has_payload: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum OwnedKind {
+    Record { fields: Vec<String> },
+    Variant { cases: Vec<Case> },
+    Enum(usize),
+    RawUnion { types: Vec<RawUnionType> },
+    Flags(usize),
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum Type {
+    Owned {
+        kind: OwnedKind,
+        package: String,
+        name: String,
+    },
+    Option,
+    NestingOption,
+    Result,
     Tuple(usize),
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct Symbols<'a> {
-    #[serde(borrow)]
-    pub exports: Vec<Function<'a>>,
-    #[serde(borrow)]
-    pub types: Vec<Type<'a>>,
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Symbols {
+    pub types_package: String,
+    pub exports: Vec<FunctionExport>,
+    pub types: Vec<Type>,
 }

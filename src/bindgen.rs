@@ -3,6 +3,7 @@ use {
         abi::{self, Abi, MAX_FLAT_PARAMS, MAX_FLAT_RESULTS},
         util::Types as _,
     },
+    componentize_py_shared::ReturnStyle,
     indexmap::IndexSet,
     std::collections::HashMap,
     wasm_encoder::{BlockType, Instruction as Ins, MemArg, ValType},
@@ -41,6 +42,7 @@ declare_enum! {
         LowerI64,
         LowerF32,
         LowerF64,
+        LowerChar,
         LowerString,
         GetField,
         GetListLength,
@@ -50,6 +52,7 @@ declare_enum! {
         LiftI64,
         LiftF32,
         LiftF64,
+        LiftChar,
         LiftString,
         Init,
         MakeList,
@@ -83,6 +86,7 @@ pub struct FunctionBindgen<'a> {
     param_count: usize,
     tuple_types: &'a HashMap<usize, TypeId>,
     option_type: Option<TypeId>,
+    nesting_option_type: Option<TypeId>,
     result_type: Option<TypeId>,
 }
 
@@ -98,6 +102,7 @@ impl<'a> FunctionBindgen<'a> {
         param_count: usize,
         tuple_types: &'a HashMap<usize, TypeId>,
         option_type: Option<TypeId>,
+        nesting_option_type: Option<TypeId>,
         result_type: Option<TypeId>,
     ) -> Self {
         Self {
@@ -115,6 +120,7 @@ impl<'a> FunctionBindgen<'a> {
             param_count,
             tuple_types,
             option_type,
+            nesting_option_type,
             result_type,
         }
     }
@@ -263,12 +269,20 @@ impl<'a> FunctionBindgen<'a> {
     }
 
     pub fn compile_export(&mut self, index: i32, lift: i32, lower: i32) {
+        let return_style = match self.results.types().collect::<Vec<_>>().as_slice() {
+            [Type::Id(id)] if matches!(&self.resolve.types[*id].kind, TypeDefKind::Result(_)) => {
+                ReturnStyle::Result
+            }
+            _ => ReturnStyle::Normal,
+        };
+
         self.push(Ins::I32Const(index));
         self.push(Ins::I32Const(lift));
         self.push(Ins::I32Const(lower));
         self.push(Ins::I32Const(
             self.params.types().count().try_into().unwrap(),
         ));
+        self.push(Ins::I32Const(return_style as _));
 
         if self.params_abi.flattened.len() <= MAX_FLAT_PARAMS {
             self.push_stack(self.params_abi.size);
@@ -457,14 +471,7 @@ impl<'a> FunctionBindgen<'a> {
 
     fn lower(&mut self, ty: Type, context: u32, value: u32) {
         match ty {
-            Type::Bool
-            | Type::U8
-            | Type::U16
-            | Type::U32
-            | Type::S8
-            | Type::S16
-            | Type::S32
-            | Type::Char => {
+            Type::Bool | Type::U8 | Type::U16 | Type::U32 | Type::S8 | Type::S16 | Type::S32 => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value));
                 self.link_call(Link::LowerI32);
@@ -483,6 +490,11 @@ impl<'a> FunctionBindgen<'a> {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value));
                 self.link_call(Link::LowerF64);
+            }
+            Type::Char => {
+                self.push(Ins::LocalGet(context));
+                self.push(Ins::LocalGet(value));
+                self.link_call(Link::LowerChar);
             }
             Type::String => {
                 self.push(Ins::LocalGet(context));
@@ -532,7 +544,7 @@ impl<'a> FunctionBindgen<'a> {
                 }
                 TypeDefKind::Option(some) => {
                     self.lower_variant(
-                        self.option_type.unwrap(),
+                        self.get_option_type(*some),
                         &abi::abi(self.resolve, ty),
                         [None, Some(*some)],
                         context,
@@ -703,7 +715,7 @@ impl<'a> FunctionBindgen<'a> {
                 self.lower(ty, context, value);
                 self.push(Ins::I32Store16(mem_arg(0, 1)));
             }
-            Type::U32 | Type::S32 | Type::Char => {
+            Type::U32 | Type::S32 => {
                 self.push(Ins::LocalGet(destination));
                 self.lower(ty, context, value);
                 self.push(Ins::I32Store(mem_arg(0, 2)));
@@ -722,6 +734,13 @@ impl<'a> FunctionBindgen<'a> {
                 self.push(Ins::LocalGet(destination));
                 self.lower(ty, context, value);
                 self.push(Ins::F64Store(mem_arg(0, 3)));
+            }
+            Type::Char => {
+                self.push(Ins::LocalGet(destination));
+                self.push(Ins::LocalGet(context));
+                self.push(Ins::LocalGet(value));
+                self.link_call(Link::LowerChar);
+                self.push(Ins::I32Store(mem_arg(0, 2)));
             }
             Type::String => {
                 self.push(Ins::LocalGet(context));
@@ -771,7 +790,7 @@ impl<'a> FunctionBindgen<'a> {
                 }
                 TypeDefKind::Option(some) => {
                     self.store_variant(
-                        self.option_type.unwrap(),
+                        self.get_option_type(*some),
                         &abi::abi(self.resolve, ty),
                         [None, Some(*some)],
                         context,
@@ -1203,14 +1222,7 @@ impl<'a> FunctionBindgen<'a> {
 
     fn lift(&mut self, ty: Type, context: u32, value: &[u32]) {
         match ty {
-            Type::Bool
-            | Type::U8
-            | Type::U16
-            | Type::U32
-            | Type::S8
-            | Type::S16
-            | Type::S32
-            | Type::Char => {
+            Type::Bool | Type::U8 | Type::U16 | Type::U32 | Type::S8 | Type::S16 | Type::S32 => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value[0]));
                 self.link_call(Link::LiftI32);
@@ -1229,6 +1241,11 @@ impl<'a> FunctionBindgen<'a> {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value[0]));
                 self.link_call(Link::LiftF64);
+            }
+            Type::Char => {
+                self.push(Ins::LocalGet(context));
+                self.push(Ins::LocalGet(value[0]));
+                self.link_call(Link::LiftChar);
             }
             Type::String => {
                 self.push(Ins::LocalGet(context));
@@ -1274,7 +1291,7 @@ impl<'a> FunctionBindgen<'a> {
                 }
                 TypeDefKind::Option(some) => {
                     self.lift_variant(
-                        self.option_type.unwrap(),
+                        self.get_option_type(*some),
                         &abi::abi(self.resolve, ty),
                         [None, Some(*some)],
                         context,
@@ -1597,7 +1614,7 @@ impl<'a> FunctionBindgen<'a> {
                 }
                 TypeDefKind::Option(some) => {
                     self.load_variant(
-                        self.option_type.unwrap(),
+                        self.get_option_type(*some),
                         &abi::abi(self.resolve, ty),
                         [None, Some(*some)],
                         context,
@@ -2392,6 +2409,20 @@ impl<'a> FunctionBindgen<'a> {
 
             self.pop_local(payload_value, ValType::I32);
             self.pop_local(discriminant, ValType::I32);
+        }
+    }
+
+    fn get_option_type(&self, some: Type) -> TypeId {
+        let nesting = if let Type::Id(id) = some {
+            matches!(&self.resolve.types[id].kind, TypeDefKind::Option(_))
+        } else {
+            false
+        };
+
+        if nesting {
+            self.nesting_option_type.unwrap()
+        } else {
+            self.option_type.unwrap()
         }
     }
 }

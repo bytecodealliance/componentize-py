@@ -13,9 +13,12 @@ use {
 };
 
 const DEFAULT_TEST_COUNT: usize = 10;
-const MAX_PARAM_COUNT: usize = 12;
 const MAX_LIST_SIZE: usize = 100;
+// As of this writing, neither `Debug` nor `Strategy` are implemented for tuples of more than twelve elements.
+// Technically we could work around this, but it's probably more trouble than it's worth.
 const MAX_TUPLE_SIZE: usize = 12;
+// See note above about `MAX_TUPLE_SIZE`
+const MAX_PARAM_COUNT: usize = 12;
 const MAX_FLAG_COUNT: u32 = 100;
 const MAX_ENUM_COUNT: u32 = 100;
 
@@ -789,9 +792,8 @@ fn main() -> Result<()> {
 
             write!(
                 &mut guest_functions,
-                "\
-def exports_echo{test_index}({params}):
-    return imports.echo{test_index}({params})
+                "    def echo{test_index}({params}):
+        return imports.echo{test_index}({params})
 "
             )
             .unwrap();
@@ -1021,8 +1023,10 @@ impl tests::Host for Host {{
 }}
 
 const GUEST_CODE: &str = r#"
-import imports
+from echoes_generated import exports
+from echoes_generated.imports import imports
 
+class Exports(exports.Exports):
 {guest_functions}
 "#;
 

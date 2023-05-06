@@ -192,8 +192,11 @@ mod tests {
         let component = &make_component(
             include_str!("../wit/simple-export.wit"),
             r#"
-def exports_foo(v):
-    return v + 3
+from simple_export import exports
+
+class Exports(exports.Exports):
+    def foo(v: int) -> int:
+        return v + 3
 "#,
         )?;
 
@@ -242,10 +245,12 @@ def exports_foo(v):
         let component = &make_component(
             include_str!("../wit/simple-import-and-export.wit"),
             r#"
-import imports
+from simple_import_and_export import exports
+from simple_import_and_export.imports import imports
 
-def exports_foo(v):
-    return imports.foo(v) + 3
+class Exports(exports.Exports):
+    def foo(v: int) -> int:
+        return imports.foo(v) + 3
 "#,
         )?;
 

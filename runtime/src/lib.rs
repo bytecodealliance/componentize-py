@@ -2,12 +2,12 @@
 
 use {
     anyhow::{Error, Result},
-    componentize_py_shared::{self as symbols, Symbols},
-    heck::{ToSnakeCase, ToUpperCamelCase},
+    componentize_py_shared::{self as shared, OwnedKind, RawUnionType, ReturnStyle, Symbols},
+    num_bigint::BigUint,
     once_cell::sync::OnceCell,
     pyo3::{
         exceptions::PyAssertionError,
-        types::{PyBytes, PyList, PyMapping, PyModule, PyString, PyTuple},
+        types::{PyBytes, PyDict, PyFloat, PyInt, PyList, PyMapping, PyModule, PyString, PyTuple},
         Py, PyAny, PyErr, PyObject, PyResult, Python, ToPyObject,
     },
     std::{
@@ -24,13 +24,44 @@ use {
 static EXPORTS: OnceCell<Vec<PyObject>> = OnceCell::new();
 static TYPES: OnceCell<Vec<Type>> = OnceCell::new();
 static ENVIRON: OnceCell<Py<PyMapping>> = OnceCell::new();
+static SOME_CONSTRUCTOR: OnceCell<PyObject> = OnceCell::new();
+static OK_CONSTRUCTOR: OnceCell<PyObject> = OnceCell::new();
+static ERR_CONSTRUCTOR: OnceCell<PyObject> = OnceCell::new();
+
+const DISCRIMINANT_FIELD_INDEX: i32 = 0;
+const PAYLOAD_FIELD_INDEX: i32 = 1;
+
+#[derive(Debug)]
+struct Case {
+    constructor: PyObject,
+    has_payload: bool,
+}
 
 #[derive(Debug)]
 enum Type {
-    Owned {
+    Record {
         constructor: PyObject,
         fields: Vec<String>,
     },
+    Variant {
+        types_to_discriminants: Py<PyDict>,
+        cases: Vec<Case>,
+    },
+    Enum {
+        constructor: PyObject,
+        count: usize,
+    },
+    RawUnion {
+        types_to_discriminants: Py<PyDict>,
+        other_discriminant: Option<usize>,
+    },
+    Flags {
+        constructor: PyObject,
+        u32_count: usize,
+    },
+    Option,
+    NestingOption,
+    Result,
     Tuple(usize),
 }
 
@@ -72,8 +103,6 @@ fn call_import<'a>(
         );
 
         // todo: is this sound, or do we need to `.into_iter().map(MaybeUninit::assume_init).collect()` instead?
-        //
-        // todo also: turn `result::err` results into exceptions, either here or in the generated Python code
         Ok(mem::transmute::<Vec<MaybeUninit<&PyAny>>, Vec<&PyAny>>(
             results,
         ))
@@ -88,7 +117,7 @@ fn componentize_py_module(_py: Python<'_>, module: &PyModule) -> PyResult<()> {
 
 fn do_init() -> Result<()> {
     let symbols = fs::read(env::var("COMPONENTIZE_PY_SYMBOLS_PATH")?)?;
-    let symbols = bincode::deserialize::<Symbols<'_>>(&symbols)?;
+    let symbols = bincode::deserialize::<Symbols>(&symbols)?;
 
     pyo3::append_to_inittab!(componentize_py_module);
 
@@ -97,25 +126,16 @@ fn do_init() -> Result<()> {
     Python::with_gil(|py| {
         let app = py.import(env::var("COMPONENTIZE_PY_APP_NAME")?.deref())?;
 
-        // TODO: do name tweaking in componentize-py instead of here so we don't have to pull in the heck
-        // dependency
         EXPORTS
             .set(
                 symbols
                     .exports
                     .iter()
                     .map(|function| {
-                        let full_name = if let Some(interface) = function.interface {
-                            format!(
-                                "{}_{}",
-                                interface.to_snake_case(),
-                                function.name.to_snake_case()
-                            )
-                        } else {
-                            function.name.to_snake_case()
-                        };
-
-                        Ok(app.getattr(full_name.as_str())?.into())
+                        Ok(app
+                            .getattr(function.protocol.as_str())?
+                            .getattr(function.name.as_str())?
+                            .into())
                     })
                     .collect::<PyResult<_>>()?,
             )
@@ -126,31 +146,100 @@ fn do_init() -> Result<()> {
                 symbols
                     .types
                     .into_iter()
-                    .enumerate()
-                    .map(|(index, ty)| {
+                    .map(|ty| {
                         Ok(match ty {
-                            symbols::Type::Owned(ty) => Type::Owned {
-                                constructor: py
-                                    .import(ty.interface)?
-                                    .getattr(
-                                        if let Some(name) = ty.name {
-                                            name.to_upper_camel_case()
+                            shared::Type::Owned {
+                                kind,
+                                package,
+                                name,
+                            } => match kind {
+                                OwnedKind::Record { fields } => Type::Record {
+                                    constructor: py
+                                        .import(package.as_str())?
+                                        .getattr(name.as_str())?
+                                        .into(),
+                                    fields,
+                                },
+                                OwnedKind::Variant { cases } => {
+                                    let package = py.import(package.as_str())?;
+
+                                    let cases = cases
+                                        .iter()
+                                        .map(|case| {
+                                            Ok(Case {
+                                                constructor: package
+                                                    .getattr(case.name.as_str())?
+                                                    .into(),
+                                                has_payload: case.has_payload,
+                                            })
+                                        })
+                                        .collect::<PyResult<Vec<_>>>()?;
+
+                                    let types_to_discriminants = PyDict::new(py);
+                                    for (index, case) in cases.iter().enumerate() {
+                                        types_to_discriminants
+                                            .set_item(&case.constructor, index)?;
+                                    }
+
+                                    Type::Variant {
+                                        cases,
+                                        types_to_discriminants: types_to_discriminants.into(),
+                                    }
+                                }
+                                OwnedKind::Enum(count) => Type::Enum {
+                                    constructor: py
+                                        .import(package.as_str())?
+                                        .getattr(name.as_str())?
+                                        .into(),
+                                    count,
+                                },
+                                OwnedKind::RawUnion { types } => {
+                                    let types_to_discriminants = PyDict::new(py);
+                                    let mut other_discriminant = None;
+                                    for (index, ty) in types.iter().enumerate() {
+                                        let ty = match ty {
+                                            RawUnionType::Int => Some(py.get_type::<PyInt>()),
+                                            RawUnionType::Float => Some(py.get_type::<PyFloat>()),
+                                            RawUnionType::Str => Some(py.get_type::<PyString>()),
+                                            RawUnionType::Other => None,
+                                        };
+
+                                        if let Some(ty) = ty {
+                                            types_to_discriminants.set_item(ty, index)?;
                                         } else {
-                                            format!("AnonymousType{index}")
+                                            assert!(other_discriminant.is_none());
+                                            other_discriminant = Some(index);
                                         }
-                                        .as_str(),
-                                    )?
-                                    .into(),
+                                    }
 
-                                fields: ty.fields,
+                                    Type::RawUnion {
+                                        types_to_discriminants: types_to_discriminants.into(),
+                                        other_discriminant,
+                                    }
+                                }
+                                OwnedKind::Flags(u32_count) => Type::Flags {
+                                    constructor: py
+                                        .import(package.as_str())?
+                                        .getattr(name.as_str())?
+                                        .into(),
+                                    u32_count,
+                                },
                             },
-
-                            symbols::Type::Tuple(length) => Type::Tuple(length),
+                            shared::Type::Option => Type::Option,
+                            shared::Type::NestingOption => Type::NestingOption,
+                            shared::Type::Result => Type::Result,
+                            shared::Type::Tuple(length) => Type::Tuple(length),
                         })
                     })
                     .collect::<PyResult<_>>()?,
             )
             .unwrap();
+
+        let types = py.import(symbols.types_package.as_str())?;
+
+        SOME_CONSTRUCTOR.set(types.getattr("Some")?.into()).unwrap();
+        OK_CONSTRUCTOR.set(types.getattr("Ok")?.into()).unwrap();
+        ERR_CONSTRUCTOR.set(types.getattr("Err")?.into()).unwrap();
 
         let environ = py
             .import("os")?
@@ -185,6 +274,7 @@ pub unsafe extern "C" fn componentize_py_dispatch(
     lift: u32,
     lower: u32,
     param_count: u32,
+    return_style: ReturnStyle,
     params: *const c_void,
     results: *mut c_void,
 ) {
@@ -209,13 +299,15 @@ pub unsafe extern "C" fn componentize_py_dispatch(
             environ.set_item(k, v).unwrap();
         }
 
-        // todo: instead of unwrapping the result, return an `err` if the export function return type is `result`
-        //
-        // todo also: do a runtime type check to verify the result type matches the function return type.  What
-        // should we do if it doesn't?  Abort?
-        let result = EXPORTS.get().unwrap()[export]
-            .call1(py, PyTuple::new(py, params_lifted))
-            .unwrap();
+        let result = EXPORTS.get().unwrap()[export].call1(py, PyTuple::new(py, params_lifted));
+
+        let result = match return_style {
+            ReturnStyle::Normal => result.unwrap(),
+            ReturnStyle::Result => match result {
+                Ok(result) => OK_CONSTRUCTOR.get().unwrap().call1(py, (result,)).unwrap(),
+                Err(result) => ERR_CONSTRUCTOR.get().unwrap().call1(py, (result,)).unwrap(),
+            },
+        };
 
         let result = result.into_ref(py);
         let result_array = [result];
@@ -287,6 +379,13 @@ pub extern "C" fn componentize_py_lower_f64(_py: &Python, value: &PyAny) -> f64 
     value.extract().unwrap()
 }
 
+#[export_name = "componentize-py#LowerChar"]
+pub extern "C" fn componentize_py_lower_char(_py: &Python, value: &PyAny) -> u32 {
+    let value = value.extract::<String>().unwrap();
+    assert!(value.chars().count() == 1);
+    value.chars().next().unwrap() as u32
+}
+
 /// # Safety
 /// TODO
 #[export_name = "componentize-py#LowerString"]
@@ -305,19 +404,126 @@ pub unsafe extern "C" fn componentize_py_lower_string(
 
 #[export_name = "componentize-py#GetField"]
 pub extern "C" fn componentize_py_get_field<'a>(
-    _py: &'a Python,
+    py: &'a Python,
     value: &'a PyAny,
     ty: usize,
     field: usize,
 ) -> &'a PyAny {
     match &TYPES.get().unwrap()[ty] {
-        Type::Owned { fields, .. } => value.getattr(fields[field].as_str()),
+        Type::Record { fields, .. } => value.getattr(fields[field].as_str()).unwrap(),
+        Type::Variant {
+            types_to_discriminants,
+            cases,
+        } => {
+            let discriminant = types_to_discriminants
+                .as_ref(*py)
+                .get_item(value.get_type())
+                .unwrap();
+
+            match i32::try_from(field).unwrap() {
+                DISCRIMINANT_FIELD_INDEX => discriminant,
+                PAYLOAD_FIELD_INDEX => {
+                    if cases[discriminant.extract::<usize>().unwrap()].has_payload {
+                        value.getattr("value").unwrap()
+                    } else {
+                        py.None().into_ref(*py)
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
+        Type::Enum { .. } => match i32::try_from(field).unwrap() {
+            DISCRIMINANT_FIELD_INDEX => value.getattr("value").unwrap(),
+            PAYLOAD_FIELD_INDEX => py.None().into_ref(*py),
+            _ => unreachable!(),
+        },
+        Type::RawUnion {
+            types_to_discriminants,
+            other_discriminant,
+        } => match i32::try_from(field).unwrap() {
+            DISCRIMINANT_FIELD_INDEX => types_to_discriminants
+                .as_ref(*py)
+                .get_item(value.get_type())
+                .or_else(|| other_discriminant.map(|v| v.to_object(*py).into_ref(*py)))
+                .unwrap(),
+            PAYLOAD_FIELD_INDEX => value,
+            _ => unreachable!(),
+        },
+        Type::Flags { u32_count, .. } => {
+            assert!(field < *u32_count);
+            let value = value
+                .getattr("value")
+                .unwrap()
+                .extract::<BigUint>()
+                .unwrap()
+                .iter_u32_digits()
+                .nth(field)
+                .unwrap_or(0);
+
+            unsafe { mem::transmute::<u32, i32>(value) }
+                .to_object(*py)
+                .into_ref(*py)
+                .downcast()
+                .unwrap()
+        }
+        Type::Option => match i32::try_from(field).unwrap() {
+            DISCRIMINANT_FIELD_INDEX => if value.is_none() { 0 } else { 1 }
+                .to_object(*py)
+                .into_ref(*py)
+                .downcast()
+                .unwrap(),
+            PAYLOAD_FIELD_INDEX => value,
+            _ => unreachable!(),
+        },
+        Type::NestingOption => match i32::try_from(field).unwrap() {
+            DISCRIMINANT_FIELD_INDEX => if value.is_none() { 0 } else { 1 }
+                .to_object(*py)
+                .into_ref(*py)
+                .downcast()
+                .unwrap(),
+            PAYLOAD_FIELD_INDEX => {
+                if value.is_none() {
+                    value
+                } else {
+                    value.getattr("value").unwrap()
+                }
+            }
+            _ => unreachable!(),
+        },
+        Type::Result => match i32::try_from(field).unwrap() {
+            DISCRIMINANT_FIELD_INDEX => if OK_CONSTRUCTOR
+                .get()
+                .unwrap()
+                .as_ref(*py)
+                .eq(value.get_type())
+                .unwrap()
+            {
+                0_i32
+            } else if ERR_CONSTRUCTOR
+                .get()
+                .unwrap()
+                .as_ref(*py)
+                .eq(value.get_type())
+                .unwrap()
+            {
+                1
+            } else {
+                unreachable!()
+            }
+            .to_object(*py)
+            .into_ref(*py),
+            PAYLOAD_FIELD_INDEX => value.getattr("value").unwrap(),
+            _ => unreachable!(),
+        },
         Type::Tuple(length) => {
             assert!(field < *length);
-            value.downcast::<PyTuple>().unwrap().get_item(field)
+            value
+                .downcast::<PyTuple>()
+                .unwrap()
+                .get_item(field)
+                .unwrap()
         }
     }
-    .unwrap()
 }
 
 #[export_name = "componentize-py#GetListLength"]
@@ -358,6 +564,17 @@ pub extern "C" fn componentize_py_lift_f64<'a>(py: &'a Python<'a>, value: f64) -
     value.to_object(*py).into_ref(*py).downcast().unwrap()
 }
 
+#[export_name = "componentize-py#LiftChar"]
+pub extern "C" fn componentize_py_lift_char<'a>(py: &'a Python<'a>, value: u32) -> &'a PyAny {
+    char::from_u32(value)
+        .unwrap()
+        .to_string()
+        .to_object(*py)
+        .into_ref(*py)
+        .downcast()
+        .unwrap()
+}
+
 /// # Safety
 /// TODO
 #[export_name = "componentize-py#LiftString"]
@@ -378,15 +595,145 @@ pub unsafe extern "C" fn componentize_py_lift_string<'a>(
 pub unsafe extern "C" fn componentize_py_init<'a>(
     py: &'a Python<'a>,
     ty: usize,
-    data: *const &PyAny,
+    data: *const &'a PyAny,
     len: usize,
 ) -> &'a PyAny {
     match &TYPES.get().unwrap()[ty] {
-        Type::Owned { constructor, .. } => constructor
+        Type::Record { constructor, .. } => constructor
             .call1(*py, PyTuple::new(*py, slice::from_raw_parts(data, len)))
             .unwrap()
             .into_ref(*py),
+        Type::Variant { cases, .. } => {
+            assert!(len == 2);
+            let discriminant =
+                ptr::read(data.offset(isize::try_from(DISCRIMINANT_FIELD_INDEX).unwrap()))
+                    .extract::<u32>()
+                    .unwrap();
+            let case = &cases[usize::try_from(discriminant).unwrap()];
+            if case.has_payload {
+                case.constructor.call1(
+                    *py,
+                    (ptr::read(
+                        data.offset(isize::try_from(PAYLOAD_FIELD_INDEX).unwrap()),
+                    ),),
+                )
+            } else {
+                case.constructor.call1(*py, ())
+            }
+            .unwrap()
+            .into_ref(*py)
+        }
+        Type::Enum { constructor, count } => {
+            assert!(len == 2);
+            let discriminant =
+                ptr::read(data.offset(isize::try_from(DISCRIMINANT_FIELD_INDEX).unwrap()))
+                    .extract::<usize>()
+                    .unwrap();
+            assert!(discriminant < *count);
+            constructor
+                .call1(
+                    *py,
+                    (ptr::read(data.offset(
+                        isize::try_from(DISCRIMINANT_FIELD_INDEX).unwrap(),
+                    )),),
+                )
+                .unwrap()
+                .into_ref(*py)
+        }
+        Type::RawUnion {
+            types_to_discriminants,
+            other_discriminant,
+        } => {
+            assert!(len == 2);
+            let discriminant =
+                ptr::read(data.offset(isize::try_from(DISCRIMINANT_FIELD_INDEX).unwrap()))
+                    .extract::<usize>()
+                    .unwrap();
+            assert!(
+                discriminant
+                    < types_to_discriminants.as_ref(*py).len()
+                        + other_discriminant.map(|_| 1).unwrap_or(0)
+            );
+            ptr::read(data.offset(isize::try_from(PAYLOAD_FIELD_INDEX).unwrap()))
+        }
+        Type::Flags {
+            constructor,
+            u32_count,
+        } => {
+            assert!(len == *u32_count);
+            constructor
+                .call1(
+                    *py,
+                    (BigUint::new(
+                        slice::from_raw_parts(data, len)
+                            .iter()
+                            .map(|&v| mem::transmute::<i32, u32>(v.extract().unwrap()))
+                            .collect(),
+                    ),),
+                )
+                .unwrap()
+                .into_ref(*py)
+        }
+        Type::Option => {
+            assert!(len == 2);
+            let discriminant =
+                ptr::read(data.offset(isize::try_from(DISCRIMINANT_FIELD_INDEX).unwrap()))
+                    .extract::<u32>()
+                    .unwrap();
 
+            match discriminant {
+                0 => py.None().into_ref(*py),
+                1 => ptr::read(data.offset(isize::try_from(PAYLOAD_FIELD_INDEX).unwrap())),
+
+                _ => unreachable!(),
+            }
+        }
+        Type::NestingOption => {
+            assert!(len == 2);
+            let discriminant =
+                ptr::read(data.offset(isize::try_from(DISCRIMINANT_FIELD_INDEX).unwrap()))
+                    .extract::<u32>()
+                    .unwrap();
+
+            match discriminant {
+                0 => py.None().into_ref(*py),
+
+                1 => SOME_CONSTRUCTOR
+                    .get()
+                    .unwrap()
+                    .call1(
+                        *py,
+                        (ptr::read(
+                            data.offset(isize::try_from(PAYLOAD_FIELD_INDEX).unwrap()),
+                        ),),
+                    )
+                    .unwrap()
+                    .into_ref(*py),
+
+                _ => unreachable!(),
+            }
+        }
+        Type::Result => {
+            assert!(len == 2);
+            let discriminant =
+                ptr::read(data.offset(isize::try_from(DISCRIMINANT_FIELD_INDEX).unwrap()))
+                    .extract::<u32>()
+                    .unwrap();
+
+            match discriminant {
+                0 => OK_CONSTRUCTOR.get().unwrap(),
+                1 => ERR_CONSTRUCTOR.get().unwrap(),
+                _ => unreachable!(),
+            }
+            .call1(
+                *py,
+                (ptr::read(
+                    data.offset(isize::try_from(PAYLOAD_FIELD_INDEX).unwrap()),
+                ),),
+            )
+            .unwrap()
+            .into_ref(*py)
+        }
         Type::Tuple(length) => {
             assert!(*length == len);
             PyTuple::new(*py, slice::from_raw_parts(data, len))

@@ -1,7 +1,7 @@
 implementation=CPython
 version=3.11
 shared=false
-abi3=true
+abi3=false
 lib_name=python3.11
 pointer_width=32
 build_flags=

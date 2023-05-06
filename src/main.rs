@@ -3,6 +3,7 @@
 use {
     anyhow::{bail, Context, Result},
     clap::Parser as _,
+    heck::ToSnakeCase,
     std::{
         env,
         fs::{self, File},
@@ -220,7 +221,11 @@ fn componentize(options: PrivateOptions) -> Result<()> {
     env::set_var("COMPONENTIZE_PY_SYMBOLS_PATH", "/symbols/bin");
 
     let generated_code = tempfile::tempdir()?;
-    summary.generate_code(generated_code.path())?;
+    let world_dir = generated_code
+        .path()
+        .join(resolve.worlds[world].name.to_snake_case());
+    fs::create_dir_all(&world_dir)?;
+    summary.generate_code(&world_dir)?;
 
     let python_path = format!(
         "{}{NATIVE_PATH_DELIMITER}{}",

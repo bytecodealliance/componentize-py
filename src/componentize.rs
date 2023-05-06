@@ -200,7 +200,10 @@ pub fn componentize(
                     .enumerate()
                 {
                     imports.import(
-                        function.interface.unwrap_or(&resolve.worlds[world].name),
+                        function
+                            .interface
+                            .map(|i| i.name)
+                            .unwrap_or(&resolve.worlds[world].name),
                         function.name,
                         EntityType::Function((old_type_count + index).try_into().unwrap()),
                     );
@@ -295,7 +298,7 @@ pub fn componentize(
                                         ""
                                     },
                                     if let Some(interface) = function.interface {
-                                        format!("{}#{}", interface, function.name)
+                                        format!("{}#{}", interface.name, function.name)
                                     } else {
                                         function.name.to_owned()
                                     }
@@ -400,7 +403,7 @@ pub fn componentize(
                         .iter()
                         .filter_map(|f| {
                             if let FunctionKind::Export = f.kind {
-                                Some((f.interface, f.name))
+                                Some((f.interface.map(|i| i.name), f.name))
                             } else {
                                 None
                             }
@@ -420,6 +423,7 @@ pub fn componentize(
                             function.core_export_type(resolve).0.len(),
                             &summary.tuple_types,
                             summary.option_type,
+                            summary.nesting_option_type,
                             summary.result_type,
                         );
 
@@ -432,7 +436,10 @@ pub fn componentize(
                             }
                             FunctionKind::Export => gen.compile_export(
                                 exports
-                                    .get_index_of(&(function.interface, function.name))
+                                    .get_index_of(&(
+                                        function.interface.map(|i| i.name),
+                                        function.name,
+                                    ))
                                     .unwrap()
                                     .try_into()?,
                                 // next two `dispatch_index`es should be the lift and lower functions (see ordering

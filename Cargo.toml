@@ -29,6 +29,3 @@ members = [
   "runtime",
   "shared",
 ]
-
-[patch.crates-io]
-pyo3 = { path = "../pyo3" }
