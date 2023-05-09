@@ -81,11 +81,11 @@ fn union_case_name(ty: &Type) -> String {
         Type::Float64 => "F64".into(),
         Type::Char => "Char".into(),
         Type::String => "String".into(),
-        Type::Record { id, .. } => format!("Record{id}"),
-        Type::Variant { id, .. } => format!("Variant{id}"),
-        Type::Flags { id, .. } => format!("Flags{id}"),
-        Type::Enum { id, .. } => format!("Enum{id}"),
-        Type::Union { id, .. } => format!("Union{id}"),
+        Type::Record { id, .. } => format!("Record{id}Type"),
+        Type::Variant { id, .. } => format!("Variant{id}Type"),
+        Type::Flags { id, .. } => format!("Flags{id}Type"),
+        Type::Enum { id, .. } => format!("Enum{id}Type"),
+        Type::Union { id, .. } => format!("Union{id}Type"),
         Type::Option(ty) => format!("Optional{}", union_case_name(ty)),
         Type::Result { .. } => "Result".into(),
         Type::Tuple(_) => "Tuple".into(),
@@ -271,14 +271,14 @@ fn wit_type_name(wit: &mut String, ty: &Type) -> String {
             write!(
                 wit,
                 "
-    record record{id} {{
+    record record{id}-type {{
         {fields}
     }}
 "
             )
             .unwrap();
 
-            format!("record{id}")
+            format!("record{id}-type")
         }
         Type::Variant { id, cases } => {
             let cases = cases
@@ -298,14 +298,14 @@ fn wit_type_name(wit: &mut String, ty: &Type) -> String {
             write!(
                 wit,
                 "
-    variant variant{id} {{
+    variant variant{id}-type {{
         {cases}
     }}
 "
             )
             .unwrap();
 
-            format!("variant{id}")
+            format!("variant{id}-type")
         }
         Type::Flags { id, count } => {
             let flags = (0..*count)
@@ -316,14 +316,14 @@ fn wit_type_name(wit: &mut String, ty: &Type) -> String {
             write!(
                 wit,
                 "
-    flags flags{id} {{
+    flags flags{id}-type {{
         {flags}
     }}
 "
             )
             .unwrap();
 
-            format!("flags{id}")
+            format!("flags{id}-type")
         }
         Type::Enum { id, count } => {
             let cases = (0..*count)
@@ -334,14 +334,14 @@ fn wit_type_name(wit: &mut String, ty: &Type) -> String {
             write!(
                 wit,
                 "
-    enum enum{id} {{
+    enum enum{id}-type {{
         {cases}
     }}
 "
             )
             .unwrap();
 
-            format!("enum{id}")
+            format!("enum{id}-type")
         }
         Type::Union { id, cases } => {
             let cases = cases
@@ -353,14 +353,14 @@ fn wit_type_name(wit: &mut String, ty: &Type) -> String {
             write!(
                 wit,
                 "
-    union union{id} {{
+    union union{id}-type {{
         {cases}
     }}
 "
             )
             .unwrap();
 
-            format!("union{id}")
+            format!("union{id}-type")
         }
         Type::Option(ty) => {
             format!("option<{}>", wit_type_name(wit, ty))
@@ -406,25 +406,25 @@ fn rust_type_name(module: &str, ty: &Type) -> String {
         Type::String => "String".into(),
         Type::Record { id, .. } => {
             format!(
-                "{module}::Record{id}{}",
+                "{module}::Record{id}Type{}",
                 if borrows(ty) { "Result" } else { "" }
             )
         }
         Type::Variant { id, .. } => {
             format!(
-                "{module}::Variant{id}{}",
+                "{module}::Variant{id}Type{}",
                 if borrows(ty) { "Result" } else { "" }
             )
         }
         Type::Flags { id, .. } => {
-            format!("{module}::Flags{id}")
+            format!("{module}::Flags{id}Type")
         }
         Type::Enum { id, .. } => {
-            format!("{module}::Enum{id}")
+            format!("{module}::Enum{id}Type")
         }
         Type::Union { id, .. } => {
             format!(
-                "{module}::Union{id}{}",
+                "{module}::Union{id}Type{}",
                 if borrows(ty) { "Result" } else { "" }
             )
         }
@@ -489,7 +489,7 @@ fn equality(a: &str, b: &str, ty: &Type) -> String {
         Type::Variant { id, cases } => {
             assert!(!cases.is_empty());
             let name = format!(
-                "exports::Variant{id}{}",
+                "exports::Variant{id}Type{}",
                 if borrows(ty) { "Result" } else { "" }
             );
             let cases = cases
@@ -510,7 +510,7 @@ fn equality(a: &str, b: &str, ty: &Type) -> String {
         Type::Union { id, cases } => {
             assert!(!cases.is_empty());
             let name = format!(
-                "exports::Union{id}{}",
+                "exports::Union{id}Type{}",
                 if borrows(ty) { "Result" } else { "" }
             );
             let cases = union_case_names(cases)
@@ -577,7 +577,7 @@ fn strategy(ty: &Type, max_list_size: usize) -> String {
         Type::String => r#"proptest::string::string_regex(".*").unwrap()"#.into(),
         Type::Record { id, fields } => {
             if fields.is_empty() {
-                format!("Just(exports::Record{id} {{}})")
+                format!("Just(exports::Record{id}Type {{}})")
             } else {
                 let strategies = fields
                     .iter()
@@ -602,7 +602,7 @@ fn strategy(ty: &Type, max_list_size: usize) -> String {
 
                 format!(
                     "({strategies}).prop_map(|({params})| \
-                     exports::Record{id}{} {{ {inits} }})",
+                     exports::Record{id}Type{} {{ {inits} }})",
                     if borrows(ty) { "Result" } else { "" }
                 )
             }
@@ -610,7 +610,7 @@ fn strategy(ty: &Type, max_list_size: usize) -> String {
         Type::Variant { id, cases } => {
             assert!(!cases.is_empty());
             let name = format!(
-                "exports::Variant{id}{}",
+                "exports::Variant{id}Type{}",
                 if borrows(ty) { "Result" } else { "" }
             );
             let length = cases.len();
@@ -630,7 +630,7 @@ fn strategy(ty: &Type, max_list_size: usize) -> String {
             format!("(0..{length}).prop_flat_map(move |index| match index {{ {cases}, _ => unreachable!() }})")
         }
         Type::Flags { id, count } => {
-            let name = format!("exports::Flags{id}");
+            let name = format!("exports::Flags{id}Type");
 
             let flags = (0..*count)
                 .map(|index| {
@@ -645,7 +645,7 @@ fn strategy(ty: &Type, max_list_size: usize) -> String {
             )
         }
         Type::Enum { id, count } => {
-            let name = format!("exports::Enum{id}",);
+            let name = format!("exports::Enum{id}Type");
             let cases = (0..*count)
                 .map(|index| format!("index => {name}::C{index}"))
                 .collect::<Vec<_>>()
@@ -655,7 +655,7 @@ fn strategy(ty: &Type, max_list_size: usize) -> String {
         Type::Union { id, cases } => {
             assert!(!cases.is_empty());
             let name = format!(
-                "exports::Union{id}{}",
+                "exports::Union{id}Type{}",
                 if borrows(ty) { "Result" } else { "" }
             );
             let length = cases.len();
