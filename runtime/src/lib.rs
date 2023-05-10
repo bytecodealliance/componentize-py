@@ -305,7 +305,7 @@ pub unsafe extern "C" fn componentize_py_dispatch(
             ReturnStyle::Normal => result.unwrap(),
             ReturnStyle::Result => match result {
                 Ok(result) => OK_CONSTRUCTOR.get().unwrap().call1(py, (result,)).unwrap(),
-                Err(result) => ERR_CONSTRUCTOR.get().unwrap().call1(py, (result,)).unwrap(),
+                Err(result) => result.to_object(py),
             },
         };
 
