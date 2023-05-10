@@ -16,6 +16,11 @@ use {
 
 const ZSTD_COMPRESSION_LEVEL: i32 = 19;
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+const PYTHON_EXECUTABLE: &str = "python.exe";
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+const PYTHON_EXECUTABLE: &str = "python";
+
 fn main() -> Result<()> {
     println!("cargo:rerun-if-changed=build.rs");
 
@@ -160,7 +165,7 @@ fn maybe_make_cpython(repo_dir: &Path) {
     let cpython_wasi_dir = repo_dir.join("cpython/builddir/wasi");
     if !cpython_wasi_dir.join("libpython3.11.a").exists() {
         let cpython_native_dir = repo_dir.join("cpython/builddir/build");
-        if !cpython_native_dir.join("python.exe").exists() {
+        if !cpython_native_dir.join(PYTHON_EXECUTABLE).exists() {
             fs::create_dir_all(&cpython_native_dir).unwrap();
             fs::create_dir_all(&cpython_wasi_dir).unwrap();
 
@@ -185,7 +190,7 @@ fn maybe_make_cpython(repo_dir: &Path) {
                 "--host=wasm32-unknown-wasi",
                 &format!("--build={}", String::from_utf8(config_guess).unwrap()),
                 &format!(
-                    "--with-build-python={}/../build/python.exe",
+                    "--with-build-python={}/../build/{PYTHON_EXECUTABLE}",
                     cpython_wasi_dir.to_str().unwrap()
                 ),
                 &format!("--prefix={}/install", cpython_wasi_dir.to_str().unwrap()),
