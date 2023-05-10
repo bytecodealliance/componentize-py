@@ -230,3 +230,15 @@ pub fn abi(resolve: &Resolve, ty: Type) -> Abi {
         },
     }
 }
+
+pub fn is_option(resolve: &Resolve, ty: Type) -> bool {
+    if let Type::Id(id) = ty {
+        match &resolve.types[id].kind {
+            TypeDefKind::Option(_) => true,
+            TypeDefKind::Type(ty) => is_option(resolve, *ty),
+            _ => false,
+        }
+    } else {
+        false
+    }
+}

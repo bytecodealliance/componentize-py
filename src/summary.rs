@@ -182,13 +182,7 @@ impl<'a> Summary<'a> {
                     self.types.insert(id);
                 }
                 TypeDefKind::Option(some) => {
-                    let nesting = if let Type::Id(id) = some {
-                        matches!(&self.resolve.types[*id].kind, TypeDefKind::Option(_))
-                    } else {
-                        false
-                    };
-
-                    if nesting {
+                    if abi::is_option(self.resolve, *some) {
                         if self.nesting_option_type.is_none() {
                             self.nesting_option_type = Some(id);
                         }
@@ -378,13 +372,7 @@ impl<'a> Summary<'a> {
         match &ty.kind {
             TypeDefKind::Tuple(tuple) => shared::Type::Tuple(tuple.types.len()),
             TypeDefKind::Option(some) => {
-                let nesting = if let Type::Id(id) = some {
-                    matches!(&self.resolve.types[*id].kind, TypeDefKind::Option(_))
-                } else {
-                    false
-                };
-
-                if nesting {
+                if abi::is_option(self.resolve, *some) {
                     shared::Type::NestingOption
                 } else {
                     shared::Type::Option
@@ -959,6 +947,7 @@ class {camel}(Protocol):
             match &self.resolve.types[id].kind {
                 TypeDefKind::Union(un) => !self.is_raw_union(un),
                 TypeDefKind::Option(_) => false,
+                TypeDefKind::Type(ty) => self.is_allowed_for_raw_union(*ty),
                 _ => true,
             }
         } else {
@@ -1041,16 +1030,7 @@ impl<'a> TypeNames<'a> {
                         format!("{package}{name}",)
                     }
                     TypeDefKind::Option(some) => {
-                        let nesting = if let Type::Id(id) = some {
-                            matches!(
-                                &self.summary.resolve.types[*id].kind,
-                                TypeDefKind::Option(_)
-                            )
-                        } else {
-                            false
-                        };
-
-                        if nesting {
+                        if abi::is_option(self.summary.resolve, *some) {
                             format!("Optional[Some[{}]]", self.type_name(*some))
                         } else {
                             format!("Optional[{}]", self.type_name(*some))

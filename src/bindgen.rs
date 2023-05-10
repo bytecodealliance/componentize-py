@@ -2421,13 +2421,7 @@ impl<'a> FunctionBindgen<'a> {
     }
 
     fn get_option_type(&self, some: Type) -> TypeId {
-        let nesting = if let Type::Id(id) = some {
-            matches!(&self.resolve.types[id].kind, TypeDefKind::Option(_))
-        } else {
-            false
-        };
-
-        if nesting {
+        if abi::is_option(self.resolve, some) {
             self.nesting_option_type.unwrap()
         } else {
             self.option_type.unwrap()
