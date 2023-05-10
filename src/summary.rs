@@ -341,7 +341,7 @@ impl<'a> Summary<'a> {
                 },
                 TypeDefKind::Enum(en) => OwnedKind::Enum(en.cases.len()),
                 TypeDefKind::Union(un) => {
-                    if is_raw_union(un) {
+                    if self.is_raw_union(un) {
                         OwnedKind::RawUnion {
                             types: un.cases.iter().map(|c| raw_union_type(c.ty)).collect(),
                         }
@@ -552,7 +552,7 @@ class {camel}(Enum):
                 TypeDefKind::Union(un) => {
                     let camel = camel();
 
-                    let (classes, cases) = if is_raw_union(un) {
+                    let (classes, cases) = if self.is_raw_union(un) {
                         (
                             String::new(),
                             un.cases
@@ -942,6 +942,32 @@ class {camel}(Protocol):
             TypeOwner::None => None,
         }
     }
+
+    fn is_allowed_for_raw_union(&self, ty: Type) -> bool {
+        // Raw unions can't contain options or other raw unions since that can create ambiguity:
+        if let Type::Id(id) = ty {
+            match &self.resolve.types[id].kind {
+                TypeDefKind::Union(un) => !self.is_raw_union(un),
+                TypeDefKind::Option(_) => false,
+                _ => true,
+            }
+        } else {
+            true
+        }
+    }
+
+    fn is_raw_union(&self, un: &Union) -> bool {
+        un.cases
+            .iter()
+            .all(|case| self.is_allowed_for_raw_union(case.ty))
+            && un.cases.len()
+                == un
+                    .cases
+                    .iter()
+                    .map(|case| raw_union_type(case.ty))
+                    .collect::<HashSet<_>>()
+                    .len()
+    }
 }
 
 struct TypeNames<'a> {
@@ -1068,14 +1094,4 @@ fn raw_union_type(ty: Type) -> RawUnionType {
         Type::Char | Type::String => RawUnionType::Str,
         Type::Id(_) => RawUnionType::Other,
     }
-}
-
-fn is_raw_union(un: &Union) -> bool {
-    un.cases.len()
-        == un
-            .cases
-            .iter()
-            .map(|case| raw_union_type(case.ty))
-            .collect::<HashSet<_>>()
-            .len()
 }
