@@ -219,10 +219,10 @@ impl<'a> Summary<'a> {
                     }
                     self.types.insert(id);
                 }
-                TypeDefKind::List(ty) => {
+                TypeDefKind::List(ty) | TypeDefKind::Type(ty) => {
                     self.visit_type(*ty);
                 }
-                _ => todo!(),
+                kind => todo!("{kind:?}"),
             },
         }
     }
@@ -357,7 +357,10 @@ impl<'a> Summary<'a> {
                     }
                 }
                 TypeDefKind::Flags(flags) => OwnedKind::Flags(flags.repr().count()),
-                _ => todo!(),
+                TypeDefKind::Tuple(_) | TypeDefKind::Option(_) | TypeDefKind::Result(_) => {
+                    return self.summarize_unowned_type(id)
+                }
+                kind => todo!("{kind:?}"),
             };
 
             shared::Type::Owned {
@@ -366,24 +369,29 @@ impl<'a> Summary<'a> {
                 kind,
             }
         } else {
-            match &ty.kind {
-                TypeDefKind::Tuple(tuple) => shared::Type::Tuple(tuple.types.len()),
-                TypeDefKind::Option(some) => {
-                    let nesting = if let Type::Id(id) = some {
-                        matches!(&self.resolve.types[*id].kind, TypeDefKind::Option(_))
-                    } else {
-                        false
-                    };
+            self.summarize_unowned_type(id)
+        }
+    }
 
-                    if nesting {
-                        shared::Type::NestingOption
-                    } else {
-                        shared::Type::Option
-                    }
+    fn summarize_unowned_type(&self, id: TypeId) -> shared::Type {
+        let ty = &self.resolve.types[id];
+        match &ty.kind {
+            TypeDefKind::Tuple(tuple) => shared::Type::Tuple(tuple.types.len()),
+            TypeDefKind::Option(some) => {
+                let nesting = if let Type::Id(id) = some {
+                    matches!(&self.resolve.types[*id].kind, TypeDefKind::Option(_))
+                } else {
+                    false
+                };
+
+                if nesting {
+                    shared::Type::NestingOption
+                } else {
+                    shared::Type::Option
                 }
-                TypeDefKind::Result(_) => shared::Type::Result,
-                _ => todo!(),
             }
+            TypeDefKind::Result(_) => shared::Type::Result,
+            kind => todo!("{kind:?}"),
         }
     }
 
@@ -663,14 +671,16 @@ class {camel}(Flag):
                     let params = function
                         .params
                         .iter()
-                        .map(|(name, ty)| format!("{name}: {}", names.type_name(*ty)))
+                        .map(|(name, ty)| {
+                            format!("{}: {}", name.to_snake_case(), names.type_name(*ty))
+                        })
                         .collect::<Vec<_>>()
                         .join(", ");
 
                     let args = function
                         .params
                         .iter()
-                        .map(|(name, _)| name.as_str())
+                        .map(|(name, _)| name.to_snake_case())
                         .collect::<Vec<_>>()
                         .join(", ");
 
@@ -1072,7 +1082,8 @@ impl<'a> TypeNames<'a> {
                         };
                         format!("Tuple[{types}]")
                     }
-                    _ => todo!(),
+                    TypeDefKind::Type(ty) => self.type_name(*ty),
+                    kind => todo!("{kind:?}"),
                 }
             }
         }

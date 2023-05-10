@@ -648,7 +648,8 @@ impl<'a> FunctionBindgen<'a> {
                     self.pop_local(destination, ValType::I32);
                     self.pop_local(length, ValType::I32);
                 }
-                _ => todo!(),
+                TypeDefKind::Type(ty) => self.lower(*ty, context, value),
+                kind => todo!("{kind:?}"),
             },
         }
     }
@@ -836,7 +837,8 @@ impl<'a> FunctionBindgen<'a> {
 
                     self.pop_local(length, ValType::I32);
                 }
-                _ => todo!(),
+                TypeDefKind::Type(ty) => self.store(*ty, context, value, destination),
+                kind => todo!("{kind:?}"),
             },
         }
     }
@@ -1081,7 +1083,7 @@ impl<'a> FunctionBindgen<'a> {
                         WORD_ALIGN.try_into().unwrap(),
                     )));
                 }
-                _ => todo!(),
+                kind => todo!("{kind:?}"),
             },
         }
     }
@@ -1386,7 +1388,8 @@ impl<'a> FunctionBindgen<'a> {
                         self.pop_local(index, ValType::I32);
                     }
                 }
-                _ => todo!(),
+                TypeDefKind::Type(ty) => self.lift(*ty, context, value),
+                kind => todo!("{kind:?}"),
             },
         }
     }
@@ -1666,7 +1669,8 @@ impl<'a> FunctionBindgen<'a> {
                     self.pop_local(length, ValType::I32);
                     self.pop_local(body, ValType::I32);
                 }
-                _ => todo!(),
+                TypeDefKind::Type(ty) => self.load(*ty, context, source),
+                kind => todo!("{kind:?}"),
             },
         }
     }
@@ -1905,7 +1909,8 @@ impl<'a> FunctionBindgen<'a> {
                         WORD_ALIGN.try_into().unwrap(),
                     )));
                 }
-                _ => todo!(),
+                TypeDefKind::Type(ty) => self.load_copy(*ty, source),
+                kind => todo!("{kind:?}"),
             },
         }
     }
@@ -2149,7 +2154,8 @@ impl<'a> FunctionBindgen<'a> {
                     self.push(Ins::I32Const(abi.align.try_into().unwrap()));
                     self.link_call(Link::Free);
                 }
-                _ => todo!(),
+                TypeDefKind::Type(ty) => self.free_lowered(*ty, value),
+                kind => todo!("{kind:?}"),
             },
         }
     }
@@ -2331,7 +2337,7 @@ impl<'a> FunctionBindgen<'a> {
                     self.pop_local(length, ValType::I32);
                     self.pop_local(body, ValType::I32);
                 }
-                _ => todo!(),
+                kind => todo!("{kind:?}"),
             },
         }
     }

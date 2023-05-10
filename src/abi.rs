@@ -146,7 +146,8 @@ pub fn has_pointer(resolve: &Resolve, ty: Type) -> bool {
             }
             TypeDefKind::Tuple(tuple) => tuple.types.iter().any(|ty| has_pointer(resolve, *ty)),
             TypeDefKind::List(_) => true,
-            _ => todo!(),
+            TypeDefKind::Type(ty) => has_pointer(resolve, *ty),
+            kind => todo!("{kind:?}"),
         },
     }
 }
@@ -224,7 +225,8 @@ pub fn abi(resolve: &Resolve, ty: Type) -> Abi {
                 align: 4,
                 flattened: vec![ValType::I32; 2],
             },
-            _ => todo!(),
+            TypeDefKind::Type(ty) => abi(resolve, *ty),
+            kind => todo!("{kind:?}"),
         },
     }
 }

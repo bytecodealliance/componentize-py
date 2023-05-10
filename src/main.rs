@@ -198,6 +198,7 @@ fn fork(common: Common, componentize: Componentize) -> Result<()> {
 fn componentize(options: PrivateOptions) -> Result<()> {
     env::remove_var("COMPONENTIZE_PY_COMPONENTIZE");
 
+    env::set_var("RUST_BACKTRACE", "1");
     env::set_var("PYTHONUNBUFFERED", "1");
     env::set_var("COMPONENTIZE_PY_APP_NAME", &options.app_name);
 
