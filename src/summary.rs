@@ -1067,7 +1067,13 @@ impl<'a> TypeNames<'a> {
                             .map(|ty| self.type_name(ty))
                             .unwrap_or_else(|| "None".into())
                     ),
-                    TypeDefKind::List(ty) => format!("List[{}]", self.type_name(*ty)),
+                    TypeDefKind::List(ty) => {
+                        if let Type::U8 | Type::S8 = ty {
+                            "bytes".into()
+                        } else {
+                            format!("List[{}]", self.type_name(*ty))
+                        }
+                    }
                     TypeDefKind::Tuple(tuple) => {
                         let types = tuple
                             .types

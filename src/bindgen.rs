@@ -1083,6 +1083,7 @@ impl<'a> FunctionBindgen<'a> {
                         WORD_ALIGN.try_into().unwrap(),
                     )));
                 }
+                TypeDefKind::Type(ty) => self.store_copy(*ty, source, destination),
                 kind => todo!("{kind:?}"),
             },
         }
@@ -2337,6 +2338,7 @@ impl<'a> FunctionBindgen<'a> {
                     self.pop_local(length, ValType::I32);
                     self.pop_local(body, ValType::I32);
                 }
+                TypeDefKind::Type(ty) => self.free_stored(*ty, value),
                 kind => todo!("{kind:?}"),
             },
         }
