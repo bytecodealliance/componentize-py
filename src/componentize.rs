@@ -413,19 +413,8 @@ pub fn componentize(
                     let mut import_index = 0;
                     let mut dispatch_index = 0;
                     for function in &summary.functions {
-                        let mut gen = FunctionBindgen::new(
-                            resolve,
-                            stack_pointer_index,
-                            &link_map,
-                            &summary.types,
-                            function.params,
-                            function.results,
-                            function.core_export_type(resolve).0.len(),
-                            &summary.tuple_types,
-                            summary.option_type,
-                            summary.nesting_option_type,
-                            summary.result_type,
-                        );
+                        let mut gen =
+                            FunctionBindgen::new(summary, function, stack_pointer_index, &link_map);
 
                         match function.kind {
                             FunctionKind::Import => {
