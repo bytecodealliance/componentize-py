@@ -255,10 +255,7 @@ pub fn visit(mut reader: BinaryReader<'_>, remap: impl Fn(u32) -> u32) -> Result
     Ok(visitor.buffer)
 }
 
-pub fn const_expr(
-    reader: BinaryReader<'_>,
-    remap: impl Fn(u32) -> u32,
-) -> Result<ConstExpr> {
+pub fn const_expr(reader: BinaryReader<'_>, remap: impl Fn(u32) -> u32) -> Result<ConstExpr> {
     let mut bytes = visit(reader, remap)?;
     assert_eq!(bytes.pop(), Some(0xb));
     Ok(ConstExpr::raw(bytes))

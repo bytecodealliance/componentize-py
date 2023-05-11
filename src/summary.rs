@@ -765,10 +765,10 @@ from abc import abstractmethod
                 file,
                 "{python_imports}
 
-T = TypeVar('T')
+S = TypeVar('S')
 @dataclass
-class Some(Generic[T]):
-    value: T
+class Some(Generic[S]):
+    value: S
 
 T = TypeVar('T')
 @dataclass

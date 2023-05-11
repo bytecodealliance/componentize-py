@@ -339,7 +339,7 @@ pub unsafe extern "C" fn cabi_realloc(
     align: usize,
     new_size: usize,
 ) -> *mut u8 {
-    assert!(old_ptr == ptr::null_mut());
+    assert!(old_ptr.is_null());
     assert!(old_len == 0);
 
     alloc::alloc(Layout::from_size_align(new_size, align).unwrap())

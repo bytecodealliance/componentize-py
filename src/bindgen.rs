@@ -1,6 +1,7 @@
 use {
     crate::{
         abi::{self, Abi, MAX_FLAT_PARAMS, MAX_FLAT_RESULTS},
+        summary::{MyFunction, Summary},
         util::Types as _,
     },
     componentize_py_shared::ReturnStyle,
@@ -91,37 +92,29 @@ pub struct FunctionBindgen<'a> {
 }
 
 impl<'a> FunctionBindgen<'a> {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
-        resolve: &'a Resolve,
+        summary: &'a Summary,
+        function: &'a MyFunction,
         stack_pointer: u32,
         link_map: &'a HashMap<Link, u32>,
-        types: &'a IndexSet<TypeId>,
-        params: &'a [(String, Type)],
-        results: &'a Results,
-        param_count: usize,
-        tuple_types: &'a HashMap<usize, TypeId>,
-        option_type: Option<TypeId>,
-        nesting_option_type: Option<TypeId>,
-        result_type: Option<TypeId>,
     ) -> Self {
         Self {
-            resolve,
+            resolve: summary.resolve,
             stack_pointer,
             link_map,
-            types,
-            params,
-            results,
-            params_abi: abi::record_abi(resolve, params.types()),
-            results_abi: abi::record_abi(resolve, results.types()),
+            types: &summary.types,
+            params: function.params,
+            results: function.results,
+            params_abi: abi::record_abi(summary.resolve, function.params.types()),
+            results_abi: abi::record_abi(summary.resolve, function.results.types()),
             local_types: Vec::new(),
             local_stack: Vec::new(),
             instructions: Vec::new(),
-            param_count,
-            tuple_types,
-            option_type,
-            nesting_option_type,
-            result_type,
+            param_count: function.core_export_type(summary.resolve).0.len(),
+            tuple_types: &summary.tuple_types,
+            option_type: summary.option_type,
+            nesting_option_type: summary.nesting_option_type,
+            result_type: summary.result_type,
         }
     }
 
