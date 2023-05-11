@@ -1,0 +1,277 @@
+name: Release
+on:
+  push:
+    branches: [main]
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    name: Build Linux executable
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          submodules: 'true'
+
+      - name: Install latest Rust stable toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          default: true
+          components: clippy, rustfmt
+
+      - name: Install Wasm Rust targets
+        shell: bash
+        run: rustup target add wasm32-wasi wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "rust-cache-${{ hashFiles('./Cargo.lock') }}-${{ hashFiles('./test/Cargo.lock') }}"
+          cache-on-failure: false
+
+      - name: Install WASI-SDK
+        shell: bash
+        run: |
+          cd /tmp
+          curl -LO https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-16/wasi-sdk-16.0-linux.tar.gz
+          tar -xf wasi-sdk-16.0-linux.tar.gz
+          cp -r wasi-sdk-16.0 /opt/wasi-sdk
+
+      - name: Cache CPython
+        id: cache-cpython-wasi
+        uses: actions/cache@v3
+        with:
+          path: cpython/builddir/wasi
+          key: cpython-wasi
+          enableCrossOsArchive: true
+
+      - name: Build
+        shell: bash
+        run: cargo build --release
+
+  release:
+    name: Build and release executables
+    needs: linux
+    runs-on: ${{ matrix.config.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - {
+              os: "ubuntu-latest",
+              arch: "amd64",
+              wasiSDK: "linux",
+              extension: "",
+              buildArgs: "",
+              target: "",
+              targetDir: "target/release",
+            }
+          - {
+              os: "ubuntu-latest",
+              arch: "aarch64",
+              wasiSDK: "linux",
+              extension: "",
+              buildArgs: "--target aarch64-unknown-linux-gnu",
+              target: "aarch64-unknown-linux-gnu",
+              targetDir: "target/aarch64-unknown-linux-gnu/release",
+          }
+          - {
+              os: "macos-latest",
+              arch: "amd64",
+              wasiSDK: "macos",
+              extension: "",
+              buildArgs: "",
+              target: "",
+              targetDir: "target/release",
+            }
+          - {
+              os: "macos-latest",
+              arch: "aarch64",
+              wasiSDK: "macos",
+              extension: "",
+              buildArgs: "--target aarch64-apple-darwin",
+              target: "aarch64-apple-darwin",
+              targetDir: "target/aarch64-apple-darwin/release",
+            }
+          - {
+              os: "windows-latest",
+              arch: "amd64",
+              wasiSDK: "",
+              extension: ".exe",
+              buildArgs: "",
+              target: "",
+              targetDir: "target/release",
+            }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          submodules: 'true'
+
+      - name: Install latest Rust stable toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          default: true
+          target: ${{ matrix.config.target }}
+
+      - name: Install Wasm Rust targets
+        shell: bash
+        run: rustup target add wasm32-wasi wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        if: matrix.config.os == 'ubuntu-latest' && matrix.config.arch == 'amd64'
+        with:
+          shared-key: "rust-cache-${{ hashFiles('./Cargo.lock') }}-${{ hashFiles('./test/Cargo.lock') }}"
+          cache-on-failure: "false"
+          save-if: "false"
+
+      - name: Set the release version (tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: echo "RELEASE_VERSION=${GITHUB_REF/refs\/tags\//}" >> $GITHUB_ENV
+
+      - name: Set the release version (canary)
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        run: echo "RELEASE_VERSION=canary" >> $GITHUB_ENV
+
+      - name: Lowercase the runner OS name
+        shell: bash
+        run: |
+          OS=$(echo "${{ runner.os }}" | tr '[:upper:]' '[:lower:]')
+          echo "RUNNER_OS=$OS" >> $GITHUB_ENV
+
+      - name: Install WASI-SDK
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cd /tmp
+          curl -LO https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-16/wasi-sdk-16.0-${{ matrix.config.wasiSDK }}.tar.gz
+          tar -xf wasi-sdk-16.0-${{ matrix.config.wasiSDK }}.tar.gz
+
+          sudo mv wasi-sdk-16.0 /opt/wasi-sdk
+
+      - name: Install WASI-SDK on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          curl -LO https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-16/wasi-sdk-16.0-mingw.tar.gz
+          tar -xf wasi-sdk-16.0-mingw.tar.gz
+
+      - name: Restore CPython
+        id: cache-cpython-wasi
+        uses: actions/cache/restore@v3
+        with:
+          path: cpython/builddir/wasi
+          key: cpython-wasi
+          enableCrossOsArchive: true
+
+      - name: Set up cross-compiled linux aarch64 build
+        if: matrix.config.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt update
+          sudo apt install gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          echo '[target.aarch64-unknown-linux-gnu]' >> ${HOME}/.cargo/config.toml
+          echo 'linker = "aarch64-linux-gnu-gcc"' >> ${HOME}/.cargo/config.toml
+
+      - name: Build
+        shell: bash
+        run: |
+          if [ "${{ runner.os}}" == "Windows" ]; then
+          export WASI_SDK_PATH="$(cygpath -m $(pwd)/wasi-sdk-16.0)"
+          fi
+          cargo build --release ${{ matrix.config.buildArgs  }}
+
+      - name: Package as tarfile
+        shell: bash
+        run: |
+          mkdir -v _dist
+          cp ${{ matrix.config.targetDir }}/componentize-py${{ matrix.config.extension }} \
+              _dist/componentize-py${{ matrix.config.extension }}
+          cd _dist
+          tar czf componentize-py-${{ env.RELEASE_VERSION }}-${{ env.RUNNER_OS }}-${{ matrix.config.arch }}.tar.gz \
+              componentize-py${{ matrix.config.extension }}
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v3
+        with:
+            name: componentize-py
+            path: _dist/componentize-py-${{ env.RELEASE_VERSION }}-${{ env.RUNNER_OS }}-${{ matrix.config.arch }}.tar.gz
+
+      - name: Upload binary to Github release (tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: _dist/componentize-py-${{ env.RELEASE_VERSION }}-${{ env.RUNNER_OS }}-${{ matrix.config.arch }}.tar.gz
+          tag: ${{ github.ref }}
+
+  checksums:
+    name: Generate checksums
+    runs-on: ubuntu-latest
+    needs: release
+    steps:
+      - name: Set the release version (tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: echo "RELEASE_VERSION=${GITHUB_REF/refs\/tags\//}" >> $GITHUB_ENV
+
+      - name: Set the release version (canary)
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        run: echo "RELEASE_VERSION=canary" >> $GITHUB_ENV
+
+      - name: Download release assets
+        uses: actions/download-artifact@v3
+        with:
+            name: componentize-py
+
+      - name: Generate checksums
+        run: |
+          sha256sum componentize-py-${{ env.RELEASE_VERSION }}*.tar.gz > checksums-${{ env.RELEASE_VERSION }}.txt
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: componentize-py
+          path: checksums-${{ env.RELEASE_VERSION }}.txt
+
+      - name: Upload checksums to Github release (tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: checksums-${{ env.RELEASE_VERSION }}.txt
+          tag: ${{ github.ref }}
+
+  update_canary_release:
+    name: Update canary release
+    needs: checksums
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v3
+        with:
+            name: componentize-py
+
+      - name: Delete canary tag
+        uses: dev-drprasad/delete-tag-and-release@v0.2.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: canary
+
+      - name: Recreate canary tag and release
+        uses: ncipollo/release-action@v1.10.0
+        with:
+          tag: canary
+          allowUpdates: true
+          prerelease: true
+          artifacts: "checksums-canary.txt,componentize-py-canary*"

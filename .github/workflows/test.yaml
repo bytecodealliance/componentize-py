@@ -1,7 +1,5 @@
 name: Test
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
     paths-ignore:
@@ -28,14 +26,14 @@ jobs:
           default: true
           components: clippy, rustfmt
 
+      - name: Install Wasm Rust targets
+        shell: bash
+        run: rustup target add wasm32-wasi wasm32-unknown-unknown
+
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "rust-cache-${{ hashFiles('./Cargo.lock') }}-${{ hashFiles('./test/Cargo.lock') }}"
           cache-on-failure: "false"
-
-      - name: Install Wasm Rust targets
-        shell: bash
-        run: rustup target add wasm32-wasi wasm32-unknown-unknown
 
       - name: Install WASI-SDK
         shell: bash
@@ -50,7 +48,8 @@ jobs:
         uses: actions/cache@v3
         with:
           path: cpython/builddir/wasi
-          key: ${{ runner.os }}-cpython-wasi
+          key: cpython-wasi
+          enableCrossOsArchive: true
 
       - name: Lint
         shell: bash
