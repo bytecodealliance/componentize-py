@@ -1,6 +1,6 @@
 use {
     crate::{
-        bindgen::{FunctionBindgen, DISPATCH_CORE_PARAM_COUNT, LINK_LIST},
+        bindgen::{self, FunctionBindgen, DISPATCH_CORE_PARAM_COUNT, LINK_LIST},
         convert::{
             self, IntoEntityType, IntoExportKind, IntoRefType, IntoTableType, IntoValType,
             MyElements,
@@ -28,11 +28,44 @@ fn types_eq(
     a == b
 }
 
+fn make_wasi_stub(name: &str) -> Vec<Ins> {
+    // For most stubs, we trap, but we need specialized stubs for the functions called by `wasi-libc`'s
+    // __wasm_call_ctors; otherwise we'd trap immediately upon calling any export.
+    match name {
+        "clock_time_get" => vec![
+            // *time = 0;
+            Ins::LocalGet(2),
+            Ins::I64Const(0),
+            Ins::I64Store(bindgen::mem_arg(0, 3)),
+            // return ERRNO_SUCCESS;
+            Ins::I32Const(0),
+        ],
+        "environ_sizes_get" => vec![
+            // *environc = 0;
+            Ins::LocalGet(0),
+            Ins::I32Const(0),
+            Ins::I32Store(bindgen::mem_arg(0, 2)),
+            // *environ_buf_size = 0;
+            Ins::LocalGet(1),
+            Ins::I32Const(0),
+            Ins::I32Store(bindgen::mem_arg(0, 2)),
+            // return ERRNO_SUCCESS;
+            Ins::I32Const(0),
+        ],
+        "fd_prestat_get" => vec![
+            // return ERRNO_BADF;
+            Ins::I32Const(8),
+        ],
+        _ => vec![Ins::Unreachable],
+    }
+}
+
 pub fn componentize(
     module: &[u8],
     resolve: &Resolve,
     world: WorldId,
     summary: &Summary,
+    stub_wasi: bool,
 ) -> Result<Vec<u8>> {
     // First pass: find stack pointer and `dispatch` function, and count various items
 
@@ -47,6 +80,7 @@ pub fn componentize(
     let mut function_count = None;
     let mut table_count = None;
     let mut stack_pointer_index = None;
+    let mut wasi_stubs = Vec::new();
     for payload in Parser::new(0).parse_all(module) {
         match payload? {
             Payload::TypeSection(reader) => {
@@ -56,33 +90,47 @@ pub fn componentize(
                 let mut count = 0;
                 for import in reader {
                     let import = import?;
-                    if import.module == "componentize-py" {
-                        if import.name == "dispatch" {
-                            match import.ty {
-                                TypeRef::Func(ty)
-                                    if types_eq(
-                                        &types.as_ref().unwrap()[usize::try_from(ty).unwrap()],
-                                        &dispatch_type,
-                                    ) =>
-                                {
-                                    dispatch_import_index = Some(count);
-                                    dispatch_type_index = Some(ty);
+                    match import.module {
+                        "componentize-py" => {
+                            if import.name == "dispatch" {
+                                match import.ty {
+                                    TypeRef::Func(ty)
+                                        if types_eq(
+                                            &types.as_ref().unwrap()[usize::try_from(ty).unwrap()],
+                                            &dispatch_type,
+                                        ) =>
+                                    {
+                                        dispatch_import_index = Some(count);
+                                        dispatch_type_index = Some(ty);
+                                    }
+                                    _ => bail!(
+                                        "componentize-py#dispatch has incorrect type: {:?}",
+                                        import.ty
+                                    ),
                                 }
-                                _ => bail!(
-                                    "componentize-py#dispatch has incorrect type: {:?}",
-                                    import.ty
-                                ),
+                            } else {
+                                bail!(
+                                    "componentize-py module import has unrecognized name: {}",
+                                    import.name
+                                );
                             }
-                        } else {
-                            bail!(
-                                "componentize-py module import has unrecognized name: {}",
-                                import.name
-                            );
+                        }
+                        "wasi_snapshot_preview1" => {
+                            if let TypeRef::Func(ty) = import.ty {
+                                if stub_wasi {
+                                    wasi_stubs.push((ty, make_wasi_stub(import.name)));
+                                }
+                            } else {
+                                bail!("unsupported WASI import type: {:?}", import.ty);
+                            };
+                        }
+                        name => {
+                            bail!("componentize-py import module has unrecognized name: {name}")
                         }
                     }
                     count += 1;
                 }
-                import_count = Some(count)
+                import_count = Some(count);
             }
             Payload::FunctionSection(reader) => {
                 function_count = Some(reader.into_iter().count() + import_count.unwrap())
@@ -131,17 +179,11 @@ pub fn componentize(
     let stack_pointer_index = stack_pointer_index.unwrap();
 
     let remap = move |index: u32| match index.cmp(&dispatch_import_index.try_into().unwrap()) {
-        Ordering::Less => index,
+        Ordering::Less => index + u32::try_from(new_import_count).unwrap(),
         Ordering::Equal => (old_function_count + new_import_count - 1)
             .try_into()
             .unwrap(),
-        Ordering::Greater => {
-            if index < old_import_count.try_into().unwrap() {
-                index - 1
-            } else {
-                index + u32::try_from(new_import_count).unwrap() - 1
-            }
-        }
+        Ordering::Greater => index + u32::try_from(new_import_count).unwrap() - 1,
     };
 
     let mut link_name_map = LINK_LIST
@@ -183,16 +225,6 @@ pub fn componentize(
 
             Payload::ImportSection(reader) => {
                 let mut imports = ImportSection::new();
-                for import in reader
-                    .into_iter()
-                    .enumerate()
-                    .filter_map(|(index, import)| {
-                        (index != dispatch_import_index).then_some(import)
-                    })
-                {
-                    let import = import?;
-                    imports.import(import.module, import.name, IntoEntityType(import.ty));
-                }
                 for (index, function) in summary
                     .functions
                     .iter()
@@ -208,11 +240,28 @@ pub fn componentize(
                         EntityType::Function((old_type_count + index).try_into().unwrap()),
                     );
                 }
+                if !stub_wasi {
+                    for import in reader
+                        .into_iter()
+                        .enumerate()
+                        .filter_map(|(index, import)| {
+                            (index != dispatch_import_index).then_some(import)
+                        })
+                    {
+                        let import = import?;
+                        imports.import(import.module, import.name, IntoEntityType(import.ty));
+                    }
+                }
                 result.section(&imports);
             }
 
             Payload::FunctionSection(reader) => {
                 let mut functions = FunctionSection::new();
+                if stub_wasi {
+                    for (ty, _) in &wasi_stubs {
+                        functions.function(*ty);
+                    }
+                }
                 for ty in reader {
                     functions.function(ty?);
                 }
@@ -365,7 +414,18 @@ pub fn componentize(
                 result.section(&elements);
             }
 
-            Payload::CodeSectionStart { .. } => {}
+            Payload::CodeSectionStart { .. } => {
+                if stub_wasi {
+                    for (_, code) in &wasi_stubs {
+                        let mut function = Function::new([]);
+                        for ins in code {
+                            function.instruction(ins);
+                        }
+                        function.instruction(&Ins::End);
+                        code_section.function(&function);
+                    }
+                }
+            }
 
             Payload::CodeSectionEntry(body) => {
                 let mut reader = body.get_binary_reader();
@@ -418,9 +478,7 @@ pub fn componentize(
 
                         match function.kind {
                             FunctionKind::Import => {
-                                gen.compile_import(
-                                    (old_import_count - 1 + import_index).try_into().unwrap(),
-                                );
+                                gen.compile_import(import_index.try_into().unwrap());
                                 import_index += 1;
                             }
                             FunctionKind::Export => gen.compile_export(
@@ -495,7 +553,7 @@ pub fn componentize(
                     .enumerate()
                 {
                     function_names.push((
-                        (old_import_count - 1 + index).try_into().unwrap(),
+                        index.try_into().unwrap(),
                         format!("{}-import", function.internal_name()),
                     ));
                 }

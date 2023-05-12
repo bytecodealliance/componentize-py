@@ -64,7 +64,7 @@ declare_enum! {
     } LINK_LIST
 }
 
-fn mem_arg(offset: u64, align: u32) -> MemArg {
+pub fn mem_arg(offset: u64, align: u32) -> MemArg {
     MemArg {
         offset,
         align,

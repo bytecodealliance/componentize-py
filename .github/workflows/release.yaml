@@ -11,7 +11,7 @@ env:
 
 jobs:
   linux:
-    name: Build Linux executable
+    name: Populate cache
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -56,7 +56,7 @@ jobs:
         run: cargo build --release
 
   release:
-    name: Build and release executables
+    name: Build and release
     needs: linux
     runs-on: ${{ matrix.config.os }}
     strategy:

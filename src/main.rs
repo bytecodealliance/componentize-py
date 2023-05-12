@@ -82,6 +82,14 @@ struct Componentize {
     /// Output file to which to write the resulting component
     #[arg(short = 'o', long, default_value = "index.wasm")]
     output: PathBuf,
+
+    /// If specified, replace all WASI imports with trapping stubs.
+    ///
+    /// If this is set, the generated component will not have access to any WASI functionality, e.g. filesystem,
+    /// environment variables, network, etc. at runtime.  The only imports allowed are those specified by the
+    /// world.
+    #[arg(long)]
+    stub_wasi: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -101,6 +109,8 @@ struct PrivateOptions {
     python_path: String,
     output: PathBuf,
     wit_path: PathBuf,
+    #[arg(long)]
+    stub_wasi: bool,
 }
 
 fn main() -> Result<()> {
@@ -174,6 +184,10 @@ fn fork(common: Common, componentize: Componentize) -> Result<()> {
 
     if let Some(world) = &common.world {
         cmd.arg("--world").arg(world);
+    }
+
+    if componentize.stub_wasi {
+        cmd.arg("--stub-wasi");
     }
 
     let status = cmd.status()?;
@@ -257,7 +271,8 @@ fn componentize(options: PrivateOptions) -> Result<()> {
         "/runtime.wasm.zst"
     ))))?)?;
 
-    let component = componentize::componentize(&module, &resolve, world, &summary)?;
+    let component =
+        componentize::componentize(&module, &resolve, world, &summary, options.stub_wasi)?;
 
     fs::write(&options.output, component)?;
 
