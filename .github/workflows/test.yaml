@@ -32,7 +32,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "rust-cache-${{ hashFiles('./Cargo.lock') }}-${{ hashFiles('./test/Cargo.lock') }}"
+          shared-key: "rust-cache-${{ hashFiles('./Cargo.lock') }}"
           cache-on-failure: "false"
 
       - name: Install WASI-SDK
@@ -57,4 +57,4 @@ jobs:
 
       - name: Test
         shell: bash
-        run: (cd test && COMPONENTIZE_PY_TEST_COUNT=20 PROPTEST_MAX_SHRINK_ITERS=0 cargo test --release)
+        run: COMPONENTIZE_PY_TEST_COUNT=20 PROPTEST_MAX_SHRINK_ITERS=0 cargo test --release

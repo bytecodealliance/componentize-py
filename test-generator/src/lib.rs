@@ -707,7 +707,7 @@ fn strategy(ty: &Type, max_list_size: usize) -> String {
     }
 }
 
-fn main() -> Result<()> {
+pub fn generate() -> Result<()> {
     let seed = if let Ok(seed) = env::var("COMPONENTIZE_PY_TEST_SEED") {
         hex::decode(seed)?
     } else {
@@ -964,7 +964,7 @@ default world echoes-generated {{
     let rust = format!(
         r##"
 use {{
-    crate::tests::{{self, Tester, SEED}},
+    super::{{Tester, SEED}},
     anyhow::Result,
     async_trait::async_trait,
     once_cell::sync::Lazy,
@@ -996,7 +996,7 @@ impl imports::Host for Host {{
 }}
 
 #[async_trait]
-impl tests::Host for Host {{
+impl super::Host for Host {{
     type World = Exports;
 
     fn new(wasi: WasiCtx) -> Self {{

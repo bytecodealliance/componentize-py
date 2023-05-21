@@ -1,5 +1,7 @@
+#![deny(warnings)]
+
 use {
-    crate::tests::{self, MyFloat32, MyFloat64, Tester, SEED},
+    super::{MyFloat32, MyFloat64, Tester, SEED},
     anyhow::Result,
     async_trait::async_trait,
     once_cell::sync::Lazy,
@@ -12,7 +14,7 @@ use {
 };
 
 wasmtime::component::bindgen!({
-    path: "wit",
+    path: "src/test/wit",
     world: "echoes",
     async: true
 });
@@ -190,7 +192,7 @@ impl imports::Host for Host {
 }
 
 #[async_trait]
-impl tests::Host for Host {
+impl super::Host for Host {
     type World = Echoes;
 
     fn new(wasi: WasiCtx) -> Self {
@@ -313,9 +315,8 @@ class Exports(exports.Exports):
         return imports.echo_many(v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16)
 "#;
 
-static TESTER: Lazy<Tester<Host>> = Lazy::new(|| {
-    Tester::<Host>::new(include_str!("../../wit/echoes.wit"), GUEST_CODE, *SEED).unwrap()
-});
+static TESTER: Lazy<Tester<Host>> =
+    Lazy::new(|| Tester::<Host>::new(include_str!("wit/echoes.wit"), GUEST_CODE, *SEED).unwrap());
 
 #[test]
 fn nothing() -> Result<()> {

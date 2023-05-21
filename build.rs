@@ -32,7 +32,11 @@ fn main() -> Result<()> {
         stubs_for_clippy(&out_dir)
     } else {
         package_all_the_things(&out_dir)
-    }
+    }?;
+
+    // TODO: how can we detect `cargo test` and only run this in that case (or more specifically, run it so it
+    // generates an empty file)?
+    test_generator::generate()
 }
 
 fn stubs_for_clippy(out_dir: &Path) -> Result<()> {
