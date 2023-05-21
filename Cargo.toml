@@ -19,9 +19,9 @@ indexmap = "1.9.3"
 bincode = "1.3.3"
 heck = "0.4.1"
 once_cell = "1.17.1"
-wasmtime-wasi = "8.0.1"
-wasi-common = "8.0.1"
-wasmtime = "8.0.1"
+wasmtime-wasi = "=8.0.0"
+wasi-common = "=8.0.0"
+wasmtime = "=8.0.0"
 cap-std = "1.0.15"
 
 [dev-dependencies]
