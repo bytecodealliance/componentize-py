@@ -32,7 +32,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "rust-cache-${{ hashFiles('./Cargo.lock') }}-${{ hashFiles('./test/Cargo.lock') }}"
+          shared-key: "rust-cache-${{ hashFiles('./Cargo.lock') }}"
           cache-on-failure: false
 
       - name: Install WASI-SDK
@@ -128,7 +128,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         if: matrix.config.os == 'ubuntu-latest' && matrix.config.arch == 'amd64'
         with:
-          shared-key: "rust-cache-${{ hashFiles('./Cargo.lock') }}-${{ hashFiles('./test/Cargo.lock') }}"
+          shared-key: "rust-cache-${{ hashFiles('./Cargo.lock') }}"
           cache-on-failure: "false"
           save-if: "false"
 

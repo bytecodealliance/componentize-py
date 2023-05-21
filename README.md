@@ -11,7 +11,7 @@ following as input:
 
 The output is a component which may be run using
 e.g. [`wasmtime`](https://github.com/bytecodealliance/wasmtime).  See the
-[tests](test/src/lib.rs) for examples.
+[tests](tests) for examples.
 
 ## Build Prerequisites
 
@@ -24,13 +24,4 @@ e.g. [`wasmtime`](https://github.com/bytecodealliance/wasmtime).  See the
 
 ```shell
 cargo run --release -- --help
-```
-
-## Running Tests
-
-The tests live in a separate crate due to an incompatibility between the version
-of `wasmtime` which `wizer` uses and the one we use to test.
-
-```shell
-(cd test && cargo test --release)
 ```
