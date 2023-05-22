@@ -1,6 +1,9 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["maturin>=0.15,<0.16"]
+build-backend = "maturin"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
 
 [project]
 name = "componentize-py"
@@ -14,3 +17,6 @@ keywords = [ "webassembly", "wasm", "component" ]
 
 [project.urls]
 repository = "https://github.com/dicej/componentize-py"
+
+[project.scripts]
+script = "componentize_py:script"

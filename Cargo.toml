@@ -2,6 +2,11 @@
 name = "componentize-py"
 version = "0.1.0"
 edition = "2021"
+exclude = ["cpython"]
+
+[lib]
+name = "componentize_py"
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 anyhow = "1.0.68"
@@ -23,6 +28,7 @@ wasmtime-wasi = "=8.0.0"
 wasi-common = "=8.0.0"
 wasmtime = "=8.0.0"
 cap-std = "1.0.15"
+pyo3 = { version = "0.18.3", features = ["abi3-py311", "extension-module"], optional = true }
 
 [dev-dependencies]
 tokio = { version = "1.27.0", features = ["macros", "rt", "rt-multi-thread", "fs"] }

@@ -26,18 +26,21 @@ use {
 
 mod abi;
 mod bindgen;
+pub mod command;
 mod componentize;
 mod convert;
+#[cfg(feature = "pyo3")]
+mod python;
 mod summary;
 #[cfg(test)]
 mod test;
 mod util;
 
 #[cfg(unix)]
-pub const NATIVE_PATH_DELIMITER: char = ':';
+const NATIVE_PATH_DELIMITER: char = ':';
 
 #[cfg(windows)]
-pub const NATIVE_PATH_DELIMITER: char = ';';
+const NATIVE_PATH_DELIMITER: char = ';';
 
 static WASI_TABLE: Lazy<Mutex<HashMap<u32, WasiCtx>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 

@@ -1,1 +1,5 @@
 target
+__pycache__
+.venv
+bacon.toml
+dist
