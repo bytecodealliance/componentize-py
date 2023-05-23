@@ -79,7 +79,7 @@ pub struct Bindings {
 }
 
 pub fn run<T: Into<OsString> + Clone, I: IntoIterator<Item = T>>(args: I) -> Result<()> {
-    let options = Options::try_parse_from(args)?;
+    let options = Options::parse_from(args);
     match options.command {
         Command::Componentize(opts) => componentize(options.common, opts),
         Command::Bindings(opts) => generate_bindings(options.common, opts),

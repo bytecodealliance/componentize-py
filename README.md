@@ -1,6 +1,6 @@
 # componentize-py
 
-This is a prototype of a tool to convert a Python application to a [WebAssembly
+This is a tool to convert a Python application to a [WebAssembly
 component](https://github.com/WebAssembly/component-model).  It takes the
 following as input:
 
@@ -11,7 +11,13 @@ following as input:
 
 The output is a component which may be run using
 e.g. [`wasmtime`](https://github.com/bytecodealliance/wasmtime).  See the
-[tests](tests) for examples.
+[tests](src/test) for examples.
+
+## Installing from PyPI
+
+```
+pip install componentize-py
+```
 
 ## Build Prerequisites
 
