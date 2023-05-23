@@ -30,9 +30,9 @@ fn get_seed() -> Result<[u8; 32]> {
     Ok(seed)
 }
 
-pub static SEED: Lazy<[u8; 32]> = Lazy::new(|| get_seed().unwrap());
+static SEED: Lazy<[u8; 32]> = Lazy::new(|| get_seed().unwrap());
 
-pub static ENGINE: Lazy<Engine> = Lazy::new(|| {
+static ENGINE: Lazy<Engine> = Lazy::new(|| {
     let mut config = Config::new();
     config.async_support(true);
     config.wasm_component_model(true);
@@ -40,7 +40,7 @@ pub static ENGINE: Lazy<Engine> = Lazy::new(|| {
     Engine::new(&config).unwrap()
 });
 
-pub fn make_component(wit: &str, python: &str) -> Result<Vec<u8>> {
+fn make_component(wit: &str, python: &str) -> Result<Vec<u8>> {
     let tempdir = tempfile::tempdir()?;
     fs::write(tempdir.path().join("app.wit"), wit)?;
     fs::write(tempdir.path().join("app.py"), python)?;
@@ -61,7 +61,7 @@ pub fn make_component(wit: &str, python: &str) -> Result<Vec<u8>> {
 }
 
 #[derive(Debug, Copy, Clone)]
-pub struct MyFloat32(pub f32);
+struct MyFloat32(f32);
 
 impl PartialEq<MyFloat32> for MyFloat32 {
     fn eq(&self, other: &Self) -> bool {
@@ -70,7 +70,7 @@ impl PartialEq<MyFloat32> for MyFloat32 {
 }
 
 #[derive(Debug, Copy, Clone)]
-pub struct MyFloat64(pub f64);
+struct MyFloat64(f64);
 
 impl PartialEq<MyFloat64> for MyFloat64 {
     fn eq(&self, other: &Self) -> bool {
@@ -79,7 +79,7 @@ impl PartialEq<MyFloat64> for MyFloat64 {
 }
 
 #[async_trait]
-pub trait Host {
+trait Host {
     type World;
 
     fn new(wasi: WasiCtx) -> Self;
@@ -96,13 +96,13 @@ pub trait Host {
         Self: Sized;
 }
 
-pub struct Tester<H> {
+struct Tester<H> {
     pre: InstancePre<H>,
     seed: [u8; 32],
 }
 
 impl<H: Host> Tester<H> {
-    pub fn new(wit: &str, guest_code: &str, seed: [u8; 32]) -> Result<Self> {
+    fn new(wit: &str, guest_code: &str, seed: [u8; 32]) -> Result<Self> {
         let component = &make_component(wit, guest_code)?;
         let mut linker = Linker::<H>::new(&ENGINE);
         H::add_to_linker(&mut linker)?;
@@ -112,7 +112,7 @@ impl<H: Host> Tester<H> {
         })
     }
 
-    pub fn test<S: Strategy>(
+    fn test<S: Strategy>(
         &self,
         strategy: &S,
         test: impl Fn(S::Value, &H::World, &mut Store<H>, &Runtime) -> Result<()>,
@@ -146,7 +146,7 @@ impl<H: Host> Tester<H> {
         })?)
     }
 
-    pub fn all_eq<S: Strategy>(
+    fn all_eq<S: Strategy>(
         &self,
         strategy: &S,
         echo: impl Fn(S::Value, &H::World, &mut Store<H>, &Runtime) -> Result<S::Value>,
