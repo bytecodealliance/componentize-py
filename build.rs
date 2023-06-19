@@ -1,7 +1,7 @@
 #![deny(warnings)]
 
 use {
-    anyhow::{bail, Result},
+    anyhow::{anyhow, bail, Result},
     std::{
         env,
         fmt::Write as _,
@@ -28,6 +28,7 @@ fn main() -> Result<()> {
 
     if matches!(env::var("CARGO_CFG_FEATURE").as_deref(), Ok("cargo-clippy"))
         || env::var("CLIPPY_ARGS").is_ok()
+        || env::var("CARGO_EXPAND_NO_RUN_NIGHTLY").is_ok()
     {
         stubs_for_clippy(&out_dir)
     } else {
@@ -44,32 +45,30 @@ fn stubs_for_clippy(out_dir: &Path) -> Result<()> {
         "cargo:warning=using stubbed runtime, core library, and adapter for static analysis purposes..."
     );
 
-    let runtime_path = out_dir.join("runtime.wasm.zst");
+    let files = [
+        "libcomponentize_py_runtime.so.zst",
+        "libpython3.11.so.zst",
+        "libc.so.zst",
+        "libwasi-emulated.so.zst",
+        "libc++.so.zst",
+        "libc++abi.so.zst",
+        "wasi_snapshot_preview1.wasm.zst",
+    ];
 
-    if !runtime_path.exists() {
-        Encoder::new(File::create(runtime_path)?, ZSTD_COMPRESSION_LEVEL)?.do_finish()?;
+    for file in files {
+        let path = out_dir.join(file);
+
+        if !path.exists() {
+            Encoder::new(File::create(path)?, ZSTD_COMPRESSION_LEVEL)?.do_finish()?;
+        }
     }
 
-    let core_library_path = out_dir.join("python-lib.tar.zst");
+    let path = out_dir.join("python-lib.tar.zst");
 
-    if !core_library_path.exists() {
-        Builder::new(Encoder::new(
-            File::create(core_library_path)?,
-            ZSTD_COMPRESSION_LEVEL,
-        )?)
-        .into_inner()?
-        .do_finish()?;
-    }
-
-    let wasi_adapter_path = out_dir.join("wasi_snapshot_preview1.wasm.zst");
-
-    if !wasi_adapter_path.exists() {
-        Builder::new(Encoder::new(
-            File::create(wasi_adapter_path)?,
-            ZSTD_COMPRESSION_LEVEL,
-        )?)
-        .into_inner()?
-        .do_finish()?;
+    if !path.exists() {
+        Builder::new(Encoder::new(File::create(path)?, ZSTD_COMPRESSION_LEVEL)?)
+            .into_inner()?
+            .do_finish()?;
     }
 
     Ok(())
@@ -78,15 +77,26 @@ fn stubs_for_clippy(out_dir: &Path) -> Result<()> {
 fn package_all_the_things(out_dir: &Path) -> Result<()> {
     let repo_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
 
-    maybe_make_cpython(&repo_dir);
+    let wasi_sdk =
+        PathBuf::from(env::var_os("WASI_SDK_PATH").unwrap_or_else(|| "/opt/wasi-sdk".into()));
+
+    maybe_make_cpython(&repo_dir, &wasi_sdk);
+
+    let cpython_wasi_dir = repo_dir.join("cpython/builddir/wasi");
 
     make_pyo3_config(&repo_dir);
 
     let mut cmd = Command::new("cargo");
-    cmd.arg("build")
-        .current_dir("runtime")
+    cmd.current_dir("runtime")
+        .arg("+nightly")
+        .arg("build")
+        .arg("-Z")
+        .arg("build-std=panic_abort,std")
         .arg("--release")
         .arg("--target=wasm32-wasi")
+        .env_clear()
+        .env("PATH", env::var_os("PATH").unwrap())
+        .env("RUSTFLAGS", "-C relocation-model=pic")
         .env("CARGO_TARGET_DIR", out_dir)
         .env("PYO3_CONFIG_FILE", out_dir.join("pyo3-config.txt"));
 
@@ -94,53 +104,98 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
     assert!(status.success());
     println!("cargo:rerun-if-changed=runtime");
 
-    let runtime_path = out_dir.join("wasm32-wasi/release/componentize_py_runtime.wasm");
+    let path = out_dir.join("wasm32-wasi/release/libcomponentize_py_runtime.a");
 
-    if runtime_path.exists() {
-        let copied_runtime_path = out_dir.join("runtime.wasm.zst");
+    if path.exists() {
+        let name = "libcomponentize_py_runtime.so";
 
-        let mut encoder = Encoder::new(File::create(copied_runtime_path)?, ZSTD_COMPRESSION_LEVEL)?;
-        io::copy(&mut File::open(runtime_path)?, &mut encoder)?;
-        encoder.do_finish()?;
+        run(Command::new(wasi_sdk.join("bin/clang"))
+            .arg("-shared")
+            .arg("-o")
+            .arg(&out_dir.join(name))
+            .arg("-Wl,--whole-archive")
+            .arg(&path)
+            .arg("-Wl,--no-whole-archive")
+            .arg(format!("-L{}", cpython_wasi_dir.to_str().unwrap()))
+            .arg("-lpython3.11"));
+
+        compress(out_dir, name, out_dir, false)?;
     } else {
-        bail!("no such file: {}", runtime_path.display())
+        bail!("no such file: {}", path.display())
     }
 
-    let core_library_path = repo_dir.join("cpython/builddir/wasi/install/lib/python3.11");
+    let libraries = [
+        "libc.so",
+        "libwasi-emulated.so",
+        "libc++.so",
+        "libc++abi.so",
+    ];
 
-    if core_library_path.exists() {
-        let copied_core_library_path = out_dir.join("python-lib.tar.zst");
+    for library in libraries {
+        compress(
+            &wasi_sdk.join("share/wasi-sysroot/lib/wasm32-wasi"),
+            library,
+            out_dir,
+            true,
+        )?;
+    }
 
+    compress(&cpython_wasi_dir, "libpython3.11.so", out_dir, true)?;
+
+    let path = repo_dir.join("cpython/builddir/wasi/install/lib/python3.11");
+
+    if path.exists() {
         let mut builder = Builder::new(Encoder::new(
-            File::create(copied_core_library_path)?,
+            File::create(out_dir.join("python-lib.tar.zst"))?,
             ZSTD_COMPRESSION_LEVEL,
         )?);
 
-        add(&mut builder, &core_library_path, &core_library_path)?;
+        add(&mut builder, &path, &path)?;
 
         builder.into_inner()?.do_finish()?;
     } else {
-        bail!("no such directory: {}", core_library_path.display())
+        bail!("no such directory: {}", path.display())
     }
 
     let mut cmd = Command::new("cargo");
     cmd.arg("build")
-        .current_dir("preview2")
+        .current_dir("wasmtime/crates/wasi-preview1-component-adapter")
         .arg("--release")
         .arg("--target=wasm32-unknown-unknown")
         .env("CARGO_TARGET_DIR", out_dir);
 
     let status = cmd.status()?;
     assert!(status.success());
-    println!("cargo:rerun-if-changed=preview2");
+    println!("cargo:rerun-if-changed=wasmtime");
 
-    let adapter_path = out_dir.join("wasm32-unknown-unknown/release/wasi_snapshot_preview1.wasm");
-    let copied_adapter_path = out_dir.join("wasi_snapshot_preview1.wasm.zst");
-    let mut encoder = Encoder::new(File::create(copied_adapter_path)?, ZSTD_COMPRESSION_LEVEL)?;
-    io::copy(&mut File::open(adapter_path)?, &mut encoder)?;
-    encoder.do_finish()?;
+    compress(
+        &out_dir.join("wasm32-unknown-unknown/release"),
+        "wasi_snapshot_preview1.wasm",
+        out_dir,
+        false,
+    )?;
 
     Ok(())
+}
+
+fn compress(src_dir: &Path, name: &str, dst_dir: &Path, rerun_if_changed: bool) -> Result<()> {
+    let path = src_dir.join(name);
+
+    if rerun_if_changed {
+        println!("cargo:rerun-if-changed={}", path.to_str().unwrap());
+    }
+
+    if path.exists() {
+        let mut encoder = Encoder::new(
+            File::create(dst_dir.join(format!("{name}.zst")))?,
+            ZSTD_COMPRESSION_LEVEL,
+        )?;
+        io::copy(&mut File::open(path)?, &mut encoder)?;
+        encoder.do_finish()?;
+        Ok(())
+    } else {
+        Err(anyhow!("no such file: {}", path.display()))
+    }
 }
 
 fn include(path: &Path) -> bool {
@@ -165,45 +220,59 @@ fn add(builder: &mut Builder<impl Write>, root: &Path, path: &Path) -> Result<()
     Ok(())
 }
 
-fn maybe_make_cpython(repo_dir: &Path) {
+fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) {
     let cpython_wasi_dir = repo_dir.join("cpython/builddir/wasi");
-    if !cpython_wasi_dir.join("libpython3.11.a").exists() {
-        let cpython_native_dir = repo_dir.join("cpython/builddir/build");
-        if !cpython_native_dir.join(PYTHON_EXECUTABLE).exists() {
-            fs::create_dir_all(&cpython_native_dir).unwrap();
-            fs::create_dir_all(&cpython_wasi_dir).unwrap();
+    if !cpython_wasi_dir.join("libpython3.11.so").exists() {
+        if !cpython_wasi_dir.join("libpython3.11.a").exists() {
+            let cpython_native_dir = repo_dir.join("cpython/builddir/build");
+            if !cpython_native_dir.join(PYTHON_EXECUTABLE).exists() {
+                fs::create_dir_all(&cpython_native_dir).unwrap();
+                fs::create_dir_all(&cpython_wasi_dir).unwrap();
 
-            run(Command::new("../../configure")
-                .current_dir(&cpython_native_dir)
-                .arg(format!(
-                    "--prefix={}/install",
-                    cpython_native_dir.to_str().unwrap()
-                )));
+                run(Command::new("../../configure")
+                    .current_dir(&cpython_native_dir)
+                    .arg(format!(
+                        "--prefix={}/install",
+                        cpython_native_dir.to_str().unwrap()
+                    )));
 
-            run(Command::new("make").current_dir(cpython_native_dir));
+                run(Command::new("make").current_dir(cpython_native_dir));
+            }
+
+            let config_guess =
+                run(Command::new("../../config.guess").current_dir(&cpython_wasi_dir));
+
+            run(Command::new("../../Tools/wasm/wasi-env")
+                .env("CONFIG_SITE", "../../Tools/wasm/config.site-wasm32-wasi")
+                .env("CFLAGS", "-fPIC")
+                .current_dir(&cpython_wasi_dir)
+                .args([
+                    "../../configure",
+                    "-C",
+                    "--host=wasm32-unknown-wasi",
+                    &format!("--build={}", String::from_utf8(config_guess).unwrap()),
+                    &format!(
+                        "--with-build-python={}/../build/{PYTHON_EXECUTABLE}",
+                        cpython_wasi_dir.to_str().unwrap()
+                    ),
+                    &format!("--prefix={}/install", cpython_wasi_dir.to_str().unwrap()),
+                    "--disable-test-modules",
+                ]));
+
+            run(Command::new("make")
+                .current_dir(&cpython_wasi_dir)
+                .arg("install"));
         }
 
-        let config_guess = run(Command::new("../../config.guess").current_dir(&cpython_wasi_dir));
-
-        run(Command::new("../../Tools/wasm/wasi-env")
-            .env("CONFIG_SITE", "../../Tools/wasm/config.site-wasm32-wasi")
-            .current_dir(&cpython_wasi_dir)
-            .args([
-                "../../configure",
-                "-C",
-                "--host=wasm32-unknown-wasi",
-                &format!("--build={}", String::from_utf8(config_guess).unwrap()),
-                &format!(
-                    "--with-build-python={}/../build/{PYTHON_EXECUTABLE}",
-                    cpython_wasi_dir.to_str().unwrap()
-                ),
-                &format!("--prefix={}/install", cpython_wasi_dir.to_str().unwrap()),
-                "--disable-test-modules",
-            ]));
-
-        run(Command::new("make")
-            .current_dir(cpython_wasi_dir)
-            .arg("install"));
+        run(Command::new(wasi_sdk.join("bin/clang"))
+            .arg("-shared")
+            .arg("-o")
+            .arg(cpython_wasi_dir.join("libpython3.11.so"))
+            .arg("-Wl,--whole-archive")
+            .arg(cpython_wasi_dir.join("libpython3.11.a"))
+            .arg("-Wl,--no-whole-archive")
+            .arg(cpython_wasi_dir.join("Modules/_decimal/libmpdec/libmpdec.a"))
+            .arg(cpython_wasi_dir.join("Modules/expat/libexpat.a")));
     }
 }
 

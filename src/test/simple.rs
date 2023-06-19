@@ -1,69 +1,85 @@
 #![deny(warnings)]
 
 use {
-    super::ENGINE,
+    super::{Ctx, ENGINE},
     anyhow::Result,
     async_trait::async_trait,
-    wasi_preview2::WasiCtx,
     wasmtime::{
         component::{Component, Linker},
         Store,
     },
+    wasmtime_wasi::preview2::{command, Table, WasiCtxBuilder},
 };
 
 #[tokio::test]
 async fn simple_export() -> Result<()> {
     wasmtime::component::bindgen!({
         path: "src/test/wit",
-        world: "simple-export",
+        world: "simple-export-test",
         async: true
     });
 
     let component = &super::make_component(
         include_str!("wit/simple-export.wit"),
         r#"
-from simple_export import exports
+from simple_export_test import exports
 
-class Exports(exports.Exports):
+class SimpleExport(exports.SimpleExport):
     def foo(v: int) -> int:
         return v + 3
 "#,
-    )?;
+        Some(&command::add_to_linker),
+    )
+    .await?;
 
     let mut linker = Linker::new(&ENGINE);
-    wasi_host::command::add_to_linker(&mut linker, |ctx| ctx)?;
+    command::add_to_linker(&mut linker)?;
 
-    let mut store = Store::new(
-        &ENGINE,
-        wasmtime_wasi_preview2::WasiCtxBuilder::new()
-            .inherit_stdout()
-            .inherit_stderr()
-            .build(),
+    let mut table = Table::new();
+    let wasi = WasiCtxBuilder::new()
+        .inherit_stdout()
+        .inherit_stderr()
+        .build(&mut table)?;
+
+    let mut store = Store::new(&ENGINE, Ctx { wasi, table });
+
+    let (instance, _) = SimpleExportTest::instantiate_async(
+        &mut store,
+        &Component::new(&ENGINE, component)?,
+        &linker,
+    )
+    .await?;
+
+    assert_eq!(
+        45,
+        instance
+            .componentize_py_test_simple_export()
+            .call_foo(&mut store, 42)
+            .await?
     );
-
-    let (instance, _) =
-        SimpleExport::instantiate_async(&mut store, &Component::new(&ENGINE, component)?, &linker)
-            .await?;
-
-    assert_eq!(45, instance.exports.call_foo(&mut store, 42).await?);
 
     Ok(())
 }
 
 #[tokio::test]
 async fn simple_import_and_export() -> Result<()> {
+    simple_import_and_export_0(true).await
+}
+
+#[tokio::test]
+async fn simple_import_and_export_stubbed() -> Result<()> {
+    simple_import_and_export_0(false).await
+}
+
+async fn simple_import_and_export_0(add_to_linker: bool) -> Result<()> {
     wasmtime::component::bindgen!({
         path: "src/test/wit",
-        world: "simple-import-and-export",
+        world: "simple-import-and-export-test",
         async: true
     });
 
-    struct Host {
-        wasi: WasiCtx,
-    }
-
     #[async_trait]
-    impl imports::Host for Host {
+    impl componentize_py::test::simple_import_and_export::Host for Ctx {
         async fn foo(&mut self, v: u32) -> Result<u32> {
             Ok(v + 2)
         }
@@ -72,37 +88,50 @@ async fn simple_import_and_export() -> Result<()> {
     let component = &super::make_component(
         include_str!("wit/simple-import-and-export.wit"),
         r#"
-from simple_import_and_export import exports
-from simple_import_and_export.imports import imports
+from simple_import_and_export_test import exports
+from simple_import_and_export_test.imports import simple_import_and_export
 
-class Exports(exports.Exports):
+class SimpleImportAndExport(exports.SimpleImportAndExport):
     def foo(v: int) -> int:
-        return imports.foo(v) + 3
+        return simple_import_and_export.foo(v) + 3
 "#,
-    )?;
-
-    let mut linker = Linker::<Host>::new(&ENGINE);
-    wasi_host::command::add_to_linker(&mut linker, |host| &mut host.wasi)?;
-    imports::add_to_linker(&mut linker, |host| host)?;
-
-    let mut store = Store::new(
-        &ENGINE,
-        Host {
-            wasi: wasmtime_wasi_preview2::WasiCtxBuilder::new()
-                .inherit_stdout()
-                .inherit_stderr()
-                .build(),
+        if add_to_linker {
+            Some(&|linker| {
+                command::add_to_linker(linker)?;
+                componentize_py::test::simple_import_and_export::add_to_linker(linker, |ctx| ctx)
+            })
+        } else {
+            None
         },
-    );
+    )
+    .await?;
 
-    let (instance, _) = SimpleImportAndExport::instantiate_async(
+    let mut linker = Linker::<Ctx>::new(&ENGINE);
+    command::add_to_linker(&mut linker)?;
+    componentize_py::test::simple_import_and_export::add_to_linker(&mut linker, |ctx| ctx)?;
+
+    let mut table = Table::new();
+    let wasi = WasiCtxBuilder::new()
+        .inherit_stdout()
+        .inherit_stderr()
+        .build(&mut table)?;
+
+    let mut store = Store::new(&ENGINE, Ctx { wasi, table });
+
+    let (instance, _) = SimpleImportAndExportTest::instantiate_async(
         &mut store,
         &Component::new(&ENGINE, component)?,
         &linker,
     )
     .await?;
 
-    assert_eq!(47, instance.exports.call_foo(&mut store, 42).await?);
+    assert_eq!(
+        47,
+        instance
+            .componentize_py_test_simple_import_and_export()
+            .call_foo(&mut store, 42)
+            .await?
+    );
 
     Ok(())
 }

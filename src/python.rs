@@ -1,6 +1,7 @@
 use {
     pyo3::{exceptions::PyAssertionError, types::PyModule, PyResult, Python},
     std::{ffi::OsString, path::PathBuf},
+    tokio::runtime::Runtime,
 };
 
 #[pyo3::pyfunction]
@@ -14,14 +15,17 @@ fn python_componentize(
     stub_wasi: bool,
     output_path: PathBuf,
 ) -> PyResult<()> {
-    crate::componentize(
-        &wit_path,
-        world,
-        python_path,
-        app_name,
-        stub_wasi,
-        &output_path,
-    )
+    (|| {
+        Runtime::new()?.block_on(crate::componentize(
+            &wit_path,
+            world,
+            python_path,
+            app_name,
+            stub_wasi,
+            &output_path,
+            None,
+        ))
+    })()
     .map_err(|e| PyAssertionError::new_err(format!("{e:?}")))
 }
 

@@ -1,6 +1,6 @@
 [submodule "cpython"]
         path = cpython
-        url = https://github.com/python/cpython
-[submodule "preview2"]
-        path = preview2
-        url = https://github.com/dicej/preview1.wasm
+        url = https://github.com/dicej/cpython
+[submodule "wasmtime"]
+	path = wasmtime
+	url = https://github.com/bytecodealliance/wasmtime

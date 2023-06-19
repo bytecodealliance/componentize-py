@@ -1,0 +1,52 @@
+package componentize-py:init
+
+world init {
+    export exports: interface {
+        record function-export {
+            protocol: string,
+            name: string
+        }
+
+        enum raw-union-type {
+            int,
+            float,
+            str,
+            other
+        }
+
+        record case {
+            name: string,
+            has-payload: bool,
+        }
+
+        variant owned-kind {
+            %record(list<string>),
+            %variant(list<case>),
+            %enum(u32),
+            raw-union(list<raw-union-type>),
+            %flags(u32)
+        }
+
+        record owned-type {
+            kind: owned-kind,
+            %package: string,
+            name: string
+        }
+
+        variant %type {
+            owned(owned-type),
+            %option,
+            nesting-option,
+            %result,
+            %tuple(u32)
+        }
+
+        record symbols {
+            types-package: string,
+            exports: list<function-export>,
+            types: list<%type>
+        }
+
+        init: func(app-name: string, symbols: symbols) -> result<_, string>
+    }
+}

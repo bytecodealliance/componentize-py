@@ -7,6 +7,7 @@ use {
         path::{Path, PathBuf},
         process, str,
     },
+    tokio::runtime::Runtime,
 };
 
 /// A utility to convert Python apps into Wasm components
@@ -107,14 +108,15 @@ fn componentize(common: Common, componentize: Componentize) -> Result<()> {
         )
     }
 
-    crate::componentize(
+    Runtime::new()?.block_on(crate::componentize(
         &common.wit_path,
         common.world.as_deref(),
         &python_path,
         &componentize.app_name,
         componentize.stub_wasi,
         &componentize.output,
-    )?;
+        None,
+    ))?;
 
     if !common.quiet {
         println!("Component built successfully");

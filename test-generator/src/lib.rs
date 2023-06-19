@@ -22,6 +22,8 @@ const MAX_PARAM_COUNT: usize = 12;
 const MAX_FLAG_COUNT: u32 = 100;
 const MAX_ENUM_COUNT: u32 = 100;
 
+static PREFIX: &str = "componentize_py::test::echoes_generated";
+
 #[derive(Clone, Debug)]
 enum Type {
     Bool,
@@ -116,36 +118,6 @@ fn union_case_names(types: &[Type]) -> Vec<String> {
     names
 }
 
-fn borrows(ty: &Type) -> bool {
-    match ty {
-        Type::Bool
-        | Type::U8
-        | Type::S8
-        | Type::U16
-        | Type::S16
-        | Type::U32
-        | Type::S32
-        | Type::U64
-        | Type::S64
-        | Type::Float32
-        | Type::Float64
-        | Type::Char
-        | Type::Flags { .. }
-        | Type::Enum { .. } => false,
-        Type::String | Type::List(_) => true,
-        Type::Record { fields, .. } | Type::Tuple(fields) => fields.iter().any(borrows),
-        Type::Variant { cases, .. } => cases
-            .iter()
-            .any(|ty| ty.as_ref().map(borrows).unwrap_or(false)),
-        Type::Union { cases, .. } => cases.iter().any(borrows),
-        Type::Option(ty) => borrows(ty),
-        Type::Result { ok, err } => {
-            ok.as_ref().map(|ty| borrows(ty)).unwrap_or(false)
-                || err.as_ref().map(|ty| borrows(ty)).unwrap_or(false)
-        }
-    }
-}
-
 fn any_type(max_size: usize, next_id: Rc<Cell<usize>>) -> impl Strategy<Value = Type> {
     (0..22).prop_flat_map(move |index| match index {
         0 => Just(Type::Bool).boxed(),
@@ -162,7 +134,7 @@ fn any_type(max_size: usize, next_id: Rc<Cell<usize>>) -> impl Strategy<Value = 
         11 => Just(Type::Char).boxed(),
         12 => Just(Type::String).boxed(),
         13 => {
-            proptest::collection::vec(any_type(max_size / 2, next_id.clone()), 0..max_size.max(1))
+            proptest::collection::vec(any_type(max_size / 2, next_id.clone()), 1..max_size.max(2))
                 .prop_map({
                     let next_id = next_id.clone();
                     move |fields| {
@@ -186,7 +158,7 @@ fn any_type(max_size: usize, next_id: Rc<Cell<usize>>) -> impl Strategy<Value = 
             }
         })
         .boxed(),
-        15 => (0..MAX_FLAG_COUNT)
+        15 => (1..MAX_FLAG_COUNT)
             .prop_map({
                 let next_id = next_id.clone();
                 move |count| {
@@ -231,7 +203,7 @@ fn any_type(max_size: usize, next_id: Rc<Cell<usize>>) -> impl Strategy<Value = 
             })
             .boxed(),
         20 => {
-            proptest::collection::vec(any_type(max_size / 2, next_id.clone()), 0..max_size.max(2))
+            proptest::collection::vec(any_type(max_size / 2, next_id.clone()), 1..max_size.max(2))
                 .prop_map(Type::Tuple)
                 .boxed()
         }
@@ -389,7 +361,7 @@ fn wit_type_name(wit: &mut String, ty: &Type) -> String {
     }
 }
 
-fn rust_type_name(module: &str, ty: &Type) -> String {
+fn rust_type_name(ty: &Type) -> String {
     match ty {
         Type::Bool => "bool".into(),
         Type::U8 => "u8".into(),
@@ -405,53 +377,44 @@ fn rust_type_name(module: &str, ty: &Type) -> String {
         Type::Char => "char".into(),
         Type::String => "String".into(),
         Type::Record { id, .. } => {
-            format!(
-                "{module}::Record{id}Type{}",
-                if borrows(ty) { "Result" } else { "" }
-            )
+            format!("{PREFIX}::Record{id}Type")
         }
         Type::Variant { id, .. } => {
-            format!(
-                "{module}::Variant{id}Type{}",
-                if borrows(ty) { "Result" } else { "" }
-            )
+            format!("{PREFIX}::Variant{id}Type")
         }
         Type::Flags { id, .. } => {
-            format!("{module}::Flags{id}Type")
+            format!("{PREFIX}::Flags{id}Type")
         }
         Type::Enum { id, .. } => {
-            format!("{module}::Enum{id}Type")
+            format!("{PREFIX}::Enum{id}Type")
         }
         Type::Union { id, .. } => {
-            format!(
-                "{module}::Union{id}Type{}",
-                if borrows(ty) { "Result" } else { "" }
-            )
+            format!("{PREFIX}::Union{id}Type")
         }
         Type::Option(ty) => {
-            format!("Option<{}>", rust_type_name(module, ty))
+            format!("Option<{}>", rust_type_name(ty))
         }
         Type::Result { ok, err } => {
             let ok = ok
                 .as_ref()
-                .map(|ty| rust_type_name(module, ty))
+                .map(|ty| rust_type_name(ty))
                 .unwrap_or_else(|| "()".to_owned());
             let err = err
                 .as_ref()
-                .map(|ty| rust_type_name(module, ty))
+                .map(|ty| rust_type_name(ty))
                 .unwrap_or_else(|| "()".to_owned());
             format!("Result<{ok}, {err}>")
         }
         Type::Tuple(types) => {
             let types = types
                 .iter()
-                .map(|ty| format!("{},", rust_type_name(module, ty)))
+                .map(|ty| format!("{},", rust_type_name(ty)))
                 .collect::<Vec<_>>()
                 .join(" ");
             format!("({types})")
         }
         Type::List(ty) => {
-            format!("Vec<{}>", rust_type_name(module, ty))
+            format!("Vec<{}>", rust_type_name(ty))
         }
     }
 }
@@ -488,10 +451,7 @@ fn equality(a: &str, b: &str, ty: &Type) -> String {
         }
         Type::Variant { id, cases } => {
             assert!(!cases.is_empty());
-            let name = format!(
-                "exports::Variant{id}Type{}",
-                if borrows(ty) { "Result" } else { "" }
-            );
+            let name = format!("{PREFIX}::Variant{id}Type");
             let cases = cases
                 .iter()
                 .enumerate()
@@ -509,10 +469,7 @@ fn equality(a: &str, b: &str, ty: &Type) -> String {
         }
         Type::Union { id, cases } => {
             assert!(!cases.is_empty());
-            let name = format!(
-                "exports::Union{id}Type{}",
-                if borrows(ty) { "Result" } else { "" }
-            );
+            let name = format!("{PREFIX}::Union{id}Type");
             let cases = union_case_names(cases)
                 .iter()
                 .zip(cases)
@@ -577,7 +534,7 @@ fn strategy(ty: &Type, max_list_size: usize) -> String {
         Type::String => r#"proptest::string::string_regex(".*").unwrap()"#.into(),
         Type::Record { id, fields } => {
             if fields.is_empty() {
-                format!("Just(exports::Record{id}Type {{}})")
+                format!("Just({PREFIX}::Record{id}Type {{}})")
             } else {
                 let strategies = fields
                     .iter()
@@ -602,17 +559,13 @@ fn strategy(ty: &Type, max_list_size: usize) -> String {
 
                 format!(
                     "({strategies}).prop_map(|({params})| \
-                     exports::Record{id}Type{} {{ {inits} }})",
-                    if borrows(ty) { "Result" } else { "" }
+                     {PREFIX}::Record{id}Type {{ {inits} }})"
                 )
             }
         }
         Type::Variant { id, cases } => {
             assert!(!cases.is_empty());
-            let name = format!(
-                "exports::Variant{id}Type{}",
-                if borrows(ty) { "Result" } else { "" }
-            );
+            let name = format!("{PREFIX}::Variant{id}Type");
             let length = cases.len();
             let cases = cases
                 .iter()
@@ -630,7 +583,7 @@ fn strategy(ty: &Type, max_list_size: usize) -> String {
             format!("(0..{length}).prop_flat_map(move |index| match index {{ {cases}, _ => unreachable!() }})")
         }
         Type::Flags { id, count } => {
-            let name = format!("exports::Flags{id}Type");
+            let name = format!("{PREFIX}::Flags{id}Type");
 
             let flags = (0..*count)
                 .map(|index| {
@@ -645,7 +598,7 @@ fn strategy(ty: &Type, max_list_size: usize) -> String {
             )
         }
         Type::Enum { id, count } => {
-            let name = format!("exports::Enum{id}Type");
+            let name = format!("{PREFIX}::Enum{id}Type");
             let cases = (0..*count)
                 .map(|index| format!("index => {name}::C{index}"))
                 .collect::<Vec<_>>()
@@ -654,10 +607,7 @@ fn strategy(ty: &Type, max_list_size: usize) -> String {
         }
         Type::Union { id, cases } => {
             assert!(!cases.is_empty());
-            let name = format!(
-                "exports::Union{id}Type{}",
-                if borrows(ty) { "Result" } else { "" }
-            );
+            let name = format!("{PREFIX}::Union{id}Type");
             let length = cases.len();
             let cases = union_case_names(cases)
                 .iter()
@@ -793,7 +743,7 @@ pub fn generate() -> Result<()> {
             write!(
                 &mut guest_functions,
                 "    def echo{test_index}({params}):
-        return imports.echo{test_index}({params})
+        return echoes_generated.echo{test_index}({params})
 "
             )
             .unwrap();
@@ -801,10 +751,7 @@ pub fn generate() -> Result<()> {
 
         // Host function implementations
         {
-            let types = params
-                .iter()
-                .map(|ty| rust_type_name("imports", ty))
-                .collect::<Vec<_>>();
+            let types = params.iter().map(rust_type_name).collect::<Vec<_>>();
 
             let result_type = match types.len() {
                 0 => "()".to_owned(),
@@ -840,10 +787,7 @@ pub fn generate() -> Result<()> {
 
         // Typed function fields and inits
         {
-            let types = params
-                .iter()
-                .map(|ty| rust_type_name("exports", ty))
-                .collect::<Vec<_>>();
+            let types = params.iter().map(rust_type_name).collect::<Vec<_>>();
 
             let result_type = match types.len() {
                 0 => "()".to_owned(),
@@ -872,10 +816,7 @@ pub fn generate() -> Result<()> {
 
         // Test function implementations
         {
-            let types = params
-                .iter()
-                .map(|ty| rust_type_name("exports", ty))
-                .collect::<Vec<_>>();
+            let types = params.iter().map(rust_type_name).collect::<Vec<_>>();
 
             let args = (0..params.len())
                 .map(|index| format!("v.0.{index},"))
@@ -947,13 +888,15 @@ fn test{test_index}() -> Result<()> {{
 
     let wit = format!(
         "\
-interface foo {{
+package componentize-py:test
+
+interface echoes-generated {{
     {wit}
 }}
 
-default world echoes-generated {{
-    import imports: self.foo
-    export exports: self.foo
+world echoes-generated-test {{
+    import echoes-generated
+    export echoes-generated
 }}
 "
     );
@@ -964,12 +907,12 @@ default world echoes-generated {{
     let rust = format!(
         r##"
 use {{
-    super::{{Tester, SEED}},
+    super::{{Ctx, Tester, SEED}},
     anyhow::Result,
     async_trait::async_trait,
     once_cell::sync::Lazy,
     proptest::strategy::{{Just, Strategy}},
-    wasi_preview2::WasiCtx,
+    wasmtime_wasi::preview2::command,
     wasmtime::{{
         component::{{InstancePre, Linker, TypedFunc}},
         Store,
@@ -978,7 +921,7 @@ use {{
 
 wasmtime::component::bindgen!({{
     path: {wit_path:?},
-    world: "echoes-generated",
+    world: "echoes-generated-test",
     async: true
 }});
 
@@ -986,36 +929,30 @@ pub struct Exports {{
    {typed_function_fields}
 }}
 
-pub struct Host {{
-    wasi: WasiCtx,
-}}
-
 #[async_trait]
-impl imports::Host for Host {{
+impl {PREFIX}::Host for Ctx {{
     {host_functions}
 }}
+
+pub struct Host;
 
 #[async_trait]
 impl super::Host for Host {{
     type World = Exports;
 
-    fn new(wasi: WasiCtx) -> Self {{
-        Self {{ wasi }}
-    }}
-
-    fn add_to_linker(linker: &mut Linker<Self>) -> Result<()> {{
-        wasi_host::command::add_to_linker(&mut *linker, |host| &mut host.wasi)?;
-        imports::add_to_linker(linker, |host| host)?;
+    fn add_to_linker(linker: &mut Linker<Ctx>) -> Result<()> {{
+        command::add_to_linker(&mut *linker)?;
+        {PREFIX}::add_to_linker(linker, |ctx| ctx)?;
         Ok(())
     }}
 
     async fn instantiate_pre(
-        store: &mut Store<Self>,
-        pre: &InstancePre<Self>,
+        store: &mut Store<Ctx>,
+        pre: &InstancePre<Ctx>,
     ) -> Result<Self::World> {{
         let instance = pre.instantiate_async(&mut *store).await?;
         let mut exports = instance.exports(&mut *store);
-        let mut instance = exports.instance("exports").unwrap();
+        let mut instance = exports.instance("componentize-py:test/echoes-generated").unwrap();
         Ok(Self::World {{
            {typed_function_inits}
         }})
@@ -1023,10 +960,10 @@ impl super::Host for Host {{
 }}
 
 const GUEST_CODE: &str = r#"
-from echoes_generated import exports
-from echoes_generated.imports import imports
+from echoes_generated_test import exports
+from echoes_generated_test.imports import echoes_generated
 
-class Exports(exports.Exports):
+class EchoesGenerated(exports.EchoesGenerated):
 {guest_functions}
 "#;
 

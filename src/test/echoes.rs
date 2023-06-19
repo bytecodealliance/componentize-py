@@ -1,30 +1,26 @@
 #![deny(warnings)]
 
 use {
-    super::{MyFloat32, MyFloat64, Tester, SEED},
+    super::{Ctx, MyFloat32, MyFloat64, Tester, SEED},
     anyhow::Result,
     async_trait::async_trait,
     once_cell::sync::Lazy,
     proptest::strategy::{Just, Strategy},
-    wasi_preview2::WasiCtx,
     wasmtime::{
         component::{InstancePre, Linker},
         Store,
     },
+    wasmtime_wasi::preview2::command,
 };
 
 wasmtime::component::bindgen!({
     path: "src/test/wit",
-    world: "echoes",
+    world: "echoes-test",
     async: true
 });
 
-pub struct Host {
-    wasi: WasiCtx,
-}
-
 #[async_trait]
-impl imports::Host for Host {
+impl componentize_py::test::echoes::Host for Ctx {
     async fn echo_nothing(&mut self) -> Result<()> {
         Ok(())
     }
@@ -191,128 +187,126 @@ impl imports::Host for Host {
     }
 }
 
+struct Host;
+
 #[async_trait]
 impl super::Host for Host {
-    type World = Echoes;
+    type World = EchoesTest;
 
-    fn new(wasi: WasiCtx) -> Self {
-        Self { wasi }
-    }
-
-    fn add_to_linker(linker: &mut Linker<Self>) -> Result<()> {
-        wasi_host::command::add_to_linker(&mut *linker, |host| &mut host.wasi)?;
-        imports::add_to_linker(linker, |host| host)?;
+    fn add_to_linker(linker: &mut Linker<Ctx>) -> Result<()> {
+        command::add_to_linker(&mut *linker)?;
+        componentize_py::test::echoes::add_to_linker(linker, |ctx| ctx)?;
         Ok(())
     }
 
     async fn instantiate_pre(
-        store: &mut Store<Self>,
-        pre: &InstancePre<Self>,
+        store: &mut Store<Ctx>,
+        pre: &InstancePre<Ctx>,
     ) -> Result<Self::World> {
-        Ok(Echoes::instantiate_pre(store, pre).await?.0)
+        Ok(EchoesTest::instantiate_pre(store, pre).await?.0)
     }
 }
 
 const GUEST_CODE: &str = r#"
-from echoes import exports
-from echoes.imports import imports
+from echoes_test import exports
+from echoes_test.imports import echoes
 
-class Exports(exports.Exports):
+class Echoes(exports.Echoes):
     def echo_nothing():
-        imports.echo_nothing()
+        echoes.echo_nothing()
 
     def echo_bool(v):
-        return imports.echo_bool(v)
+        return echoes.echo_bool(v)
 
     def echo_u8(v):
-        return imports.echo_u8(v)
+        return echoes.echo_u8(v)
 
     def echo_s8(v):
-        return imports.echo_s8(v)
+        return echoes.echo_s8(v)
 
     def echo_u16(v):
-        return imports.echo_u16(v)
+        return echoes.echo_u16(v)
 
     def echo_s16(v):
-        return imports.echo_s16(v)
+        return echoes.echo_s16(v)
 
     def echo_u32(v):
-        return imports.echo_u32(v)
+        return echoes.echo_u32(v)
 
     def echo_s32(v):
-        return imports.echo_s32(v)
+        return echoes.echo_s32(v)
 
     def echo_char(v):
-        return imports.echo_char(v)
+        return echoes.echo_char(v)
 
     def echo_u64(v):
-        return imports.echo_u64(v)
+        return echoes.echo_u64(v)
 
     def echo_s64(v):
-        return imports.echo_s64(v)
+        return echoes.echo_s64(v)
 
     def echo_float32(v):
-        return imports.echo_float32(v)
+        return echoes.echo_float32(v)
 
     def echo_float64(v):
-        return imports.echo_float64(v)
+        return echoes.echo_float64(v)
 
     def echo_string(v):
-        return imports.echo_string(v)
+        return echoes.echo_string(v)
 
     def echo_list_bool(v):
-        return imports.echo_list_bool(v)
+        return echoes.echo_list_bool(v)
 
     def echo_list_u8(v):
-        return imports.echo_list_u8(v)
+        return echoes.echo_list_u8(v)
 
     def echo_list_s8(v):
-        return imports.echo_list_s8(v)
+        return echoes.echo_list_s8(v)
 
     def echo_list_u16(v):
-        return imports.echo_list_u16(v)
+        return echoes.echo_list_u16(v)
 
     def echo_list_s16(v):
-        return imports.echo_list_s16(v)
+        return echoes.echo_list_s16(v)
 
     def echo_list_u32(v):
-        return imports.echo_list_u32(v)
+        return echoes.echo_list_u32(v)
 
     def echo_list_s32(v):
-        return imports.echo_list_s32(v)
+        return echoes.echo_list_s32(v)
 
     def echo_list_char(v):
-        return imports.echo_list_char(v)
+        return echoes.echo_list_char(v)
 
     def echo_list_u64(v):
-        return imports.echo_list_u64(v)
+        return echoes.echo_list_u64(v)
 
     def echo_list_s64(v):
-        return imports.echo_list_s64(v)
+        return echoes.echo_list_s64(v)
 
     def echo_list_float32(v):
-        return imports.echo_list_float32(v)
+        return echoes.echo_list_float32(v)
 
     def echo_list_float64(v):
-        return imports.echo_list_float64(v)
+        return echoes.echo_list_float64(v)
 
     def echo_list_string(v):
-        return imports.echo_list_string(v)
+        return echoes.echo_list_string(v)
 
     def echo_list_list_u8(v):
-        return imports.echo_list_list_u8(v)
+        return echoes.echo_list_list_u8(v)
 
     def echo_list_list_list_u8(v):
-        return imports.echo_list_list_list_u8(v)
+        return echoes.echo_list_list_list_u8(v)
 
     def echo_option_u8(v):
-        return imports.echo_option_u8(v)
+        return echoes.echo_option_u8(v)
 
     def echo_option_option_u8(v):
-        return imports.echo_option_option_u8(v)
+        return echoes.echo_option_option_u8(v)
 
     def echo_many(v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16):
-        return imports.echo_many(v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16)
+        return echoes.echo_many(v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16)
 "#;
 
 static TESTER: Lazy<Tester<Host>> =
@@ -321,77 +315,121 @@ static TESTER: Lazy<Tester<Host>> =
 #[test]
 fn nothing() -> Result<()> {
     TESTER.all_eq(&Just(()), |(), instance, store, runtime| {
-        runtime.block_on(instance.exports().call_echo_nothing(store))
+        runtime.block_on(
+            instance
+                .componentize_py_test_echoes()
+                .call_echo_nothing(store),
+        )
     })
 }
 
 #[test]
 fn bools() -> Result<()> {
     TESTER.all_eq(&proptest::bool::ANY, |v, instance, store, runtime| {
-        runtime.block_on(instance.exports().call_echo_bool(store, v))
+        runtime.block_on(
+            instance
+                .componentize_py_test_echoes()
+                .call_echo_bool(store, v),
+        )
     })
 }
 
 #[test]
 fn u8s() -> Result<()> {
     TESTER.all_eq(&proptest::num::u8::ANY, |v, instance, store, runtime| {
-        runtime.block_on(instance.exports().call_echo_u8(store, v))
+        runtime.block_on(
+            instance
+                .componentize_py_test_echoes()
+                .call_echo_u8(store, v),
+        )
     })
 }
 
 #[test]
 fn s8s() -> Result<()> {
     TESTER.all_eq(&proptest::num::i8::ANY, |v, instance, store, runtime| {
-        runtime.block_on(instance.exports().call_echo_s8(store, v))
+        runtime.block_on(
+            instance
+                .componentize_py_test_echoes()
+                .call_echo_s8(store, v),
+        )
     })
 }
 
 #[test]
 fn u16s() -> Result<()> {
     TESTER.all_eq(&proptest::num::u16::ANY, |v, instance, store, runtime| {
-        runtime.block_on(instance.exports().call_echo_u16(store, v))
+        runtime.block_on(
+            instance
+                .componentize_py_test_echoes()
+                .call_echo_u16(store, v),
+        )
     })
 }
 
 #[test]
 fn s16s() -> Result<()> {
     TESTER.all_eq(&proptest::num::i16::ANY, |v, instance, store, runtime| {
-        runtime.block_on(instance.exports().call_echo_s16(store, v))
+        runtime.block_on(
+            instance
+                .componentize_py_test_echoes()
+                .call_echo_s16(store, v),
+        )
     })
 }
 
 #[test]
 fn u32s() -> Result<()> {
     TESTER.all_eq(&proptest::num::u32::ANY, |v, instance, store, runtime| {
-        runtime.block_on(instance.exports().call_echo_u32(store, v))
+        runtime.block_on(
+            instance
+                .componentize_py_test_echoes()
+                .call_echo_u32(store, v),
+        )
     })
 }
 
 #[test]
 fn s32s() -> Result<()> {
     TESTER.all_eq(&proptest::num::i32::ANY, |v, instance, store, runtime| {
-        runtime.block_on(instance.exports().call_echo_s32(store, v))
+        runtime.block_on(
+            instance
+                .componentize_py_test_echoes()
+                .call_echo_s32(store, v),
+        )
     })
 }
 
 #[test]
 fn u64s() -> Result<()> {
     TESTER.all_eq(&proptest::num::u64::ANY, |v, instance, store, runtime| {
-        runtime.block_on(instance.exports().call_echo_u64(store, v))
+        runtime.block_on(
+            instance
+                .componentize_py_test_echoes()
+                .call_echo_u64(store, v),
+        )
     })
 }
 
 #[test]
 fn s64s() -> Result<()> {
     TESTER.all_eq(&proptest::num::i64::ANY, |v, instance, store, runtime| {
-        runtime.block_on(instance.exports().call_echo_s64(store, v))
+        runtime.block_on(
+            instance
+                .componentize_py_test_echoes()
+                .call_echo_s64(store, v),
+        )
     })
 }
 
 #[test]
 fn chars() -> Result<()> {
     TESTER.all_eq(&proptest::char::any(), |v, instance, store, runtime| {
-        runtime.block_on(instance.exports().call_echo_char(store, v))
+        runtime.block_on(
+            instance
+                .componentize_py_test_echoes()
+                .call_echo_char(store, v),
+        )
     })
 }
 
@@ -400,9 +438,13 @@ fn float32s() -> Result<()> {
     TESTER.all_eq(
         &proptest::num::f32::ANY.prop_map(MyFloat32),
         |v, instance, store, runtime| {
-            Ok(MyFloat32(runtime.block_on(
-                instance.exports().call_echo_float32(store, v.0),
-            )?))
+            Ok(MyFloat32(
+                runtime.block_on(
+                    instance
+                        .componentize_py_test_echoes()
+                        .call_echo_float32(store, v.0),
+                )?,
+            ))
         },
     )
 }
@@ -412,9 +454,13 @@ fn float64s() -> Result<()> {
     TESTER.all_eq(
         &proptest::num::f64::ANY.prop_map(MyFloat64),
         |v, instance, store, runtime| {
-            Ok(MyFloat64(runtime.block_on(
-                instance.exports().call_echo_float64(store, v.0),
-            )?))
+            Ok(MyFloat64(
+                runtime.block_on(
+                    instance
+                        .componentize_py_test_echoes()
+                        .call_echo_float64(store, v.0),
+                )?,
+            ))
         },
     )
 }
@@ -426,7 +472,11 @@ fn strings() -> Result<()> {
     TESTER.all_eq(
         &proptest::string::string_regex(".*")?,
         |v, instance, store, runtime| {
-            runtime.block_on(instance.exports().call_echo_string(store, &v))
+            runtime.block_on(
+                instance
+                    .componentize_py_test_echoes()
+                    .call_echo_string(store, &v),
+            )
         },
     )
 }
@@ -436,7 +486,11 @@ fn list_bools() -> Result<()> {
     TESTER.all_eq(
         &proptest::collection::vec(proptest::bool::ANY, 0..MAX_SIZE),
         |v, instance, store, runtime| {
-            runtime.block_on(instance.exports().call_echo_list_bool(store, &v))
+            runtime.block_on(
+                instance
+                    .componentize_py_test_echoes()
+                    .call_echo_list_bool(store, &v),
+            )
         },
     )
 }
@@ -446,7 +500,11 @@ fn list_u8s() -> Result<()> {
     TESTER.all_eq(
         &proptest::collection::vec(proptest::num::u8::ANY, 0..MAX_SIZE),
         |v, instance, store, runtime| {
-            runtime.block_on(instance.exports().call_echo_list_u8(store, &v))
+            runtime.block_on(
+                instance
+                    .componentize_py_test_echoes()
+                    .call_echo_list_u8(store, &v),
+            )
         },
     )
 }
@@ -460,10 +518,9 @@ fn list_list_u8s() -> Result<()> {
         ),
         |v, instance, store, runtime| {
             runtime.block_on(
-                instance.exports().call_echo_list_list_u8(
-                    store,
-                    &v.iter().map(Vec::as_slice).collect::<Vec<_>>(),
-                ),
+                instance
+                    .componentize_py_test_echoes()
+                    .call_echo_list_list_u8(store, &v),
             )
         },
     )
@@ -480,15 +537,11 @@ fn list_list_list_u8s() -> Result<()> {
             0..MAX_SIZE,
         ),
         |v, instance, store, runtime| {
-            let slices = v
-                .iter()
-                .map(|v| v.iter().map(Vec::as_slice).collect::<Vec<_>>())
-                .collect::<Vec<_>>();
-
-            runtime.block_on(instance.exports().call_echo_list_list_list_u8(
-                store,
-                &slices.iter().map(Vec::as_slice).collect::<Vec<_>>(),
-            ))
+            runtime.block_on(
+                instance
+                    .componentize_py_test_echoes()
+                    .call_echo_list_list_list_u8(store, &v),
+            )
         },
     )
 }
@@ -498,7 +551,11 @@ fn option_u8s() -> Result<()> {
     TESTER.all_eq(
         &proptest::option::of(proptest::num::u8::ANY),
         |v, instance, store, runtime| {
-            runtime.block_on(instance.exports().call_echo_option_u8(store, v))
+            runtime.block_on(
+                instance
+                    .componentize_py_test_echoes()
+                    .call_echo_option_u8(store, v),
+            )
         },
     )
 }
@@ -508,7 +565,11 @@ fn option_option_u8s() -> Result<()> {
     TESTER.all_eq(
         &proptest::option::of(proptest::option::of(proptest::num::u8::ANY)),
         |v, instance, store, runtime| {
-            runtime.block_on(instance.exports().call_echo_option_option_u8(store, v))
+            runtime.block_on(
+                instance
+                    .componentize_py_test_echoes()
+                    .call_echo_option_option_u8(store, v),
+            )
         },
     )
 }
@@ -518,7 +579,11 @@ fn list_s8s() -> Result<()> {
     TESTER.all_eq(
         &proptest::collection::vec(proptest::num::i8::ANY, 0..MAX_SIZE),
         |v, instance, store, runtime| {
-            runtime.block_on(instance.exports().call_echo_list_s8(store, &v))
+            runtime.block_on(
+                instance
+                    .componentize_py_test_echoes()
+                    .call_echo_list_s8(store, &v),
+            )
         },
     )
 }
@@ -528,7 +593,11 @@ fn list_u16s() -> Result<()> {
     TESTER.all_eq(
         &proptest::collection::vec(proptest::num::u16::ANY, 0..MAX_SIZE),
         |v, instance, store, runtime| {
-            runtime.block_on(instance.exports().call_echo_list_u16(store, &v))
+            runtime.block_on(
+                instance
+                    .componentize_py_test_echoes()
+                    .call_echo_list_u16(store, &v),
+            )
         },
     )
 }
@@ -538,7 +607,11 @@ fn list_s16s() -> Result<()> {
     TESTER.all_eq(
         &proptest::collection::vec(proptest::num::i16::ANY, 0..MAX_SIZE),
         |v, instance, store, runtime| {
-            runtime.block_on(instance.exports().call_echo_list_s16(store, &v))
+            runtime.block_on(
+                instance
+                    .componentize_py_test_echoes()
+                    .call_echo_list_s16(store, &v),
+            )
         },
     )
 }
@@ -548,7 +621,11 @@ fn list_u32s() -> Result<()> {
     TESTER.all_eq(
         &proptest::collection::vec(proptest::num::u32::ANY, 0..MAX_SIZE),
         |v, instance, store, runtime| {
-            runtime.block_on(instance.exports().call_echo_list_u32(store, &v))
+            runtime.block_on(
+                instance
+                    .componentize_py_test_echoes()
+                    .call_echo_list_u32(store, &v),
+            )
         },
     )
 }
@@ -558,7 +635,11 @@ fn list_s32s() -> Result<()> {
     TESTER.all_eq(
         &proptest::collection::vec(proptest::num::i32::ANY, 0..MAX_SIZE),
         |v, instance, store, runtime| {
-            runtime.block_on(instance.exports().call_echo_list_s32(store, &v))
+            runtime.block_on(
+                instance
+                    .componentize_py_test_echoes()
+                    .call_echo_list_s32(store, &v),
+            )
         },
     )
 }
@@ -568,7 +649,11 @@ fn list_u64s() -> Result<()> {
     TESTER.all_eq(
         &proptest::collection::vec(proptest::num::u64::ANY, 0..MAX_SIZE),
         |v, instance, store, runtime| {
-            runtime.block_on(instance.exports().call_echo_list_u64(store, &v))
+            runtime.block_on(
+                instance
+                    .componentize_py_test_echoes()
+                    .call_echo_list_u64(store, &v),
+            )
         },
     )
 }
@@ -578,7 +663,11 @@ fn list_s64s() -> Result<()> {
     TESTER.all_eq(
         &proptest::collection::vec(proptest::num::i64::ANY, 0..MAX_SIZE),
         |v, instance, store, runtime| {
-            runtime.block_on(instance.exports().call_echo_list_s64(store, &v))
+            runtime.block_on(
+                instance
+                    .componentize_py_test_echoes()
+                    .call_echo_list_s64(store, &v),
+            )
         },
     )
 }
@@ -588,7 +677,11 @@ fn list_chars() -> Result<()> {
     TESTER.all_eq(
         &proptest::collection::vec(proptest::char::any(), 0..MAX_SIZE),
         |v, instance, store, runtime| {
-            runtime.block_on(instance.exports().call_echo_list_char(store, &v))
+            runtime.block_on(
+                instance
+                    .componentize_py_test_echoes()
+                    .call_echo_list_char(store, &v),
+            )
         },
     )
 }
@@ -599,10 +692,14 @@ fn list_float32s() -> Result<()> {
         &proptest::collection::vec(proptest::num::f32::ANY.prop_map(MyFloat32), 0..MAX_SIZE),
         |v, instance, store, runtime| {
             Ok(runtime
-                .block_on(instance.exports().call_echo_list_float32(
-                    store,
-                    &v.into_iter().map(|v| v.0).collect::<Vec<_>>(),
-                ))?
+                .block_on(
+                    instance
+                        .componentize_py_test_echoes()
+                        .call_echo_list_float32(
+                            store,
+                            &v.into_iter().map(|v| v.0).collect::<Vec<_>>(),
+                        ),
+                )?
                 .into_iter()
                 .map(MyFloat32)
                 .collect())
@@ -616,10 +713,14 @@ fn list_float64s() -> Result<()> {
         &proptest::collection::vec(proptest::num::f64::ANY.prop_map(MyFloat64), 0..MAX_SIZE),
         |v, instance, store, runtime| {
             Ok(runtime
-                .block_on(instance.exports().call_echo_list_float64(
-                    store,
-                    &v.into_iter().map(|v| v.0).collect::<Vec<_>>(),
-                ))?
+                .block_on(
+                    instance
+                        .componentize_py_test_echoes()
+                        .call_echo_list_float64(
+                            store,
+                            &v.into_iter().map(|v| v.0).collect::<Vec<_>>(),
+                        ),
+                )?
                 .into_iter()
                 .map(MyFloat64)
                 .collect())
@@ -657,7 +758,7 @@ fn many() -> Result<()> {
          store,
          runtime| {
             let (v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16) =
-                runtime.block_on(instance.exports().call_echo_many(
+                runtime.block_on(instance.componentize_py_test_echoes().call_echo_many(
                     store, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10.0, v11.0, v12, &v13, &v14, &v15,
                     &v16,
                 ))?;
