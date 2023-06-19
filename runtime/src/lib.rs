@@ -2,7 +2,8 @@
 
 use {
     anyhow::{Error, Result},
-    componentize_py_shared::{self as shared, OwnedKind, RawUnionType, ReturnStyle, Symbols},
+    componentize_py_shared::ReturnStyle,
+    exports::exports::{self as exp, Exports, OwnedKind, OwnedType, RawUnionType, Symbols},
     num_bigint::BigUint,
     once_cell::sync::OnceCell,
     pyo3::{
@@ -14,12 +15,15 @@ use {
         alloc::{self, Layout},
         env,
         ffi::c_void,
-        fs,
         mem::{self, MaybeUninit},
-        ops::Deref,
         ptr, slice, str,
     },
 };
+
+wit_bindgen::generate!({
+    world: "init",
+    path: "../wit/init.wit"
+});
 
 static EXPORTS: OnceCell<Vec<PyObject>> = OnceCell::new();
 static TYPES: OnceCell<Vec<Type>> = OnceCell::new();
@@ -79,10 +83,15 @@ impl<T: std::error::Error + Send + Sync + 'static> From<T> for Anyhow {
     }
 }
 
-#[link(wasm_import_module = "componentize-py")]
+#[link(wasm_import_module = "env")]
 extern "C" {
-    #[cfg_attr(target_arch = "wasm32", link_name = "dispatch")]
-    fn dispatch(context: *const c_void, input: *const c_void, output: *mut c_void, index: u32);
+    #[cfg_attr(target_arch = "wasm32", link_name = "componentize-py#CallIndirect")]
+    fn componentize_py_call_indirect(
+        context: *const c_void,
+        input: *const c_void,
+        output: *mut c_void,
+        index: u32,
+    );
 }
 
 #[pyo3::pyfunction]
@@ -95,7 +104,7 @@ fn call_import<'a>(
 ) -> PyResult<Vec<&'a PyAny>> {
     let mut results = vec![MaybeUninit::<&PyAny>::uninit(); result_count];
     unsafe {
-        dispatch(
+        componentize_py_call_indirect(
             &module.py() as *const _ as _,
             params.as_ptr() as _,
             results.as_mut_ptr() as _,
@@ -115,16 +124,13 @@ fn componentize_py_module(_py: Python<'_>, module: &PyModule) -> PyResult<()> {
     module.add_function(pyo3::wrap_pyfunction!(call_import, module)?)
 }
 
-fn do_init() -> Result<()> {
-    let symbols = fs::read(env::var("COMPONENTIZE_PY_SYMBOLS_PATH")?)?;
-    let symbols = bincode::deserialize::<Symbols>(&symbols)?;
-
+fn do_init(app_name: String, symbols: Symbols) -> Result<()> {
     pyo3::append_to_inittab!(componentize_py_module);
 
     pyo3::prepare_freethreaded_python();
 
     Python::with_gil(|py| {
-        let app = py.import(env::var("COMPONENTIZE_PY_APP_NAME")?.deref())?;
+        let app = py.import(app_name.as_str())?;
 
         EXPORTS
             .set(
@@ -148,19 +154,19 @@ fn do_init() -> Result<()> {
                     .into_iter()
                     .map(|ty| {
                         Ok(match ty {
-                            shared::Type::Owned {
+                            exp::Type::Owned(OwnedType {
                                 kind,
                                 package,
                                 name,
-                            } => match kind {
-                                OwnedKind::Record { fields } => Type::Record {
+                            }) => match kind {
+                                OwnedKind::Record(fields) => Type::Record {
                                     constructor: py
                                         .import(package.as_str())?
                                         .getattr(name.as_str())?
                                         .into(),
                                     fields,
                                 },
-                                OwnedKind::Variant { cases } => {
+                                OwnedKind::Variant(cases) => {
                                     let package = py.import(package.as_str())?;
 
                                     let cases = cases
@@ -191,9 +197,9 @@ fn do_init() -> Result<()> {
                                         .import(package.as_str())?
                                         .getattr(name.as_str())?
                                         .into(),
-                                    count,
+                                    count: count.try_into().unwrap(),
                                 },
-                                OwnedKind::RawUnion { types } => {
+                                OwnedKind::RawUnion(types) => {
                                     let types_to_discriminants = PyDict::new(py);
                                     let mut other_discriminant = None;
                                     for (index, ty) in types.iter().enumerate() {
@@ -222,13 +228,13 @@ fn do_init() -> Result<()> {
                                         .import(package.as_str())?
                                         .getattr(name.as_str())?
                                         .into(),
-                                    u32_count,
+                                    u32_count: u32_count.try_into().unwrap(),
                                 },
                             },
-                            shared::Type::Option => Type::Option,
-                            shared::Type::NestingOption => Type::NestingOption,
-                            shared::Type::Result => Type::Result,
-                            shared::Type::Tuple(length) => Type::Tuple(length),
+                            exp::Type::Option => Type::Option,
+                            exp::Type::NestingOption => Type::NestingOption,
+                            exp::Type::Result => Type::Result,
+                            exp::Type::Tuple(length) => Type::Tuple(length.try_into().unwrap()),
                         })
                     })
                     .collect::<PyResult<_>>()?,
@@ -259,12 +265,15 @@ fn do_init() -> Result<()> {
     })
 }
 
-#[export_name = "wizer.initialize"]
-pub extern "C" fn init() {
-    run_ctors();
+struct MyExports;
 
-    do_init().unwrap();
+impl Exports for MyExports {
+    fn init(app_name: String, symbols: Symbols) -> Result<(), String> {
+        do_init(app_name, symbols).map_err(|e| format!("{e:?}"))
+    }
 }
+
+export_init!(MyExports);
 
 /// # Safety
 /// TODO
@@ -284,7 +293,7 @@ pub unsafe extern "C" fn componentize_py_dispatch(
         let mut params_lifted =
             vec![MaybeUninit::<&PyAny>::uninit(); param_count.try_into().unwrap()];
 
-        dispatch(
+        componentize_py_call_indirect(
             &py as *const _ as _,
             params,
             params_lifted.as_mut_ptr() as _,
@@ -312,7 +321,7 @@ pub unsafe extern "C" fn componentize_py_dispatch(
         let result = result.into_ref(py);
         let result_array = [result];
 
-        dispatch(
+        componentize_py_call_indirect(
             &py as *const _ as _,
             result_array.as_ptr() as *const _ as _,
             results,
@@ -328,21 +337,6 @@ pub fn run_ctors() {
         }
         __wasm_call_ctors();
     }
-}
-
-/// # Safety
-/// TODO
-#[export_name = "cabi_realloc"]
-pub unsafe extern "C" fn cabi_realloc(
-    old_ptr: *mut u8,
-    old_len: usize,
-    align: usize,
-    new_size: usize,
-) -> *mut u8 {
-    assert!(old_ptr.is_null());
-    assert!(old_len == 0);
-
-    alloc::alloc(Layout::from_size_align(new_size, align).unwrap())
 }
 
 /// # Safety
@@ -748,7 +742,6 @@ pub extern "C" fn componentize_py_make_list<'a>(py: &'a Python) -> &'a PyList {
 
 #[export_name = "componentize-py#ListAppend"]
 pub extern "C" fn componentize_py_list_append(_py: &Python, list: &PyList, element: &PyAny) {
-    assert!(list.len() < 200); // temporary, for debugging; remove this
     list.append(element).unwrap();
 }
 
@@ -783,4 +776,30 @@ pub unsafe extern "C" fn componentize_py_make_bytes<'a>(
         Ok(())
     })
     .unwrap()
+}
+
+/// # Safety
+/// TODO
+pub unsafe extern "C" fn cabi_realloc(
+    old_ptr: *mut u8,
+    old_len: usize,
+    align: usize,
+    new_size: usize,
+) -> *mut u8 {
+    assert!(old_ptr.is_null());
+    assert!(old_len == 0);
+
+    alloc::alloc(Layout::from_size_align(new_size, align).unwrap())
+}
+
+/// # Safety
+/// TODO
+#[export_name = "cabi_export_realloc"]
+pub unsafe extern "C" fn cabi_export_realloc(
+    old_ptr: *mut u8,
+    old_len: usize,
+    align: usize,
+    new_size: usize,
+) -> *mut u8 {
+    cabi_realloc(old_ptr, old_len, align, new_size)
 }

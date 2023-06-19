@@ -1,4 +1,6 @@
-interface foo {
+package componentize-py:test
+
+interface echoes {
   echo-nothing: func()
   echo-bool: func(v: bool) -> bool
   echo-u8: func(v: u8) -> u8
@@ -33,7 +35,7 @@ interface foo {
   echo-many: func(v1: bool, v2: u8, v3: u16, v4: u32, v5: u64, v6: s8, v7: s16, v8: s32, v9: s64, v10: float32, v11: float64, v12: char, v13: string, v14: list<bool>, v15: list<u8>, v16: list<u16>) -> tuple<bool, u8, u16, u32, u64, s8, s16, s32, s64, float32, float64, char, string, list<bool>, list<u8>, list<u16>>
 }
 
-default world echoes {
-  import imports: self.foo
-  export exports: self.foo
+world echoes-test {
+  import echoes
+  export echoes
 }

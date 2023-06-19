@@ -2,12 +2,12 @@ use {
     crate::{
         abi::{self, MAX_FLAT_PARAMS, MAX_FLAT_RESULTS},
         bindgen::DISPATCHABLE_CORE_PARAM_COUNT,
+        exports::exports::{
+            self, Case, FunctionExport, OwnedKind, OwnedType, RawUnionType, Symbols,
+        },
         util::Types as _,
     },
-    anyhow::Result,
-    componentize_py_shared::{
-        self as shared, Case, FunctionExport, OwnedKind, RawUnionType, Symbols,
-    },
+    anyhow::{bail, Result},
     heck::{ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase},
     indexmap::{IndexMap, IndexSet},
     std::{
@@ -21,7 +21,7 @@ use {
     wasm_encoder::ValType,
     wit_parser::{
         InterfaceId, Resolve, Result_, Results, Type, TypeDefKind, TypeId, TypeOwner, Union,
-        WorldId, WorldItem,
+        WorldId, WorldItem, WorldKey,
     },
 };
 
@@ -40,8 +40,15 @@ pub enum FunctionKind {
 }
 
 #[derive(Copy, Clone)]
+pub struct PackageName<'a> {
+    pub namespace: &'a str,
+    pub name: &'a str,
+}
+
+#[derive(Copy, Clone)]
 pub struct MyInterface<'a> {
     pub id: InterfaceId,
+    pub package: Option<PackageName<'a>>,
     pub name: &'a str,
 }
 
@@ -57,11 +64,17 @@ impl<'a> MyFunction<'a> {
     pub fn internal_name(&self) -> String {
         if let Some(interface) = self.interface {
             format!(
-                "{}#{}{}",
+                "{}{}#{}{}",
+                if let Some(package) = interface.package {
+                    format!("{}:{}/", package.namespace, package.name)
+                } else {
+                    String::new()
+                },
                 interface.name,
                 self.name,
                 match self.kind {
-                    FunctionKind::Import | FunctionKind::Export => "",
+                    FunctionKind::Import => "-import",
+                    FunctionKind::Export => "-export",
                     FunctionKind::ExportLift => "-lift",
                     FunctionKind::ExportLower => "-lower",
                     FunctionKind::ExportPostReturn => "-post-return",
@@ -272,12 +285,36 @@ impl<'a> Summary<'a> {
 
     fn visit_functions(
         &mut self,
-        items: &'a IndexMap<String, WorldItem>,
+        items: &'a IndexMap<WorldKey, WorldItem>,
         direction: Direction,
     ) -> Result<()> {
-        for (item_name, item) in items {
+        for (key, item) in items {
             match item {
                 WorldItem::Interface(id) => {
+                    let (package, item_name) = match key {
+                        wit_parser::WorldKey::Name(name) => (None, name),
+                        wit_parser::WorldKey::Interface(id) => {
+                            let interface = &self.resolve.interfaces[*id];
+                            match &interface.name {
+                                Some(name) => {
+                                    if let Some(package) = interface.package {
+                                        let package_name = &self.resolve.packages[package].name;
+                                        (
+                                            Some(PackageName {
+                                                namespace: &package_name.namespace,
+                                                name: &package_name.name,
+                                            }),
+                                            name,
+                                        )
+                                    } else {
+                                        (None, name)
+                                    }
+                                }
+                                None => bail!("anonymous interfaces not yet supported"),
+                            }
+                        }
+                    };
+
                     match direction {
                         Direction::Import => self.imported_interfaces.insert(*id, item_name),
                         Direction::Export => self.exported_interfaces.insert(*id, item_name),
@@ -286,6 +323,7 @@ impl<'a> Summary<'a> {
                     for (func_name, func) in &interface.functions {
                         self.visit_function(
                             Some(MyInterface {
+                                package,
                                 name: item_name,
                                 id: *id,
                             }),
@@ -307,7 +345,7 @@ impl<'a> Summary<'a> {
         Ok(())
     }
 
-    fn summarize_type(&self, id: TypeId) -> shared::Type {
+    fn summarize_type(&self, id: TypeId) -> exports::Type {
         let ty = &self.resolve.types[id];
         if let Some(package) = self.package(ty.owner) {
             let name = if let Some(name) = &ty.name {
@@ -316,15 +354,15 @@ impl<'a> Summary<'a> {
                 format!("AnonymousType{}", self.types.get_index_of(&id).unwrap())
             };
             let kind = match &ty.kind {
-                TypeDefKind::Record(record) => OwnedKind::Record {
-                    fields: record
+                TypeDefKind::Record(record) => OwnedKind::Record(
+                    record
                         .fields
                         .iter()
                         .map(|f| f.name.to_snake_case())
                         .collect(),
-                },
-                TypeDefKind::Variant(variant) => OwnedKind::Variant {
-                    cases: variant
+                ),
+                TypeDefKind::Variant(variant) => OwnedKind::Variant(
+                    variant
                         .cases
                         .iter()
                         .map(|c| Case {
@@ -332,53 +370,55 @@ impl<'a> Summary<'a> {
                             has_payload: c.ty.is_some(),
                         })
                         .collect(),
-                },
-                TypeDefKind::Enum(en) => OwnedKind::Enum(en.cases.len()),
+                ),
+                TypeDefKind::Enum(en) => OwnedKind::Enum(en.cases.len().try_into().unwrap()),
                 TypeDefKind::Union(un) => {
                     if self.is_raw_union(un) {
-                        OwnedKind::RawUnion {
-                            types: un.cases.iter().map(|c| raw_union_type(c.ty)).collect(),
-                        }
+                        OwnedKind::RawUnion(un.cases.iter().map(|c| raw_union_type(c.ty)).collect())
                     } else {
-                        OwnedKind::Variant {
-                            cases: (0..un.cases.len())
+                        OwnedKind::Variant(
+                            (0..un.cases.len())
                                 .map(|index| Case {
                                     name: format!("{name}{index}"),
                                     has_payload: true,
                                 })
                                 .collect(),
-                        }
+                        )
                     }
                 }
-                TypeDefKind::Flags(flags) => OwnedKind::Flags(flags.repr().count()),
+                TypeDefKind::Flags(flags) => {
+                    OwnedKind::Flags(flags.repr().count().try_into().unwrap())
+                }
                 TypeDefKind::Tuple(_) | TypeDefKind::Option(_) | TypeDefKind::Result(_) => {
                     return self.summarize_unowned_type(id)
                 }
                 kind => todo!("{kind:?}"),
             };
 
-            shared::Type::Owned {
+            exports::Type::Owned(OwnedType {
                 package,
                 name,
                 kind,
-            }
+            })
         } else {
             self.summarize_unowned_type(id)
         }
     }
 
-    fn summarize_unowned_type(&self, id: TypeId) -> shared::Type {
+    fn summarize_unowned_type(&self, id: TypeId) -> exports::Type {
         let ty = &self.resolve.types[id];
         match &ty.kind {
-            TypeDefKind::Tuple(tuple) => shared::Type::Tuple(tuple.types.len()),
+            TypeDefKind::Tuple(tuple) => {
+                exports::Type::Tuple(tuple.types.len().try_into().unwrap())
+            }
             TypeDefKind::Option(some) => {
                 if abi::is_option(self.resolve, *some) {
-                    shared::Type::NestingOption
+                    exports::Type::NestingOption
                 } else {
-                    shared::Type::Option
+                    exports::Type::Option
                 }
             }
-            TypeDefKind::Result(_) => shared::Type::Result,
+            TypeDefKind::Result(_) => exports::Type::Result,
             kind => todo!("{kind:?}"),
         }
     }

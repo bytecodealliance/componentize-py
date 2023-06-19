@@ -6,6 +6,7 @@ use {
     },
     componentize_py_shared::ReturnStyle,
     indexmap::IndexSet,
+    once_cell::sync::Lazy,
     std::collections::HashMap,
     wasm_encoder::{BlockType, Instruction as Ins, MemArg, ValType},
     wit_parser::{Resolve, Results, Type, TypeDefKind, TypeId},
@@ -24,45 +25,109 @@ pub const DISPATCH_CORE_PARAM_COUNT: usize = DISPATCHABLE_CORE_PARAM_COUNT + 1;
 const DISCRIMINANT_FIELD_INDEX: i32 = 0;
 const PAYLOAD_FIELD_INDEX: i32 = 1;
 
-macro_rules! declare_enum {
-    ($name:ident { $( $variant:ident ),* } $list:ident) => {
-        #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-        pub enum $name {
-            $( $variant ),*
-        }
+pub static IMPORT_SIGNATURES: &[(&str, &[ValType], &[ValType])] = &[
+    (
+        "componentize-py#Dispatch",
+        &[ValType::I32; 7] as &[_],
+        &[] as &[_],
+    ),
+    (
+        "componentize-py#Allocate",
+        &[ValType::I32; 2],
+        &[ValType::I32],
+    ),
+    ("componentize-py#Free", &[ValType::I32; 3], &[]),
+    (
+        "componentize-py#LowerI32",
+        &[ValType::I32; 2],
+        &[ValType::I32],
+    ),
+    (
+        "componentize-py#LowerI64",
+        &[ValType::I32; 2],
+        &[ValType::I64],
+    ),
+    (
+        "componentize-py#LowerF32",
+        &[ValType::I32; 2],
+        &[ValType::F32],
+    ),
+    (
+        "componentize-py#LowerF64",
+        &[ValType::I32; 2],
+        &[ValType::F64],
+    ),
+    (
+        "componentize-py#LowerChar",
+        &[ValType::I32; 2],
+        &[ValType::I32],
+    ),
+    ("componentize-py#LowerString", &[ValType::I32; 3], &[]),
+    (
+        "componentize-py#GetField",
+        &[ValType::I32; 4],
+        &[ValType::I32],
+    ),
+    (
+        "componentize-py#GetListLength",
+        &[ValType::I32; 2],
+        &[ValType::I32],
+    ),
+    (
+        "componentize-py#GetListElement",
+        &[ValType::I32; 3],
+        &[ValType::I32],
+    ),
+    (
+        "componentize-py#LiftI32",
+        &[ValType::I32; 2],
+        &[ValType::I32],
+    ),
+    (
+        "componentize-py#LiftI64",
+        &[ValType::I32, ValType::I64],
+        &[ValType::I32],
+    ),
+    (
+        "componentize-py#LiftF32",
+        &[ValType::I32, ValType::F32],
+        &[ValType::I32],
+    ),
+    (
+        "componentize-py#LiftF64",
+        &[ValType::I32, ValType::F64],
+        &[ValType::I32],
+    ),
+    (
+        "componentize-py#LiftChar",
+        &[ValType::I32; 2],
+        &[ValType::I32],
+    ),
+    (
+        "componentize-py#LiftString",
+        &[ValType::I32; 3],
+        &[ValType::I32],
+    ),
+    ("componentize-py#MakeList", &[ValType::I32], &[ValType::I32]),
+    ("componentize-py#ListAppend", &[ValType::I32; 3], &[]),
+    ("componentize-py#None", &[ValType::I32], &[ValType::I32]),
+    ("componentize-py#Init", &[ValType::I32; 4], &[ValType::I32]),
+    ("componentize-py#GetBytes", &[ValType::I32; 4], &[]),
+    (
+        "componentize-py#MakeBytes",
+        &[ValType::I32; 3],
+        &[ValType::I32],
+    ),
+    ("cabi_realloc", &[ValType::I32; 4], &[ValType::I32]),
+];
 
-        pub static $list: &[$name] = &[$( $name::$variant ),*];
-    }
-}
-
-declare_enum! {
-    Link {
-        Dispatch,
-        Free,
-        LowerI32,
-        LowerI64,
-        LowerF32,
-        LowerF64,
-        LowerChar,
-        LowerString,
-        GetField,
-        GetListLength,
-        GetListElement,
-        Allocate,
-        LiftI32,
-        LiftI64,
-        LiftF32,
-        LiftF64,
-        LiftChar,
-        LiftString,
-        Init,
-        MakeList,
-        ListAppend,
-        None,
-        GetBytes,
-        MakeBytes
-    } LINK_LIST
-}
+pub static IMPORTS: Lazy<HashMap<&str, u32>> = Lazy::new(|| {
+    IMPORT_SIGNATURES
+        .iter()
+        .enumerate()
+        .map(|(index, (name, ..))| (*name, index.try_into().unwrap()))
+        .collect()
+});
 
 pub fn mem_arg(offset: u64, align: u32) -> MemArg {
     MemArg {
@@ -77,7 +142,6 @@ pub struct FunctionBindgen<'a> {
     pub instructions: Vec<Ins<'static>>,
     resolve: &'a Resolve,
     stack_pointer: u32,
-    link_map: &'a HashMap<Link, u32>,
     types: &'a IndexSet<TypeId>,
     params: &'a [(String, Type)],
     results: &'a Results,
@@ -92,16 +156,10 @@ pub struct FunctionBindgen<'a> {
 }
 
 impl<'a> FunctionBindgen<'a> {
-    pub fn new(
-        summary: &'a Summary,
-        function: &'a MyFunction,
-        stack_pointer: u32,
-        link_map: &'a HashMap<Link, u32>,
-    ) -> Self {
+    pub fn new(summary: &'a Summary, function: &'a MyFunction, stack_pointer: u32) -> Self {
         Self {
             resolve: summary.resolve,
             stack_pointer,
-            link_map,
             types: &summary.types,
             params: function.params,
             results: function.results,
@@ -306,13 +364,13 @@ impl<'a> FunctionBindgen<'a> {
             let result = self.push_local(ValType::I32);
             self.push(Ins::I32Const(self.results_abi.size.try_into().unwrap()));
             self.push(Ins::I32Const(self.results_abi.align.try_into().unwrap()));
-            self.link_call(Link::Allocate);
+            self.push(Ins::Call(*IMPORTS.get("componentize-py#Allocate").unwrap()));
             self.push(Ins::LocalTee(result));
 
             Some(result)
         };
 
-        self.link_call(Link::Dispatch);
+        self.push(Ins::Call(*IMPORTS.get("componentize-py#Dispatch").unwrap()));
 
         if let Some(result) = result {
             self.push(Ins::LocalGet(result));
@@ -394,7 +452,7 @@ impl<'a> FunctionBindgen<'a> {
             self.push(Ins::LocalGet(value));
             self.push(Ins::I32Const(self.results_abi.size.try_into().unwrap()));
             self.push(Ins::I32Const(self.results_abi.align.try_into().unwrap()));
-            self.link_call(Link::Free);
+            self.push(Ins::Call(*IMPORTS.get("componentize-py#Free").unwrap()));
         } else {
             unreachable!()
         }
@@ -422,10 +480,6 @@ impl<'a> FunctionBindgen<'a> {
         self.instructions.push(instruction)
     }
 
-    fn link_call(&mut self, link: Link) {
-        self.push(Ins::Call(*self.link_map.get(&link).unwrap()));
-    }
-
     fn get_stack(&mut self) {
         self.push(Ins::GlobalGet(self.stack_pointer));
     }
@@ -448,12 +502,7 @@ impl<'a> FunctionBindgen<'a> {
     }
 
     fn pop_local(&mut self, index: u32, ty: ValType) {
-        assert!(
-            index
-                == (self.param_count + self.local_stack.len() - 1)
-                    .try_into()
-                    .unwrap()
-        );
+        assert!(index == u32::try_from(self.param_count + self.local_stack.len() - 1).unwrap());
         assert!(ty == self.local_types[self.local_stack.len() - 1]);
 
         self.local_stack.pop();
@@ -467,34 +516,38 @@ impl<'a> FunctionBindgen<'a> {
             Type::Bool | Type::U8 | Type::U16 | Type::U32 | Type::S8 | Type::S16 | Type::S32 => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value));
-                self.link_call(Link::LowerI32);
+                self.push(Ins::Call(*IMPORTS.get("componentize-py#LowerI32").unwrap()));
             }
             Type::U64 | Type::S64 => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value));
-                self.link_call(Link::LowerI64);
+                self.push(Ins::Call(*IMPORTS.get("componentize-py#LowerI64").unwrap()));
             }
             Type::Float32 => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value));
-                self.link_call(Link::LowerF32);
+                self.push(Ins::Call(*IMPORTS.get("componentize-py#LowerF32").unwrap()));
             }
             Type::Float64 => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value));
-                self.link_call(Link::LowerF64);
+                self.push(Ins::Call(*IMPORTS.get("componentize-py#LowerF64").unwrap()));
             }
             Type::Char => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value));
-                self.link_call(Link::LowerChar);
+                self.push(Ins::Call(
+                    *IMPORTS.get("componentize-py#LowerChar").unwrap(),
+                ));
             }
             Type::String => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value));
                 self.push_stack(WORD_SIZE * 2);
                 self.get_stack();
-                self.link_call(Link::LowerString);
+                self.push(Ins::Call(
+                    *IMPORTS.get("componentize-py#LowerString").unwrap(),
+                ));
                 self.get_stack();
                 self.push(Ins::I32Load(mem_arg(0, WORD_ALIGN.try_into().unwrap())));
                 self.get_stack();
@@ -572,14 +625,16 @@ impl<'a> FunctionBindgen<'a> {
 
                     self.push(Ins::LocalGet(context));
                     self.push(Ins::LocalGet(value));
-                    self.link_call(Link::GetListLength);
+                    self.push(Ins::Call(
+                        *IMPORTS.get("componentize-py#GetListLength").unwrap(),
+                    ));
                     self.push(Ins::LocalSet(length));
 
                     self.push(Ins::LocalGet(length));
                     self.push(Ins::I32Const(abi.size.try_into().unwrap()));
                     self.push(Ins::I32Mul);
                     self.push(Ins::I32Const(abi.align.try_into().unwrap()));
-                    self.link_call(Link::Allocate);
+                    self.push(Ins::Call(*IMPORTS.get("componentize-py#Allocate").unwrap()));
                     self.push(Ins::LocalSet(destination));
 
                     if let Type::U8 | Type::S8 = ty {
@@ -587,7 +642,7 @@ impl<'a> FunctionBindgen<'a> {
                         self.push(Ins::LocalGet(value));
                         self.push(Ins::LocalGet(destination));
                         self.push(Ins::LocalGet(length));
-                        self.link_call(Link::GetBytes);
+                        self.push(Ins::Call(*IMPORTS.get("componentize-py#GetBytes").unwrap()));
                     } else {
                         let index = self.push_local(ValType::I32);
                         let element_value = self.push_local(ValType::I32);
@@ -607,7 +662,9 @@ impl<'a> FunctionBindgen<'a> {
                         self.push(Ins::LocalGet(context));
                         self.push(Ins::LocalGet(value));
                         self.push(Ins::LocalGet(index));
-                        self.link_call(Link::GetListElement);
+                        self.push(Ins::Call(
+                            *IMPORTS.get("componentize-py#GetListElement").unwrap(),
+                        ));
                         self.push(Ins::LocalSet(element_value));
 
                         self.push(Ins::LocalGet(destination));
@@ -662,7 +719,7 @@ impl<'a> FunctionBindgen<'a> {
             self.push(Ins::LocalGet(value));
             self.push(Ins::I32Const(type_index.try_into().unwrap()));
             self.push(Ins::I32Const(field_index.try_into().unwrap()));
-            self.link_call(Link::GetField);
+            self.push(Ins::Call(*IMPORTS.get("componentize-py#GetField").unwrap()));
             self.push(Ins::LocalSet(field_value));
 
             self.lower(ty, context, field_value);
@@ -733,14 +790,18 @@ impl<'a> FunctionBindgen<'a> {
                 self.push(Ins::LocalGet(destination));
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value));
-                self.link_call(Link::LowerChar);
+                self.push(Ins::Call(
+                    *IMPORTS.get("componentize-py#LowerChar").unwrap(),
+                ));
                 self.push(Ins::I32Store(mem_arg(0, 2)));
             }
             Type::String => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value));
                 self.push(Ins::LocalGet(destination));
-                self.link_call(Link::LowerString);
+                self.push(Ins::Call(
+                    *IMPORTS.get("componentize-py#LowerString").unwrap(),
+                ));
             }
             Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
@@ -857,7 +918,7 @@ impl<'a> FunctionBindgen<'a> {
             self.push(Ins::LocalGet(value));
             self.push(Ins::I32Const(type_index.try_into().unwrap()));
             self.push(Ins::I32Const(field_index.try_into().unwrap()));
-            self.link_call(Link::GetField);
+            self.push(Ins::Call(*IMPORTS.get("componentize-py#GetField").unwrap()));
             self.push(Ins::LocalSet(field_value));
 
             self.push(Ins::LocalGet(destination));
@@ -922,8 +983,8 @@ impl<'a> FunctionBindgen<'a> {
         self.push(Ins::LocalGet(value));
         self.push(Ins::I32Const(type_index.try_into().unwrap()));
         self.push(Ins::I32Const(DISCRIMINANT_FIELD_INDEX));
-        self.link_call(Link::GetField);
-        self.link_call(Link::LowerI32);
+        self.push(Ins::Call(*IMPORTS.get("componentize-py#GetField").unwrap()));
+        self.push(Ins::Call(*IMPORTS.get("componentize-py#LowerI32").unwrap()));
         self.push(Ins::LocalSet(discriminant));
 
         self.push(Ins::LocalGet(destination));
@@ -943,7 +1004,7 @@ impl<'a> FunctionBindgen<'a> {
             self.push(Ins::LocalGet(value));
             self.push(Ins::I32Const(type_index.try_into().unwrap()));
             self.push(Ins::I32Const(PAYLOAD_FIELD_INDEX));
-            self.link_call(Link::GetField);
+            self.push(Ins::Call(*IMPORTS.get("componentize-py#GetField").unwrap()));
             self.push(Ins::LocalSet(payload));
 
             self.push(Ins::LocalGet(destination));
@@ -1221,33 +1282,35 @@ impl<'a> FunctionBindgen<'a> {
             Type::Bool | Type::U8 | Type::U16 | Type::U32 | Type::S8 | Type::S16 | Type::S32 => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value[0]));
-                self.link_call(Link::LiftI32);
+                self.push(Ins::Call(*IMPORTS.get("componentize-py#LiftI32").unwrap()));
             }
             Type::U64 | Type::S64 => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value[0]));
-                self.link_call(Link::LiftI64);
+                self.push(Ins::Call(*IMPORTS.get("componentize-py#LiftI64").unwrap()));
             }
             Type::Float32 => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value[0]));
-                self.link_call(Link::LiftF32);
+                self.push(Ins::Call(*IMPORTS.get("componentize-py#LiftF32").unwrap()));
             }
             Type::Float64 => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value[0]));
-                self.link_call(Link::LiftF64);
+                self.push(Ins::Call(*IMPORTS.get("componentize-py#LiftF64").unwrap()));
             }
             Type::Char => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value[0]));
-                self.link_call(Link::LiftChar);
+                self.push(Ins::Call(*IMPORTS.get("componentize-py#LiftChar").unwrap()));
             }
             Type::String => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value[0]));
                 self.push(Ins::LocalGet(value[1]));
-                self.link_call(Link::LiftString);
+                self.push(Ins::Call(
+                    *IMPORTS.get("componentize-py#LiftString").unwrap(),
+                ));
             }
             Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
@@ -1329,14 +1392,16 @@ impl<'a> FunctionBindgen<'a> {
                         self.push(Ins::LocalGet(context));
                         self.push(Ins::LocalGet(source));
                         self.push(Ins::LocalGet(length));
-                        self.link_call(Link::MakeBytes);
+                        self.push(Ins::Call(
+                            *IMPORTS.get("componentize-py#MakeBytes").unwrap(),
+                        ));
                     } else {
                         let index = self.push_local(ValType::I32);
                         let element_source = self.push_local(ValType::I32);
                         let destination = self.push_local(ValType::I32);
 
                         self.push(Ins::LocalGet(context));
-                        self.link_call(Link::MakeList);
+                        self.push(Ins::Call(*IMPORTS.get("componentize-py#MakeList").unwrap()));
                         self.push(Ins::LocalSet(destination));
 
                         self.push(Ins::I32Const(0));
@@ -1362,7 +1427,9 @@ impl<'a> FunctionBindgen<'a> {
 
                         self.load(*ty, context, element_source);
 
-                        self.link_call(Link::ListAppend);
+                        self.push(Ins::Call(
+                            *IMPORTS.get("componentize-py#ListAppend").unwrap(),
+                        ));
 
                         self.push(Ins::LocalGet(index));
                         self.push(Ins::I32Const(1));
@@ -1434,7 +1501,7 @@ impl<'a> FunctionBindgen<'a> {
         ));
         self.get_stack();
         self.push(Ins::I32Const(len.try_into().unwrap()));
-        self.link_call(Link::Init);
+        self.push(Ins::Call(*IMPORTS.get("componentize-py#Init").unwrap()));
 
         self.pop_local(destination, ValType::I32);
         self.pop_stack(len * WORD_SIZE);
@@ -1462,7 +1529,7 @@ impl<'a> FunctionBindgen<'a> {
         self.get_stack();
         self.push(Ins::LocalGet(context));
         self.push(Ins::LocalGet(source[0]));
-        self.link_call(Link::LiftI32);
+        self.push(Ins::Call(*IMPORTS.get("componentize-py#LiftI32").unwrap()));
         self.push(Ins::I32Store(mem_arg(0, WORD_ALIGN.try_into().unwrap())));
 
         self.get_stack();
@@ -1482,7 +1549,7 @@ impl<'a> FunctionBindgen<'a> {
                     }
                 } else {
                     this.push(Ins::LocalGet(context));
-                    this.link_call(Link::None);
+                    this.push(Ins::Call(*IMPORTS.get("componentize-py#None").unwrap()));
                 }
             },
         );
@@ -1491,7 +1558,7 @@ impl<'a> FunctionBindgen<'a> {
             WORD_ALIGN.try_into().unwrap(),
         )));
 
-        self.link_call(Link::Init);
+        self.push(Ins::Call(*IMPORTS.get("componentize-py#Init").unwrap()));
 
         self.pop_stack(WORD_SIZE * 2);
     }
@@ -1571,7 +1638,9 @@ impl<'a> FunctionBindgen<'a> {
                     WORD_SIZE.try_into().unwrap(),
                     WORD_ALIGN.try_into().unwrap(),
                 )));
-                self.link_call(Link::LiftString);
+                self.push(Ins::Call(
+                    *IMPORTS.get("componentize-py#LiftString").unwrap(),
+                ));
             }
             Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
@@ -1724,7 +1793,7 @@ impl<'a> FunctionBindgen<'a> {
         ));
         self.get_stack();
         self.push(Ins::I32Const(len.try_into().unwrap()));
-        self.link_call(Link::Init);
+        self.push(Ins::Call(*IMPORTS.get("componentize-py#Init").unwrap()));
 
         self.pop_local(destination, ValType::I32);
         self.pop_stack(len * WORD_SIZE);
@@ -1761,7 +1830,7 @@ impl<'a> FunctionBindgen<'a> {
             _ => unreachable!(),
         }
         self.push(Ins::LocalTee(discriminant));
-        self.link_call(Link::LiftI32);
+        self.push(Ins::Call(*IMPORTS.get("componentize-py#LiftI32").unwrap()));
         self.push(Ins::I32Store(mem_arg(0, WORD_ALIGN.try_into().unwrap())));
 
         self.get_stack();
@@ -1785,7 +1854,7 @@ impl<'a> FunctionBindgen<'a> {
                         this.load(ty, context, payload_source);
                     } else {
                         this.push(Ins::LocalGet(context));
-                        this.link_call(Link::None);
+                        this.push(Ins::Call(*IMPORTS.get("componentize-py#None").unwrap()));
                     }
                 },
             );
@@ -1793,14 +1862,14 @@ impl<'a> FunctionBindgen<'a> {
             self.pop_local(payload_source, ValType::I32);
         } else {
             self.push(Ins::LocalGet(context));
-            self.link_call(Link::None);
+            self.push(Ins::Call(*IMPORTS.get("componentize-py#None").unwrap()));
         }
         self.push(Ins::I32Store(mem_arg(
             WORD_SIZE.try_into().unwrap(),
             WORD_ALIGN.try_into().unwrap(),
         )));
 
-        self.link_call(Link::Init);
+        self.push(Ins::Call(*IMPORTS.get("componentize-py#Init").unwrap()));
 
         self.pop_stack(WORD_SIZE * 2);
         self.pop_local(discriminant, ValType::I32);
@@ -2048,7 +2117,7 @@ impl<'a> FunctionBindgen<'a> {
                 self.push(Ins::LocalGet(value[0]));
                 self.push(Ins::LocalGet(value[1]));
                 self.push(Ins::I32Const(1));
-                self.link_call(Link::Free);
+                self.push(Ins::Call(*IMPORTS.get("componentize-py#Free").unwrap()));
             }
 
             Type::Id(id) => match &self.resolve.types[id].kind {
@@ -2146,7 +2215,7 @@ impl<'a> FunctionBindgen<'a> {
                     self.push(Ins::I32Const(abi.size.try_into().unwrap()));
                     self.push(Ins::I32Mul);
                     self.push(Ins::I32Const(abi.align.try_into().unwrap()));
-                    self.link_call(Link::Free);
+                    self.push(Ins::Call(*IMPORTS.get("componentize-py#Free").unwrap()));
                 }
                 TypeDefKind::Type(ty) => self.free_lowered(*ty, value),
                 kind => todo!("{kind:?}"),
@@ -2217,7 +2286,7 @@ impl<'a> FunctionBindgen<'a> {
                     WORD_ALIGN.try_into().unwrap(),
                 )));
                 self.push(Ins::I32Const(1));
-                self.link_call(Link::Free);
+                self.push(Ins::Call(*IMPORTS.get("componentize-py#Free").unwrap()));
             }
 
             Type::Id(id) => match &self.resolve.types[id].kind {
@@ -2326,7 +2395,7 @@ impl<'a> FunctionBindgen<'a> {
                     self.push(Ins::I32Const(abi.size.try_into().unwrap()));
                     self.push(Ins::I32Mul);
                     self.push(Ins::I32Const(abi.align.try_into().unwrap()));
-                    self.link_call(Link::Free);
+                    self.push(Ins::Call(*IMPORTS.get("componentize-py#Free").unwrap()));
 
                     self.pop_local(length, ValType::I32);
                     self.pop_local(body, ValType::I32);

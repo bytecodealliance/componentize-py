@@ -8,6 +8,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  WASI_SDK_VERSION: 20.15ge8bb8fade354
+  WASI_SDK_RELEASE: shared-library-alpha-1
 
 jobs:
   test:
@@ -17,7 +19,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
         with:
-          submodules: 'true'
+          submodules: 'recursive'
 
       - name: Install latest Rust stable toolchain
         uses: actions-rs/toolchain@v1
@@ -25,6 +27,16 @@ jobs:
           toolchain: stable
           default: true
           components: clippy, rustfmt
+
+      - name: Install latest Rust nightly toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          default: false
+
+      - name: Install Rust std source
+        shell: bash
+        run: rustup component add rust-src --toolchain nightly
 
       - name: Install Wasm Rust targets
         shell: bash
@@ -39,9 +51,9 @@ jobs:
         shell: bash
         run: |
           cd /tmp
-          curl -LO https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-16/wasi-sdk-16.0-linux.tar.gz
-          tar -xf wasi-sdk-16.0-linux.tar.gz
-          cp -r wasi-sdk-16.0 /opt/wasi-sdk
+          curl -LO https://github.com/dicej/wasi-sdk/releases/download/${WASI_SDK_RELEASE}/wasi-sdk-${WASI_SDK_VERSION}-linux.tar.gz
+          tar xf wasi-sdk-${WASI_SDK_VERSION}-linux.tar.gz
+          mv wasi-sdk-${WASI_SDK_VERSION} /opt/wasi-sdk
 
       - name: Cache CPython
         id: cache-cpython-wasi

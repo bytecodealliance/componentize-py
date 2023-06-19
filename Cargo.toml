@@ -1,6 +1,6 @@
 [package]
 name = "componentize-py"
-version = "0.2.2"
+version = "0.3.0"
 edition = "2021"
 exclude = ["cpython"]
 
@@ -9,32 +9,33 @@ name = "componentize_py"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-anyhow = "1.0.68"
+anyhow = { version = "1.0.68", features = [ "backtrace" ] }
 clap = { version = "4.1.4", features = [ "derive" ] }
 tar = "0.4.38"
 tempfile = "3.5.0"
-wizer = "2.0.0"
 zstd = "0.11.1"
 componentize-py-shared = { path = "shared" }
-wasmparser = "0.102.0"
-wasm-encoder = "0.25.0"
-wit-parser = "0.6.4"
-wit-component = "0.7.4"
-indexmap = "1.9.3"
+wasmparser = "0.107.0"
+wasm-encoder = "0.29.0"
+# TODO: switch to release once https://github.com/bytecodealliance/wasm-tools/pull/1133 is released
+wit-parser = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "4678a61ae428da21299aeae016bd56d5e248248f" }
+wit-component = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "4678a61ae428da21299aeae016bd56d5e248248f" }
+indexmap = "2.0.0"
 bincode = "1.3.3"
 heck = "0.4.1"
-once_cell = "1.17.1"
-wasmtime-wasi = "=8.0.0"
-wasi-common = "=8.0.0"
-wasmtime = "=8.0.0"
-cap-std = "1.0.15"
 pyo3 = { version = "0.18.3", features = ["abi3-py37", "extension-module"], optional = true }
+# TODO: remove submodule and switch to release once Wasmtime 12 is available
+wasmtime-wasi = { path = "wasmtime/crates/wasi" }
+wasi-common = { path = "wasmtime/crates/wasi-common" }
+wasmtime = { path = "wasmtime/crates/wasmtime", features = ["component-model"] }
+once_cell = "1.17.1"
+component-init = { git = "https://github.com/dicej/component-init" }
+async-trait = "0.1.68"
+futures = "0.3.28"
+tokio = { version = "1.27.0", features = ["macros", "rt", "rt-multi-thread", "fs"] }
+bytes = "1.4.0"
 
 [dev-dependencies]
-tokio = { version = "1.27.0", features = ["macros", "rt", "rt-multi-thread", "fs"] }
-wasi-host = { package = "host", path = "preview2/host" }
-wasmtime-wasi-preview2 = { package = "wasi-cap-std-sync", path = "preview2/wasi-common/cap-std-sync" }
-wasi-preview2 = { package = "wasi-common", path = "preview2/wasi-common" }
 async-trait = "0.1.68"
 once_cell = "1.17.1"
 proptest = "1.1.0"
@@ -47,11 +48,11 @@ zstd = "0.11.1"
 test-generator = { path = "test-generator" }
 
 [workspace]
+exclude = [
+  "wasmtime",
+]
 members = [
   "runtime",
   "shared",
   "test-generator",
-]
-exclude = [
-  "preview2"
 ]

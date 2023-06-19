@@ -8,6 +8,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  WASI_SDK_VERSION: 20.15ge8bb8fade354
+  WASI_SDK_RELEASE: shared-library-alpha-1
 
 jobs:
   linux:
@@ -17,7 +19,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
         with:
-          submodules: 'true'
+          submodules: 'recursive'
 
       - uses: actions/setup-python@v4
         with:
@@ -29,6 +31,16 @@ jobs:
           toolchain: stable
           default: true
           components: clippy, rustfmt
+
+      - name: Install latest Rust nightly toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          default: false
+
+      - name: Install Rust std source
+        shell: bash
+        run: rustup component add rust-src --toolchain nightly
 
       - name: Install Wasm Rust targets
         shell: bash
@@ -43,9 +55,9 @@ jobs:
         shell: bash
         run: |
           cd /tmp
-          curl -LO https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-16/wasi-sdk-16.0-linux.tar.gz
-          tar -xf wasi-sdk-16.0-linux.tar.gz
-          cp -r wasi-sdk-16.0 /opt/wasi-sdk
+          curl -LO https://github.com/dicej/wasi-sdk/releases/download/${WASI_SDK_RELEASE}/wasi-sdk-${WASI_SDK_VERSION}-linux.tar.gz
+          tar xf wasi-sdk-${WASI_SDK_VERSION}-linux.tar.gz
+          mv wasi-sdk-${WASI_SDK_VERSION} /opt/wasi-sdk
 
       - name: Cache CPython
         id: cache-cpython-wasi
@@ -121,7 +133,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
         with:
-          submodules: 'true'
+          submodules: 'recursive'
 
       - uses: actions/setup-python@v4
         with:
@@ -133,6 +145,17 @@ jobs:
           toolchain: stable
           default: true
           target: ${{ matrix.config.target }}
+
+      - name: Install latest Rust nightly toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          default: false
+          target: ${{ matrix.config.target }}
+
+      - name: Install Rust std source
+        shell: bash
+        run: rustup component add rust-src --toolchain nightly
 
       - name: Install Wasm Rust targets
         shell: bash
@@ -166,18 +189,17 @@ jobs:
         shell: bash
         run: |
           cd /tmp
-          curl -LO https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-16/wasi-sdk-16.0-${{ matrix.config.wasiSDK }}.tar.gz
-          tar -xf wasi-sdk-16.0-${{ matrix.config.wasiSDK }}.tar.gz
-
-          sudo mv wasi-sdk-16.0 /opt/wasi-sdk
+          curl -LO https://github.com/dicej/wasi-sdk/releases/download/${WASI_SDK_RELEASE}/wasi-sdk-${WASI_SDK_VERSION}-${{ matrix.config.wasiSDK }}.tar.gz
+          tar xf wasi-sdk-${WASI_SDK_VERSION}-${{ matrix.config.wasiSDK }}.tar.gz
+          sudo mv wasi-sdk-${WASI_SDK_VERSION} /opt/wasi-sdk
 
       - name: Install WASI-SDK on Windows
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          curl -LO https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-16/wasi-sdk-16.0-mingw.tar.gz
-          tar -xf wasi-sdk-16.0-mingw.tar.gz
-          echo "WASI_SDK_PATH=$(cygpath -m $(pwd)/wasi-sdk-16.0)" >> $GITHUB_ENV
+          curl -LO https://github.com/dicej/wasi-sdk/releases/download/${WASI_SDK_RELEASE}/wasi-sdk-${WASI_SDK_VERSION}-mingw.tar.gz
+          tar xf wasi-sdk-${WASI_SDK_VERSION}-mingw.tar.gz
+          echo "WASI_SDK_PATH=$(cygpath -m $(pwd)/wasi-sdk-${WASI_SDK_VERSION})" >> ${GITHUB_ENV}
 
       - name: Restore CPython
         id: cache-cpython-wasi
@@ -192,9 +214,12 @@ jobs:
         with:
           target: ${{ matrix.config.maturin_target }}
           args: --release --out dist --features pyo3
-          manylinux: 2014
+          manylinux: 2_28
           docker-options: -v /opt/wasi-sdk:/opt/wasi-sdk
-          before-script-linux: rustup target add wasm32-wasi wasm32-unknown-unknown
+          before-script-linux: |
+            rustup install nightly
+            rustup component add rust-src --toolchain nightly
+            rustup target add wasm32-wasi wasm32-unknown-unknown
 
       - name: Set up cross-compiled linux aarch64 build
         if: matrix.config.target == 'aarch64-unknown-linux-gnu'
@@ -276,11 +301,14 @@ jobs:
           tag: ${{ github.ref }}
 
   sdist:
+    name: Build Python sdist
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v3
         with:
-          submodules: 'true'
+          submodules: 'recursive'
+          
       - name: Build sdist
         uses: PyO3/maturin-action@v1
         with:

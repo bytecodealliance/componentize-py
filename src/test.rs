@@ -1,4 +1,5 @@
 use {
+    crate::Ctx,
     anyhow::{anyhow, Result},
     async_trait::async_trait,
     once_cell::sync::Lazy,
@@ -6,13 +7,13 @@ use {
         prelude::Strategy,
         test_runner::{self, TestRng, TestRunner},
     },
-    std::{env, fs},
+    std::{env, fs, marker::PhantomData},
     tokio::runtime::Runtime,
-    wasi_preview2::WasiCtx,
     wasmtime::{
         component::{Component, InstancePre, Linker},
         Config, Engine, Store,
     },
+    wasmtime_wasi::preview2::{Table, WasiCtxBuilder},
 };
 
 mod echoes;
@@ -40,7 +41,12 @@ static ENGINE: Lazy<Engine> = Lazy::new(|| {
     Engine::new(&config).unwrap()
 });
 
-fn make_component(wit: &str, python: &str) -> Result<Vec<u8>> {
+#[allow(clippy::type_complexity)]
+async fn make_component(
+    wit: &str,
+    python: &str,
+    add_to_linker: Option<&dyn Fn(&mut Linker<Ctx>) -> Result<()>>,
+) -> Result<Vec<u8>> {
     let tempdir = tempfile::tempdir()?;
     fs::write(tempdir.path().join("app.wit"), wit)?;
     fs::write(tempdir.path().join("app.py"), python)?;
@@ -55,7 +61,9 @@ fn make_component(wit: &str, python: &str) -> Result<Vec<u8>> {
         "app",
         false,
         &tempdir.path().join("app.wasm"),
-    )?;
+        add_to_linker,
+    )
+    .await?;
 
     Ok(fs::read(tempdir.path().join("app.wasm"))?)
 }
@@ -82,40 +90,35 @@ impl PartialEq<MyFloat64> for MyFloat64 {
 trait Host {
     type World;
 
-    fn new(wasi: WasiCtx) -> Self;
+    fn add_to_linker(linker: &mut Linker<Ctx>) -> Result<()>;
 
-    fn add_to_linker(linker: &mut Linker<Self>) -> Result<()>
-    where
-        Self: Sized;
-
-    async fn instantiate_pre(
-        store: &mut Store<Self>,
-        pre: &InstancePre<Self>,
-    ) -> Result<Self::World>
-    where
-        Self: Sized;
+    async fn instantiate_pre(store: &mut Store<Ctx>, pre: &InstancePre<Ctx>)
+        -> Result<Self::World>;
 }
 
 struct Tester<H> {
-    pre: InstancePre<H>,
+    pre: InstancePre<Ctx>,
     seed: [u8; 32],
+    _phantom: PhantomData<H>,
 }
 
 impl<H: Host> Tester<H> {
     fn new(wit: &str, guest_code: &str, seed: [u8; 32]) -> Result<Self> {
-        let component = &make_component(wit, guest_code)?;
-        let mut linker = Linker::<H>::new(&ENGINE);
+        let component =
+            &Runtime::new()?.block_on(make_component(wit, guest_code, Some(&H::add_to_linker)))?;
+        let mut linker = Linker::<Ctx>::new(&ENGINE);
         H::add_to_linker(&mut linker)?;
         Ok(Self {
             pre: linker.instantiate_pre(&Component::new(&ENGINE, component)?)?,
             seed,
+            _phantom: PhantomData,
         })
     }
 
     fn test<S: Strategy>(
         &self,
         strategy: &S,
-        test: impl Fn(S::Value, &H::World, &mut Store<H>, &Runtime) -> Result<()>,
+        test: impl Fn(S::Value, &H::World, &mut Store<Ctx>, &Runtime) -> Result<()>,
     ) -> Result<()>
     where
         S::Value: PartialEq<S::Value> + Clone + Send + Sync + 'static,
@@ -127,15 +130,14 @@ impl<H: Host> Tester<H> {
             TestRunner::new_with_rng(config, TestRng::from_seed(algorithm, &self.seed));
 
         Ok(runner.run(strategy, move |v| {
-            let mut store = Store::new(
-                &ENGINE,
-                H::new(
-                    wasmtime_wasi_preview2::WasiCtxBuilder::new()
-                        .inherit_stdout()
-                        .inherit_stderr()
-                        .build(),
-                ),
-            );
+            let mut table = Table::new();
+            let wasi = WasiCtxBuilder::new()
+                .inherit_stdout()
+                .inherit_stderr()
+                .build(&mut table)
+                .unwrap();
+
+            let mut store = Store::new(&ENGINE, Ctx { wasi, table });
 
             let instance = runtime
                 .block_on(H::instantiate_pre(&mut store, &self.pre))
@@ -149,7 +151,7 @@ impl<H: Host> Tester<H> {
     fn all_eq<S: Strategy>(
         &self,
         strategy: &S,
-        echo: impl Fn(S::Value, &H::World, &mut Store<H>, &Runtime) -> Result<S::Value>,
+        echo: impl Fn(S::Value, &H::World, &mut Store<Ctx>, &Runtime) -> Result<S::Value>,
     ) -> Result<()>
     where
         S::Value: PartialEq<S::Value> + Clone + Send + Sync + 'static,
