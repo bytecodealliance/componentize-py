@@ -155,6 +155,7 @@ macro_rules! define_encode {
     ($(@$p:ident $op:ident $({ $($arg:ident: $argty:ty),* })? => $visit:ident)*) => {
         $(
             #[allow(clippy::drop_copy)]
+            #[allow(dropping_copy_types)]
             fn $visit(&mut self $(, $($arg: $argty),*)?)  {
                 #[allow(unused_imports)]
                 use wasm_encoder::Instruction::*;
