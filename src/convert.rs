@@ -61,7 +61,15 @@ impl From<IntoHeapType> for HeapType {
         match val.0 {
             wasmparser::HeapType::Func => HeapType::Func,
             wasmparser::HeapType::Extern => HeapType::Extern,
-            wasmparser::HeapType::TypedFunc(index) => HeapType::TypedFunc(index.into()),
+            wasmparser::HeapType::Indexed(index) => HeapType::Indexed(index.into()),
+            wasmparser::HeapType::Any => HeapType::Any,
+            wasmparser::HeapType::None => HeapType::None,
+            wasmparser::HeapType::NoExtern => HeapType::NoExtern,
+            wasmparser::HeapType::NoFunc => HeapType::NoFunc,
+            wasmparser::HeapType::Eq => HeapType::Eq,
+            wasmparser::HeapType::Struct => HeapType::Struct,
+            wasmparser::HeapType::Array => HeapType::Array,
+            wasmparser::HeapType::I31 => HeapType::I31
         }
     }
 }
@@ -71,8 +79,8 @@ pub struct IntoRefType(pub wasmparser::RefType);
 impl From<IntoRefType> for RefType {
     fn from(val: IntoRefType) -> Self {
         RefType {
-            nullable: val.0.nullable,
-            heap_type: IntoHeapType(val.0.heap_type).into(),
+            nullable: val.0.is_nullable(),
+            heap_type: IntoHeapType(val.0.heap_type()).into(),
         }
     }
 }
@@ -264,14 +272,14 @@ pub fn const_expr(reader: BinaryReader<'_>, remap: impl Fn(u32) -> u32) -> Resul
 
 pub enum MyElements {
     Functions(Vec<u32>),
-    Expressions(Vec<ConstExpr>),
+    Expressions(RefType, Vec<ConstExpr>),
 }
 
 impl MyElements {
     pub fn as_elements(&self) -> Elements {
         match self {
             Self::Functions(v) => Elements::Functions(v),
-            Self::Expressions(v) => Elements::Expressions(v),
+            Self::Expressions(rt, v) => Elements::Expressions(*rt, v),
         }
     }
 }
@@ -287,7 +295,8 @@ impl<F: (Fn(u32) -> u32) + Copy> TryFrom<(wasmparser::ElementItems<'_>, F)> for 
                     .map(|f| f.map(remap))
                     .collect::<Result<_, _>>()?,
             ),
-            wasmparser::ElementItems::Expressions(reader) => MyElements::Expressions(
+            wasmparser::ElementItems::Expressions(rt, reader) => MyElements::Expressions(
+                IntoRefType(rt).into(),
                 reader
                     .into_iter()
                     .map(|e| const_expr(e?.get_binary_reader(), remap))

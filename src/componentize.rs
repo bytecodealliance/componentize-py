@@ -1,8 +1,9 @@
+use std::borrow::Cow;
 use {
     crate::{
         bindgen::{self, FunctionBindgen, DISPATCH_CORE_PARAM_COUNT, LINK_LIST},
         convert::{
-            self, IntoEntityType, IntoExportKind, IntoRefType, IntoTableType, IntoValType,
+            self, IntoEntityType, IntoExportKind, IntoTableType, IntoValType,
             MyElements,
         },
         summary::{FunctionKind, Summary},
@@ -22,10 +23,14 @@ use {
 };
 
 fn types_eq(
-    wasmparser::Type::Func(a): &wasmparser::Type,
-    wasmparser::Type::Func(b): &wasmparser::Type,
+    a: &wasmparser::StructuralType,
+    b: &wasmparser::StructuralType,
 ) -> bool {
-    a == b
+    match (a, b) {
+        (wasmparser::StructuralType::Func(a),
+            wasmparser::StructuralType::Func(b)) => *a == *b,
+        _ => false
+    }
 }
 
 fn make_wasi_stub(name: &str) -> Vec<Ins> {
@@ -69,7 +74,7 @@ pub fn componentize(
 ) -> Result<Vec<u8>> {
     // First pass: find stack pointer and `dispatch` function, and count various items
 
-    let dispatch_type = wasmparser::Type::Func(wasmparser::FuncType::new(
+    let dispatch_type = wasmparser::StructuralType::Func(wasmparser::FuncType::new(
         [wasmparser::ValType::I32; DISPATCH_CORE_PARAM_COUNT],
         [],
     ));
@@ -95,14 +100,14 @@ pub fn componentize(
                             if import.name == "dispatch" {
                                 match import.ty {
                                     TypeRef::Func(ty)
-                                        if types_eq(
-                                            &types.as_ref().unwrap()[usize::try_from(ty).unwrap()],
-                                            &dispatch_type,
-                                        ) =>
-                                    {
-                                        dispatch_import_index = Some(count);
-                                        dispatch_type_index = Some(ty);
-                                    }
+                                    if types_eq(
+                                        &types.as_ref().unwrap()[usize::try_from(ty).unwrap()].structural_type,
+                                        &dispatch_type,
+                                    ) =>
+                                        {
+                                            dispatch_import_index = Some(count);
+                                            dispatch_type_index = Some(ty);
+                                        }
                                     _ => bail!(
                                         "componentize-py#dispatch has incorrect type: {:?}",
                                         import.ty
@@ -202,9 +207,13 @@ pub fn componentize(
             Payload::TypeSection(reader) => {
                 let mut types = TypeSection::new();
                 for ty in reader {
-                    let wasmparser::Type::Func(ty) = ty?;
-                    let map = |&ty| IntoValType(ty).into();
-                    types.function(ty.params().iter().map(map), ty.results().iter().map(map));
+                    match ty? {
+                        wasmparser::SubType { structural_type: wasmparser::StructuralType::Func(ty), .. } => {
+                            let map = |&ty| IntoValType(ty).into();
+                            types.function(ty.params().iter().map(map), ty.results().iter().map(map));
+                        }
+                        _ => bail!("unsupported type"),
+                    }
                 }
                 // TODO: should probably deduplicate these types:
                 for function in summary
@@ -231,13 +240,13 @@ pub fn componentize(
                     .filter(|f| matches!(f.kind, FunctionKind::Import))
                     .enumerate()
                 {
-                    imports.import(
-                        function
-                            .interface
-                            .map(|i| i.name)
-                            .unwrap_or(&resolve.worlds[world].name),
-                        function.name,
-                        EntityType::Function((old_type_count + index).try_into().unwrap()),
+                    let module = function
+                        .interface
+                        .map(|i| i.name.clone().unwrap_name())
+                        .unwrap_or(resolve.worlds[world].name.clone());
+                    imports.import(&module,
+                                   function.name,
+                                   EntityType::Function((old_type_count + index).try_into().unwrap()),
                     );
                 }
                 if !stub_wasi {
@@ -347,7 +356,7 @@ pub fn componentize(
                                         ""
                                     },
                                     if let Some(interface) = function.interface {
-                                        format!("{}#{}", interface.name, function.name)
+                                        format!("{}#{}", interface.name.clone().unwrap_name(), function.name)
                                     } else {
                                         function.name.to_owned()
                                     }
@@ -371,20 +380,17 @@ pub fn componentize(
                     let element = element?;
                     match element.kind {
                         wasmparser::ElementKind::Passive => elements.passive(
-                            IntoRefType(element.ty).into(),
                             MyElements::try_from((element.items, remap))?.as_elements(),
                         ),
                         wasmparser::ElementKind::Active {
                             table_index,
                             offset_expr,
                         } => elements.active(
-                            Some(table_index),
+                            table_index,
                             &convert::const_expr(offset_expr.get_binary_reader(), remap)?,
-                            IntoRefType(element.ty).into(),
                             MyElements::try_from((element.items, remap))?.as_elements(),
                         ),
                         wasmparser::ElementKind::Declared => elements.declared(
-                            IntoRefType(element.ty).into(),
                             MyElements::try_from((element.items, remap))?.as_elements(),
                         ),
                     };
@@ -392,10 +398,6 @@ pub fn componentize(
                 elements.active(
                     Some(old_table_count.try_into().unwrap()),
                     &ConstExpr::i32_const(0),
-                    RefType {
-                        nullable: true,
-                        heap_type: HeapType::Func,
-                    },
                     Elements::Functions(
                         &summary
                             .functions
@@ -580,8 +582,8 @@ pub fn componentize(
                 }
 
                 result.section(&CustomSection {
-                    name: "name",
-                    data: &data,
+                    name: Cow::Borrowed("name"),
+                    data: Cow::Borrowed(&data),
                 });
             }
 
@@ -597,8 +599,8 @@ pub fn componentize(
     }
 
     result.section(&CustomSection {
-        name: &format!("component-type:{}", resolve.worlds[world].name),
-        data: &metadata::encode(resolve, world, wit_component::StringEncoding::UTF8, None)?,
+        name: Cow::Borrowed(&format!("component-type:{}", resolve.worlds[world].name)),
+        data: Cow::Borrowed(&metadata::encode(resolve, world, wit_component::StringEncoding::UTF8, None)?),
     });
 
     let result = result.finish();
@@ -610,8 +612,8 @@ pub fn componentize(
         .adapter(
             "wasi_snapshot_preview1",
             &zstd::decode_all(Cursor::new(include_bytes!(concat!(
-                env!("OUT_DIR"),
-                "/wasi_snapshot_preview1.wasm.zst"
+            env!("OUT_DIR"),
+            "/wasi_snapshot_preview1.wasm.zst"
             ))))?,
         )?
         .encode()

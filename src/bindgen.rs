@@ -448,12 +448,10 @@ impl<'a> FunctionBindgen<'a> {
     }
 
     fn pop_local(&mut self, index: u32, ty: ValType) {
-        assert!(
-            index
-                == (self.param_count + self.local_stack.len() - 1)
-                    .try_into()
-                    .unwrap()
-        );
+        let idx: u32 = (self.param_count + self.local_stack.len() - 1)
+            .try_into()
+            .unwrap();
+        assert!(index == idx);
         assert!(ty == self.local_types[self.local_stack.len() - 1]);
 
         self.local_stack.pop();

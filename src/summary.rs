@@ -1,3 +1,4 @@
+use wit_parser::WorldKey;
 use {
     crate::{
         abi::{self, MAX_FLAT_PARAMS, MAX_FLAT_RESULTS},
@@ -42,7 +43,7 @@ pub enum FunctionKind {
 #[derive(Copy, Clone)]
 pub struct MyInterface<'a> {
     pub id: InterfaceId,
-    pub name: &'a str,
+    pub name: &'a WorldKey,
 }
 
 pub struct MyFunction<'a> {
@@ -58,7 +59,7 @@ impl<'a> MyFunction<'a> {
         if let Some(interface) = self.interface {
             format!(
                 "{}#{}{}",
-                interface.name,
+                interface.name.clone().unwrap_name(),
                 self.name,
                 match self.kind {
                     FunctionKind::Import | FunctionKind::Export => "",
@@ -113,8 +114,8 @@ pub struct Summary<'a> {
     pub world: WorldId,
     pub functions: Vec<MyFunction<'a>>,
     pub types: IndexSet<TypeId>,
-    pub imported_interfaces: HashMap<InterfaceId, &'a str>,
-    pub exported_interfaces: HashMap<InterfaceId, &'a str>,
+    pub imported_interfaces: HashMap<InterfaceId, &'a WorldKey>,
+    pub exported_interfaces: HashMap<InterfaceId, &'a WorldKey>,
     pub tuple_types: HashMap<usize, TypeId>,
     pub option_type: Option<TypeId>,
     pub nesting_option_type: Option<TypeId>,
@@ -272,7 +273,7 @@ impl<'a> Summary<'a> {
 
     fn visit_functions(
         &mut self,
-        items: &'a IndexMap<String, WorldItem>,
+        items: &'a IndexMap<WorldKey, WorldItem>,
         direction: Direction,
     ) -> Result<()> {
         for (item_name, item) in items {
@@ -352,7 +353,7 @@ impl<'a> Summary<'a> {
                 }
                 TypeDefKind::Flags(flags) => OwnedKind::Flags(flags.repr().count()),
                 TypeDefKind::Tuple(_) | TypeDefKind::Option(_) | TypeDefKind::Result(_) => {
-                    return self.summarize_unowned_type(id)
+                    return self.summarize_unowned_type(id);
                 }
                 kind => todo!("{kind:?}"),
             };
@@ -387,14 +388,14 @@ impl<'a> Summary<'a> {
         let mut exports = Vec::new();
         for function in &self.functions {
             if let FunctionKind::Export = function.kind {
-                exports.push(FunctionExport {
-                    protocol: if let Some(interface) = function.interface {
-                        interface.name
+                let protocol =
+                    if let Some(interface) = function.interface {
+                        interface.name.clone().unwrap_name().to_upper_camel_case()
                     } else {
-                        &self.resolve.worlds[self.world].name
-                    }
-                    .to_upper_camel_case(),
-
+                        self.resolve.worlds[self.world].name.to_upper_camel_case()
+                    };
+                exports.push(FunctionExport {
+                    protocol,
                     name: function.name.to_snake_case(),
                 });
             }
@@ -444,8 +445,8 @@ impl<'a> Summary<'a> {
             function_imports: HashSet<InterfaceId>,
         }
 
-        let mut interface_imports = HashMap::<&str, Definitions>::new();
-        let mut interface_exports = HashMap::<&str, Definitions>::new();
+        let mut interface_imports = HashMap::<&WorldKey, Definitions>::new();
+        let mut interface_exports = HashMap::<&WorldKey, Definitions>::new();
         let mut world_imports = Definitions::default();
         let mut world_exports = Definitions::default();
         for (index, id) in self.types.iter().enumerate() {
@@ -795,7 +796,7 @@ Result = Union[Ok[T], Err[E]]
             fs::create_dir(&dir)?;
             File::create(dir.join("__init__.py"))?;
             for (name, code) in interface_imports {
-                let mut file = File::create(dir.join(&format!("{}.py", name.to_snake_case())))?;
+                let mut file = File::create(dir.join(&format!("{}.py", name.clone().unwrap_name().to_snake_case())))?;
                 let types = code.types.concat();
                 let functions = code.functions.concat();
                 let imports = code
@@ -825,7 +826,7 @@ import componentize_py
             let mut protocol_imports = HashSet::new();
             let mut protocols = String::new();
             for (name, code) in interface_exports {
-                let mut file = File::create(dir.join(&format!("{}.py", name.to_snake_case())))?;
+                let mut file = File::create(dir.join(&format!("{}.py", name.clone().unwrap_name().to_snake_case())))?;
                 let types = code.types.concat();
                 let imports = code
                     .type_imports
@@ -843,7 +844,7 @@ from ..types import Result, Ok, Err, Some
 "
                 )?;
 
-                let camel = name.to_upper_camel_case();
+                let camel = name.clone().unwrap_name().to_upper_camel_case();
                 let methods = if code.functions.is_empty() {
                     "    pass".to_owned()
                 } else {
@@ -918,11 +919,12 @@ class {camel}(Protocol):
 
     fn interface_package(&self, interface: InterfaceId) -> (&'static str, String) {
         if let Some(name) = self.imported_interfaces.get(&interface) {
-            ("imports", name.to_snake_case())
+            let name = (*name).clone().unwrap_name().to_snake_case();
+            ("imports", name)
         } else {
             (
                 "exports",
-                self.exported_interfaces[&interface].to_snake_case(),
+                self.exported_interfaces[&interface].clone().unwrap_name().to_snake_case(),
             )
         }
     }
@@ -960,12 +962,12 @@ class {camel}(Protocol):
             .iter()
             .all(|case| self.is_allowed_for_raw_union(case.ty))
             && un.cases.len()
-                == un
-                    .cases
-                    .iter()
-                    .map(|case| raw_union_type(case.ty))
-                    .collect::<HashSet<_>>()
-                    .len()
+            == un
+            .cases
+            .iter()
+            .map(|case| raw_union_type(case.ty))
+            .collect::<HashSet<_>>()
+            .len()
     }
 }
 
@@ -1027,7 +1029,7 @@ impl<'a> TypeNames<'a> {
                             )
                         };
 
-                        format!("{package}{name}",)
+                        format!("{package}{name}", )
                     }
                     TypeDefKind::Option(some) => {
                         if abi::is_option(self.summary.resolve, *some) {

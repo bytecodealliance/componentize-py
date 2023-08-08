@@ -108,10 +108,10 @@ pub fn componentize(
     let stdlib = tempfile::tempdir()?;
 
     Archive::new(Decoder::new(Cursor::new(include_bytes!(concat!(
-        env!("OUT_DIR"),
-        "/python-lib.tar.zst"
+    env!("OUT_DIR"),
+    "/python-lib.tar.zst"
     ))))?)
-    .unpack(stdlib.path())?;
+        .unpack(stdlib.path())?;
 
     let (resolve, world) = parse_wit(wit_path, world)?;
     let summary = Summary::try_new(&resolve, world)?;
@@ -177,8 +177,8 @@ pub fn componentize(
             Ok(linker)
         })))?
         .run(&zstd::decode_all(Cursor::new(include_bytes!(concat!(
-            env!("OUT_DIR"),
-            "/runtime.wasm.zst"
+        env!("OUT_DIR"),
+        "/runtime.wasm.zst"
         ))))?)
         .with_context(move || {
             let mut buffer = String::new();
@@ -207,7 +207,7 @@ fn parse_wit(path: &Path, world: Option<&str>) -> Result<(Resolve, WorldId)> {
         resolve.push_dir(path)?.0
     } else {
         let pkg = UnresolvedPackage::parse_file(path)?;
-        resolve.push(pkg, &Default::default())?
+        resolve.push(pkg)?
     };
     let world = resolve.select_world(pkg, world)?;
     Ok((resolve, world))
