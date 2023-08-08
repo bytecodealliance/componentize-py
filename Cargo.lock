@@ -2730,6 +2730,7 @@ dependencies = [
 [[package]]
 name = "wizer"
 version = "3.0.1"
+source = "git+https://github.com/golemcloud/wizer?branch=wasmtime-11#3ef79627418c857d4f5e51c75696968e74d8614c"
 dependencies = [
  "anyhow",
  "cap-std 2.0.0",

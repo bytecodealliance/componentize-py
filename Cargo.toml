@@ -10,10 +10,10 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 anyhow = "1.0.68"
-clap = { version = "4.1.4", features = [ "derive" ] }
+clap = { version = "4.1.4", features = ["derive"] }
 tar = "0.4.38"
 tempfile = "3.5.0"
-wizer = { path = "../wizer" }
+wizer = { git = "https://github.com/golemcloud/wizer", branch = "wasmtime-11" }
 zstd = "0.12.4"
 componentize-py-shared = { path = "shared" }
 wasmparser = "0.110.0"
@@ -45,10 +45,10 @@ test-generator = { path = "test-generator" }
 
 [workspace]
 members = [
-  "runtime",
-  "shared",
-  "test-generator",
+    "runtime",
+    "shared",
+    "test-generator",
 ]
 exclude = [
-  "preview2"
+    "preview2"
 ]
