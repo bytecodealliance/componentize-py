@@ -40,15 +40,15 @@ pub enum FunctionKind {
     ExportPostReturn,
 }
 
-#[derive(Copy, Clone)]
-pub struct MyInterface<'a> {
+#[derive(Clone)]
+pub struct MyInterface {
     pub id: InterfaceId,
-    pub name: &'a WorldKey,
+    pub name: String,
 }
 
 pub struct MyFunction<'a> {
     pub kind: FunctionKind,
-    pub interface: Option<MyInterface<'a>>,
+    pub interface: Option<MyInterface>,
     pub name: &'a str,
     pub params: &'a [(String, Type)],
     pub results: &'a Results,
@@ -56,10 +56,10 @@ pub struct MyFunction<'a> {
 
 impl<'a> MyFunction<'a> {
     pub fn internal_name(&self) -> String {
-        if let Some(interface) = self.interface {
+        if let Some(interface) = &self.interface {
             format!(
                 "{}#{}{}",
-                interface.name.clone().unwrap_name(),
+                interface.name,
                 self.name,
                 match self.kind {
                     FunctionKind::Import | FunctionKind::Export => "",
@@ -114,8 +114,8 @@ pub struct Summary<'a> {
     pub world: WorldId,
     pub functions: Vec<MyFunction<'a>>,
     pub types: IndexSet<TypeId>,
-    pub imported_interfaces: HashMap<InterfaceId, &'a WorldKey>,
-    pub exported_interfaces: HashMap<InterfaceId, &'a WorldKey>,
+    pub imported_interfaces: HashMap<InterfaceId, String>,
+    pub exported_interfaces: HashMap<InterfaceId, String>,
     pub tuple_types: HashMap<usize, TypeId>,
     pub option_type: Option<TypeId>,
     pub nesting_option_type: Option<TypeId>,
@@ -224,7 +224,7 @@ impl<'a> Summary<'a> {
 
     fn visit_function(
         &mut self,
-        interface: Option<MyInterface<'a>>,
+        interface: Option<MyInterface>,
         name: &'a str,
         params: &'a [(String, Type)],
         results: &'a Results,
@@ -240,7 +240,7 @@ impl<'a> Summary<'a> {
 
         let make = |kind| MyFunction {
             kind,
-            interface,
+            interface: interface.clone(),
             name,
             params,
             results,
@@ -277,17 +277,18 @@ impl<'a> Summary<'a> {
         direction: Direction,
     ) -> Result<()> {
         for (item_name, item) in items {
+            let item_name = self.resolve.name_world_key(item_name);
             match item {
                 WorldItem::Interface(id) => {
                     match direction {
-                        Direction::Import => self.imported_interfaces.insert(*id, item_name),
-                        Direction::Export => self.exported_interfaces.insert(*id, item_name),
+                        Direction::Import => self.imported_interfaces.insert(*id, item_name.clone()),
+                        Direction::Export => self.exported_interfaces.insert(*id, item_name.clone()),
                     };
                     let interface = &self.resolve.interfaces[*id];
                     for (func_name, func) in &interface.functions {
                         self.visit_function(
                             Some(MyInterface {
-                                name: item_name,
+                                name: item_name.clone(),
                                 id: *id,
                             }),
                             func_name,
@@ -389,8 +390,8 @@ impl<'a> Summary<'a> {
         for function in &self.functions {
             if let FunctionKind::Export = function.kind {
                 let protocol =
-                    if let Some(interface) = function.interface {
-                        interface.name.clone().unwrap_name().to_upper_camel_case()
+                    if let Some(interface) = &function.interface {
+                        interface.name.to_upper_camel_case()
                     } else {
                         self.resolve.worlds[self.world].name.to_upper_camel_case()
                     };
@@ -445,8 +446,8 @@ impl<'a> Summary<'a> {
             function_imports: HashSet<InterfaceId>,
         }
 
-        let mut interface_imports = HashMap::<&WorldKey, Definitions>::new();
-        let mut interface_exports = HashMap::<&WorldKey, Definitions>::new();
+        let mut interface_imports = HashMap::<&str, Definitions>::new();
+        let mut interface_exports = HashMap::<&str, Definitions>::new();
         let mut world_imports = Definitions::default();
         let mut world_exports = Definitions::default();
         for (index, id) in self.types.iter().enumerate() {
@@ -648,7 +649,7 @@ class {camel}(Flag):
                         self,
                         if let FunctionKind::Export = function.kind {
                             TypeOwner::None
-                        } else if let Some(interface) = function.interface {
+                        } else if let Some(interface) = &function.interface {
                             TypeOwner::Interface(interface.id)
                         } else {
                             TypeOwner::World(self.world)
@@ -715,8 +716,8 @@ def {snake}({params}) -> {return_type}:
 "
                             );
 
-                            let definitions = if let Some(interface) = function.interface {
-                                interface_imports.entry(interface.name).or_default()
+                            let definitions = if let Some(interface) = &function.interface {
+                                interface_imports.entry(&interface.name).or_default()
                             } else {
                                 &mut world_imports
                             };
@@ -733,8 +734,8 @@ def {snake}({params}) -> {return_type}:
 "
                             );
 
-                            let definitions = if let Some(interface) = function.interface {
-                                interface_exports.entry(interface.name).or_default()
+                            let definitions = if let Some(interface) = &function.interface {
+                                interface_exports.entry(&interface.name).or_default()
                             } else {
                                 &mut world_exports
                             };
@@ -796,7 +797,7 @@ Result = Union[Ok[T], Err[E]]
             fs::create_dir(&dir)?;
             File::create(dir.join("__init__.py"))?;
             for (name, code) in interface_imports {
-                let mut file = File::create(dir.join(&format!("{}.py", name.clone().unwrap_name().to_snake_case())))?;
+                let mut file = File::create(dir.join(&format!("{}.py", name.to_snake_case())))?;
                 let types = code.types.concat();
                 let functions = code.functions.concat();
                 let imports = code
@@ -826,7 +827,7 @@ import componentize_py
             let mut protocol_imports = HashSet::new();
             let mut protocols = String::new();
             for (name, code) in interface_exports {
-                let mut file = File::create(dir.join(&format!("{}.py", name.clone().unwrap_name().to_snake_case())))?;
+                let mut file = File::create(dir.join(&format!("{}.py", name.to_snake_case())))?;
                 let types = code.types.concat();
                 let imports = code
                     .type_imports
@@ -844,7 +845,7 @@ from ..types import Result, Ok, Err, Some
 "
                 )?;
 
-                let camel = name.clone().unwrap_name().to_upper_camel_case();
+                let camel = name.to_upper_camel_case();
                 let methods = if code.functions.is_empty() {
                     "    pass".to_owned()
                 } else {
@@ -919,12 +920,12 @@ class {camel}(Protocol):
 
     fn interface_package(&self, interface: InterfaceId) -> (&'static str, String) {
         if let Some(name) = self.imported_interfaces.get(&interface) {
-            let name = (*name).clone().unwrap_name().to_snake_case();
+            let name = name.to_snake_case();
             ("imports", name)
         } else {
             (
                 "exports",
-                self.exported_interfaces[&interface].clone().unwrap_name().to_snake_case(),
+                self.exported_interfaces[&interface].to_snake_case(),
             )
         }
     }

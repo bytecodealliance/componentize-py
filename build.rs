@@ -57,8 +57,8 @@ fn stubs_for_clippy(out_dir: &Path) -> Result<()> {
             File::create(core_library_path)?,
             ZSTD_COMPRESSION_LEVEL,
         )?)
-        .into_inner()?
-        .do_finish()?;
+            .into_inner()?
+            .do_finish()?;
     }
 
     let wasi_adapter_path = out_dir.join("wasi_snapshot_preview1.wasm.zst");
@@ -68,8 +68,8 @@ fn stubs_for_clippy(out_dir: &Path) -> Result<()> {
             File::create(wasi_adapter_path)?,
             ZSTD_COMPRESSION_LEVEL,
         )?)
-        .into_inner()?
-        .do_finish()?;
+            .into_inner()?
+            .do_finish()?;
     }
 
     Ok(())
@@ -125,14 +125,16 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
 
     let mut cmd = Command::new("cargo");
     cmd.arg("build")
-        .current_dir("preview2")
+        .current_dir("wasmtime")
+        .arg("-p")
+        .arg("wasi-preview1-component-adapter")
         .arg("--release")
         .arg("--target=wasm32-unknown-unknown")
         .env("CARGO_TARGET_DIR", out_dir);
 
     let status = cmd.status()?;
     assert!(status.success());
-    println!("cargo:rerun-if-changed=preview2");
+    println!("cargo:rerun-if-changed=wasmtime");
 
     let adapter_path = out_dir.join("wasm32-unknown-unknown/release/wasi_snapshot_preview1.wasm");
     let copied_adapter_path = out_dir.join("wasi_snapshot_preview1.wasm.zst");
@@ -241,7 +243,7 @@ fn make_pyo3_config(repo_dir: &Path) {
         "lib_dir={}",
         cpython_wasi_dir.to_str().unwrap()
     )
-    .unwrap();
+        .unwrap();
     fs::write(Path::new(&out_dir).join("pyo3-config.txt"), pyo3_config).unwrap();
 
     println!("cargo:rerun-if-changed=pyo3-config.txt");

@@ -242,7 +242,8 @@ pub fn componentize(
                 {
                     let module = function
                         .interface
-                        .map(|i| i.name.clone().unwrap_name())
+                        .as_ref()
+                        .map(|i| i.name.clone())
                         .unwrap_or(resolve.worlds[world].name.clone());
                     imports.import(&module,
                                    function.name,
@@ -355,8 +356,8 @@ pub fn componentize(
                                     } else {
                                         ""
                                     },
-                                    if let Some(interface) = function.interface {
-                                        format!("{}#{}", interface.name.clone().unwrap_name(), function.name)
+                                    if let Some(interface) = &function.interface {
+                                        format!("{}#{}", interface.name, function.name)
                                     } else {
                                         function.name.to_owned()
                                     }
@@ -465,7 +466,7 @@ pub fn componentize(
                         .iter()
                         .filter_map(|f| {
                             if let FunctionKind::Export = f.kind {
-                                Some((f.interface.map(|i| i.name), f.name))
+                                Some((f.interface.as_ref().map(|i| i.name.clone()), f.name))
                             } else {
                                 None
                             }
@@ -486,7 +487,7 @@ pub fn componentize(
                             FunctionKind::Export => gen.compile_export(
                                 exports
                                     .get_index_of(&(
-                                        function.interface.map(|i| i.name),
+                                        function.interface.as_ref().map(|i| i.name.clone()),
                                         function.name,
                                     ))
                                     .unwrap()
