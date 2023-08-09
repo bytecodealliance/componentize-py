@@ -136,7 +136,7 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
     assert!(status.success());
     println!("cargo:rerun-if-changed=wasmtime");
 
-    let adapter_path = out_dir.join("wasm32-unknown-unknown/release/wasi_snapshot_preview1.wasm");
+    let adapter_path = out_dir.join("wasm32-unknown-unknown/release/wasi_preview1_component_adapter.wasm");
     let copied_adapter_path = out_dir.join("wasi_snapshot_preview1.wasm.zst");
     let mut encoder = Encoder::new(File::create(copied_adapter_path)?, ZSTD_COMPRESSION_LEVEL)?;
     io::copy(&mut File::open(adapter_path)?, &mut encoder)?;
