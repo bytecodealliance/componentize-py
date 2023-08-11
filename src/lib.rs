@@ -362,7 +362,7 @@ pub async fn componentize(
     })?;
 
     if stub_wasi {
-        todo!("wrap component with wasi preview 2 stubs");
+        todo!("wrap component with wasi preview 2 stubs (or use wasi-virt + wasm-compose)");
     }
 
     fs::write(output_path, component)?;

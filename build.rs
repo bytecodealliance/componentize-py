@@ -1,12 +1,13 @@
 #![deny(warnings)]
 
 use {
-    anyhow::{anyhow, bail, Result},
+    anyhow::{anyhow, bail, Context, Result},
     std::{
         env,
         fmt::Write as _,
         fs::{self, File},
         io::{self, Write},
+        iter,
         path::{Path, PathBuf},
         process::Command,
     },
@@ -20,6 +21,11 @@ const ZSTD_COMPRESSION_LEVEL: i32 = 19;
 const PYTHON_EXECUTABLE: &str = "python.exe";
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 const PYTHON_EXECUTABLE: &str = "python";
+
+#[cfg(target_os = "windows")]
+const CLANG_EXECUTABLE: &str = "clang.exe";
+#[cfg(not(target_os = "windows"))]
+const CLANG_EXECUTABLE: &str = "clang";
 
 fn main() -> Result<()> {
     println!("cargo:rerun-if-changed=build.rs");
@@ -80,13 +86,11 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
     let wasi_sdk =
         PathBuf::from(env::var_os("WASI_SDK_PATH").unwrap_or_else(|| "/opt/wasi-sdk".into()));
 
-    eprintln!("using wasi_sdk: {}", wasi_sdk.display());
-
-    maybe_make_cpython(&repo_dir, &wasi_sdk);
+    maybe_make_cpython(&repo_dir, &wasi_sdk)?;
 
     let cpython_wasi_dir = repo_dir.join("cpython/builddir/wasi");
 
-    make_pyo3_config(&repo_dir);
+    make_pyo3_config(&repo_dir)?;
 
     let mut cmd = Command::new("rustup");
     cmd.current_dir("runtime")
@@ -99,24 +103,13 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
         .arg("--release")
         .arg("--target=wasm32-wasi");
 
-    for (key, value) in env::vars_os() {
+    for (key, _) in env::vars_os() {
         if key
             .to_str()
             .map(|key| key.starts_with("RUST") || key.starts_with("CARGO"))
             .unwrap_or(false)
         {
-            eprintln!(
-                "removing {}: {}",
-                key.to_string_lossy(),
-                value.to_string_lossy()
-            );
             cmd.env_remove(&key);
-        } else {
-            eprintln!(
-                "keeping {}: {}",
-                key.to_string_lossy(),
-                value.to_string_lossy()
-            );
         }
     }
 
@@ -131,22 +124,35 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
     let path = out_dir.join("wasm32-wasi/release/libcomponentize_py_runtime.a");
 
     if path.exists() {
-        let clang = wasi_sdk.join("bin/clang").canonicalize()?;
+        eprintln!("{} exists? {}", wasi_sdk.display(), wasi_sdk.exists());
+        eprintln!(
+            "{} exists? {}",
+            wasi_sdk.join("bin").display(),
+            wasi_sdk.join("bin").exists()
+        );
+        eprintln!(
+            "{} exists? {}",
+            wasi_sdk.join("bin/clang").display(),
+            wasi_sdk.join("bin/clang").exists()
+        );
+        eprintln!(
+            "{} exists? {}",
+            wasi_sdk.join("bin/clang.exe").display(),
+            wasi_sdk.join("bin/clang.exe").exists()
+        );
+        let clang = wasi_sdk.join(&format!("bin/{CLANG_EXECUTABLE}"));
         if clang.exists() {
             let name = "libcomponentize_py_runtime.so";
 
             run(Command::new(clang)
                 .arg("-shared")
                 .arg("-o")
-                .arg(&out_dir.join(name).canonicalize()?)
+                .arg(&out_dir.join(name))
                 .arg("-Wl,--whole-archive")
-                .arg(&path.canonicalize()?)
+                .arg(&path)
                 .arg("-Wl,--no-whole-archive")
-                .arg(format!(
-                    "-L{}",
-                    cpython_wasi_dir.canonicalize()?.to_str().unwrap()
-                ))
-                .arg("-lpython3.11"));
+                .arg(format!("-L{}", cpython_wasi_dir.to_str().unwrap()))
+                .arg("-lpython3.11"))?;
 
             compress(out_dir, name, out_dir, false)?;
         } else {
@@ -252,27 +258,27 @@ fn add(builder: &mut Builder<impl Write>, root: &Path, path: &Path) -> Result<()
     Ok(())
 }
 
-fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) {
+fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
     let cpython_wasi_dir = repo_dir.join("cpython/builddir/wasi");
     if !cpython_wasi_dir.join("libpython3.11.so").exists() {
         if !cpython_wasi_dir.join("libpython3.11.a").exists() {
             let cpython_native_dir = repo_dir.join("cpython/builddir/build");
             if !cpython_native_dir.join(PYTHON_EXECUTABLE).exists() {
-                fs::create_dir_all(&cpython_native_dir).unwrap();
-                fs::create_dir_all(&cpython_wasi_dir).unwrap();
+                fs::create_dir_all(&cpython_native_dir)?;
+                fs::create_dir_all(&cpython_wasi_dir)?;
 
                 run(Command::new("../../configure")
                     .current_dir(&cpython_native_dir)
                     .arg(format!(
                         "--prefix={}/install",
                         cpython_native_dir.to_str().unwrap()
-                    )));
+                    )))?;
 
-                run(Command::new("make").current_dir(cpython_native_dir));
+                run(Command::new("make").current_dir(cpython_native_dir))?;
             }
 
             let config_guess =
-                run(Command::new("../../config.guess").current_dir(&cpython_wasi_dir));
+                run(Command::new("../../config.guess").current_dir(&cpython_wasi_dir))?;
 
             run(Command::new("../../Tools/wasm/wasi-env")
                 .env("CONFIG_SITE", "../../Tools/wasm/config.site-wasm32-wasi")
@@ -282,18 +288,18 @@ fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) {
                     "../../configure",
                     "-C",
                     "--host=wasm32-unknown-wasi",
-                    &format!("--build={}", String::from_utf8(config_guess).unwrap()),
+                    &format!("--build={}", String::from_utf8(config_guess)?),
                     &format!(
                         "--with-build-python={}/../build/{PYTHON_EXECUTABLE}",
                         cpython_wasi_dir.to_str().unwrap()
                     ),
                     &format!("--prefix={}/install", cpython_wasi_dir.to_str().unwrap()),
                     "--disable-test-modules",
-                ]));
+                ]))?;
 
             run(Command::new("make")
                 .current_dir(&cpython_wasi_dir)
-                .arg("install"));
+                .arg("install"))?;
         }
 
         run(Command::new(wasi_sdk.join("bin/clang"))
@@ -304,30 +310,42 @@ fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) {
             .arg(cpython_wasi_dir.join("libpython3.11.a"))
             .arg("-Wl,--no-whole-archive")
             .arg(cpython_wasi_dir.join("Modules/_decimal/libmpdec/libmpdec.a"))
-            .arg(cpython_wasi_dir.join("Modules/expat/libexpat.a")));
+            .arg(cpython_wasi_dir.join("Modules/expat/libexpat.a")))?;
     }
+
+    Ok(())
 }
 
-fn run(command: &mut Command) -> Vec<u8> {
-    let output = command.output().unwrap();
+fn run(command: &mut Command) -> Result<Vec<u8>> {
+    let command_string = iter::once(command.get_program())
+        .chain(command.get_args())
+        .map(|arg| arg.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let output = command.output().with_context({
+        let command_string = command_string.clone();
+        move || command_string
+    })?;
+
     if output.status.success() {
-        output.stdout
+        Ok(output.stdout)
     } else {
-        panic!(
-            "command failed: {}",
+        bail!(
+            "command `{command_string}` failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
     }
 }
 
-fn make_pyo3_config(repo_dir: &Path) {
-    let out_dir = env::var("OUT_DIR").unwrap();
+fn make_pyo3_config(repo_dir: &Path) -> Result<()> {
+    let out_dir = env::var("OUT_DIR")?;
     let mut cpython_wasi_dir = repo_dir.join("cpython/builddir/wasi");
     let mut cygpath = Command::new("cygpath");
     cygpath.arg("-w").arg(&cpython_wasi_dir);
     if let Ok(output) = cygpath.output() {
         if output.status.success() {
-            cpython_wasi_dir = PathBuf::from(String::from_utf8(output.stdout).unwrap().trim());
+            cpython_wasi_dir = PathBuf::from(String::from_utf8(output.stdout)?.trim());
         } else {
             panic!(
                 "cygpath failed: {}",
@@ -336,14 +354,15 @@ fn make_pyo3_config(repo_dir: &Path) {
         }
     }
 
-    let mut pyo3_config = fs::read_to_string(repo_dir.join("pyo3-config.txt")).unwrap();
+    let mut pyo3_config = fs::read_to_string(repo_dir.join("pyo3-config.txt"))?;
     writeln!(
         pyo3_config,
         "lib_dir={}",
         cpython_wasi_dir.to_str().unwrap()
-    )
-    .unwrap();
-    fs::write(Path::new(&out_dir).join("pyo3-config.txt"), pyo3_config).unwrap();
+    )?;
+    fs::write(Path::new(&out_dir).join("pyo3-config.txt"), pyo3_config)?;
 
     println!("cargo:rerun-if-changed=pyo3-config.txt");
+
+    Ok(())
 }
