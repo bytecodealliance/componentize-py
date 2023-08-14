@@ -162,7 +162,6 @@ pub async fn componentize(
     world: Option<&str>,
     python_path: &str,
     app_name: &str,
-    stub_wasi: bool,
     output_path: &Path,
     add_to_linker: Option<&dyn Fn(&mut Linker<Ctx>) -> Result<()>>,
 ) -> Result<()> {
@@ -259,8 +258,6 @@ pub async fn componentize(
             )?
         }
     }
-
-    // todo: add `--dl-openable` options for any .cpython-311-wasm32-wasi.so files found in `python_path`
 
     let component = linker.encode()?;
 
@@ -360,10 +357,6 @@ pub async fn componentize(
             String::from_utf8_lossy(&stderr.try_into_inner().unwrap())
         )
     })?;
-
-    if stub_wasi {
-        todo!("wrap component with wasi preview 2 stubs (or use wasi-virt + wasm-compose)");
-    }
 
     fs::write(output_path, component)?;
 

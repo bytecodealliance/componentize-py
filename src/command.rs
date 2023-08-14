@@ -61,14 +61,6 @@ pub struct Componentize {
     /// Output file to which to write the resulting component
     #[arg(short = 'o', long, default_value = "index.wasm")]
     pub output: PathBuf,
-
-    /// If specified, replace all WASI imports with trapping stubs.
-    ///
-    /// If this is set, the generated component will not have access to any WASI functionality, e.g. filesystem,
-    /// environment variables, network, etc. at runtime.  The only imports allowed are those specified by the
-    /// world.
-    #[arg(long)]
-    pub stub_wasi: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -113,7 +105,6 @@ fn componentize(common: Common, componentize: Componentize) -> Result<()> {
         common.world.as_deref(),
         &python_path,
         &componentize.app_name,
-        componentize.stub_wasi,
         &componentize.output,
         None,
     ))?;

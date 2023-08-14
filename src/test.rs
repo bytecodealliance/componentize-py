@@ -59,7 +59,6 @@ async fn make_component(
             .to_str()
             .ok_or_else(|| anyhow!("unable to parse temporary directory path as UTF-8"))?,
         "app",
-        false,
         &tempdir.path().join("app.wasm"),
         add_to_linker,
     )
