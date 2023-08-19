@@ -55,7 +55,10 @@ fn stubs_for_clippy(out_dir: &Path) -> Result<()> {
         "libcomponentize_py_runtime.so.zst",
         "libpython3.11.so.zst",
         "libc.so.zst",
-        "libwasi-emulated.so.zst",
+        "libwasi-emulated-mman.so.zst",
+        "libwasi-emulated-process-clocks.so.zst",
+        "libwasi-emulated-getpid.so.zst",
+        "libwasi-emulated-signal.so.zst",
         "libc++.so.zst",
         "libc++abi.so.zst",
         "wasi_snapshot_preview1.wasm.zst",
@@ -124,22 +127,6 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
     let path = out_dir.join("wasm32-wasi/release/libcomponentize_py_runtime.a");
 
     if path.exists() {
-        eprintln!("{} exists? {}", wasi_sdk.display(), wasi_sdk.exists());
-        eprintln!(
-            "{} exists? {}",
-            wasi_sdk.join("bin").display(),
-            wasi_sdk.join("bin").exists()
-        );
-        eprintln!(
-            "{} exists? {}",
-            wasi_sdk.join("bin/clang").display(),
-            wasi_sdk.join("bin/clang").exists()
-        );
-        eprintln!(
-            "{} exists? {}",
-            wasi_sdk.join("bin/clang.exe").display(),
-            wasi_sdk.join("bin/clang.exe").exists()
-        );
         let clang = wasi_sdk.join(&format!("bin/{CLANG_EXECUTABLE}"));
         if clang.exists() {
             let name = "libcomponentize_py_runtime.so";
@@ -164,7 +151,10 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
 
     let libraries = [
         "libc.so",
-        "libwasi-emulated.so",
+        "libwasi-emulated-mman.so",
+        "libwasi-emulated-process-clocks.so",
+        "libwasi-emulated-getpid.so",
+        "libwasi-emulated-signal.so",
         "libc++.so",
         "libc++abi.so",
     ];

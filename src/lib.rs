@@ -204,10 +204,34 @@ pub async fn componentize(
             false,
         )?
         .library(
-            "libwasi-emulated.so",
+            "libwasi-emulated-mman.so",
             &zstd::decode_all(Cursor::new(include_bytes!(concat!(
                 env!("OUT_DIR"),
-                "/libwasi-emulated.so.zst"
+                "/libwasi-emulated-mman.so.zst"
+            ))))?,
+            false,
+        )?
+        .library(
+            "libwasi-emulated-process-clocks.so",
+            &zstd::decode_all(Cursor::new(include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/libwasi-emulated-process-clocks.so.zst"
+            ))))?,
+            false,
+        )?
+        .library(
+            "libwasi-emulated-getpid.so",
+            &zstd::decode_all(Cursor::new(include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/libwasi-emulated-getpid.so.zst"
+            ))))?,
+            false,
+        )?
+        .library(
+            "libwasi-emulated-signal.so",
+            &zstd::decode_all(Cursor::new(include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/libwasi-emulated-signal.so.zst"
             ))))?,
             false,
         )?
@@ -241,21 +265,17 @@ pub async fn componentize(
         )?;
 
     for (index, path) in python_path.split(NATIVE_PATH_DELIMITER).enumerate() {
+        let index = index + 1;
         let mut libraries = Vec::new();
         find_native_extensions(Path::new(path), &mut libraries)?;
         for library in libraries {
-            linker = linker.library(
-                &format!(
-                    "/{index}/{}",
-                    library
-                        .strip_prefix(path)
-                        .unwrap()
-                        .to_str()
-                        .context("non-UTF-8 path")?
-                ),
-                &fs::read(&library)?,
-                true,
-            )?
+            let path = library
+                .strip_prefix(path)
+                .unwrap()
+                .to_str()
+                .context("non-UTF-8 path")?;
+
+            linker = linker.library(&format!("/{index}/{path}"), &fs::read(&library)?, true)?
         }
     }
 
@@ -269,7 +289,7 @@ pub async fn componentize(
     summary.generate_code(&world_dir)?;
 
     let python_path = format!(
-        "{python_path}{NATIVE_PATH_DELIMITER}{}",
+        "{}{NATIVE_PATH_DELIMITER}{python_path}",
         generated_code
             .path()
             .to_str()
