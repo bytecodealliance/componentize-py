@@ -9,6 +9,7 @@ use {
     futures::future::FutureExt,
     heck::ToSnakeCase,
     std::{
+        collections::HashMap,
         env,
         fs::{self, File},
         hash::{Hash, Hasher},
@@ -27,7 +28,7 @@ use {
         preview2::{
             command as wasi_command,
             pipe::{MemoryInputPipe, MemoryOutputPipe},
-            DirPerms, FilePerms, Table, WasiCtx, WasiCtxBuilder, WasiView,
+            DirPerms, FilePerms, IsATTY, Table, WasiCtx, WasiCtxBuilder, WasiView,
         },
         Dir,
     },
@@ -299,14 +300,14 @@ pub async fn componentize(
     let stdout = MemoryOutputPipe::new();
     let stderr = MemoryOutputPipe::new();
 
-    let mut wasi = WasiCtxBuilder::new()
-        .set_stdin(MemoryInputPipe::new(Bytes::new()))
-        .set_stdout(stdout.clone())
-        .set_stderr(stderr.clone())
-        .push_env("PYTHONUNBUFFERED", "1")
-        .push_env("COMPONENTIZE_PY_APP_NAME", app_name)
-        .push_env("PYTHONHOME", "/python")
-        .push_preopened_dir(
+    let mut wasi = WasiCtxBuilder::new();
+    wasi.stdin(MemoryInputPipe::new(Bytes::new()), IsATTY::No)
+        .stdout(stdout.clone(), IsATTY::No)
+        .stderr(stderr.clone(), IsATTY::No)
+        .env("PYTHONUNBUFFERED", "1")
+        .env("COMPONENTIZE_PY_APP_NAME", app_name)
+        .env("PYTHONHOME", "/python")
+        .preopened_dir(
             Dir::from_std_file(File::open(stdlib.path())?),
             DirPerms::all(),
             FilePerms::all(),
@@ -315,7 +316,7 @@ pub async fn componentize(
 
     let mut count = 0;
     for (index, path) in python_path.split(NATIVE_PATH_DELIMITER).enumerate() {
-        wasi = wasi.push_preopened_dir(
+        wasi.preopened_dir(
             Dir::from_std_file(File::open(path)?),
             DirPerms::all(),
             FilePerms::all(),
@@ -331,7 +332,7 @@ pub async fn componentize(
 
     let mut table = Table::new();
     let wasi = wasi
-        .push_env("PYTHONPATH", format!("/python:{python_path}"))
+        .env("PYTHONPATH", format!("/python:{python_path}"))
         .build(&mut table)?;
 
     let mut config = Config::new();
@@ -403,6 +404,7 @@ fn add_wasi_and_stubs(
 ) -> Result<()> {
     wasi_command::add_to_linker(linker)?;
 
+    let mut functions = HashMap::<_, Vec<_>>::new();
     for (key, item) in &resolve.worlds[world].imports {
         let interface_name = match key {
             WorldKey::Name(name) => name.clone(),
@@ -425,26 +427,41 @@ fn add_wasi_and_stubs(
             WorldItem::Interface(interface) => {
                 let interface = &resolve.interfaces[*interface];
                 for function_name in interface.functions.keys() {
-                    linker
-                        .instance(&interface_name)?
-                        .func_new(component, function_name, {
-                            let interface_name = interface_name.clone();
-                            let function_name = function_name.clone();
-                            move |_, _, _| {
-                                Err(anyhow!(
-                                    "called trapping stub: {interface_name}#{function_name}"
-                                ))
-                            }
-                        })?;
+                    functions
+                        .entry(Some(interface_name.clone()))
+                        .or_default()
+                        .push(function_name);
                 }
             }
             WorldItem::Function(function) => {
-                linker.root().func_new(component, &function.name, {
-                    let function_name = function.name.clone();
+                functions.entry(None).or_default().push(&function.name);
+            }
+            WorldItem::Type(_) => unreachable!(),
+        }
+    }
+
+    for (interface_name, functions) in functions {
+        if let Some(interface_name) = interface_name {
+            let mut instance = linker.instance(&interface_name)?;
+            for function_name in functions {
+                instance.func_new(component, function_name, {
+                    let interface_name = interface_name.clone();
+                    let function_name = function_name.clone();
+                    move |_, _, _| {
+                        Err(anyhow!(
+                            "called trapping stub: {interface_name}#{function_name}"
+                        ))
+                    }
+                })?;
+            }
+        } else {
+            let mut instance = linker.root();
+            for function_name in functions {
+                instance.func_new(component, function_name, {
+                    let function_name = function_name.clone();
                     move |_, _, _| Err(anyhow!("called trapping stub: {function_name}"))
                 })?;
             }
-            WorldItem::Type(_) => unreachable!(),
         }
     }
 

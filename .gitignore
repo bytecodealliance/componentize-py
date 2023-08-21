@@ -3,3 +3,5 @@ __pycache__
 .venv
 bacon.toml
 dist
+examples/matrix-math/*.wasm
+examples/matrix-math/numpy*
