@@ -67,7 +67,7 @@ pub fn make_bindings(resolve: &Resolve, world: WorldId, summary: &Summary) -> Re
                         interface.name
                     )
                 })
-                .unwrap_or(resolve.worlds[world].name.clone()),
+                .unwrap_or_else(|| "$root".to_owned()),
             function.name,
             EntityType::Function(offset),
         );

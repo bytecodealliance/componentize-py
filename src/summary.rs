@@ -944,6 +944,7 @@ from ..types import Result, Ok, Err, Some
                 file,
                 "{python_imports}
 from .types import Result, Ok, Err, Some
+import componentize_py
 {imports}
 {function_imports}
 {type_exports}

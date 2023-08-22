@@ -5,3 +5,5 @@ bacon.toml
 dist
 examples/matrix-math/*.wasm
 examples/matrix-math/numpy*
+examples/matrix-math/matrix_math
+examples/matrix-math/wasmtime-py
