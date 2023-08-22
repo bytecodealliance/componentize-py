@@ -1,6 +1,6 @@
 import matrix_math
 from matrix_math.types import Err
-from matrix_math.imports.logging import log
+from matrix_math import log
 import numpy
 
 def handle(e: Exception) -> None:

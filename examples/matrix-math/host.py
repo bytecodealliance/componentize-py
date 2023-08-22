@@ -1,11 +1,10 @@
 import matrix_math
-from matrix_math import Root, RootImports
+from matrix_math import Root, RootImports, imports
 from matrix_math.types import Ok, Err, Result
-from matrix_math.imports import logging
 from wasmtime import Store
 import sys
 
-class Logging(logging.Logging):
+class Host(imports.Host):
     def log(self, message: str) -> Result[None, str]:
         print(f"guest log: {message}")
         return Ok(None)
@@ -20,7 +19,7 @@ store = Store()
 matrix_math = Root(
     store,
     RootImports(
-        logging=Logging(),
+        host=Host(),
         # As of this writing, `wasmtime-py` does not yet support WASI Preview 2,
         # and our example won't use it at runtime anyway, so we provide `None`
         # for all `wasi-cli` interfaces:
@@ -28,14 +27,19 @@ matrix_math = Root(
         monotonic_clock=None,
         wall_clock=None,
         streams=None,
-        filesystem=None,
+        types=None,
+        preopens=None,
         random=None,
         environment=None,
-        preopens=None,
         exit=None,
         stdin=None,
         stdout=None,
-        stderr=None
+        stderr=None,
+        terminal_input=None,
+        terminal_output=None,        
+        terminal_stdin=None,
+        terminal_stdout=None,
+        terminal_stderr=None
     )
 )
 

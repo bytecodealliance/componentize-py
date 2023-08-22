@@ -11,11 +11,11 @@ within a guest component.
 
 ## Prerequisites
 
-* `wasmtime-py` 12 or later
+* `wasmtime-py` 13 or later
 * `componentize-py` 0.3.1 or later
 * `NumPy`, built for WASI
 
-Note that we must build `wasmtime-py` from source until version 12 has been
+Note that we must build `wasmtime-py` from source until version 13 has been
 released.
 
 Also note that we use an unofficial build of NumPy since the upstream project
