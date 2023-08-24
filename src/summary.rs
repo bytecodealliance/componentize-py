@@ -349,7 +349,7 @@ impl<'a> Summary<'a> {
         let ty = &self.resolve.types[id];
         if let Some(package) = self.package(ty.owner) {
             let name = if let Some(name) = &ty.name {
-                name.to_upper_camel_case()
+                name.to_upper_camel_case().escape()
             } else {
                 format!("AnonymousType{}", self.types.get_index_of(&id).unwrap())
             };
@@ -358,7 +358,7 @@ impl<'a> Summary<'a> {
                     record
                         .fields
                         .iter()
-                        .map(|f| f.name.to_snake_case())
+                        .map(|f| f.name.to_snake_case().escape())
                         .collect(),
                 ),
                 TypeDefKind::Variant(variant) => OwnedKind::Variant(
@@ -366,7 +366,7 @@ impl<'a> Summary<'a> {
                         .cases
                         .iter()
                         .map(|c| Case {
-                            name: format!("{name}{}", c.name.to_upper_camel_case()),
+                            name: format!("{name}{}", c.name.to_upper_camel_case().escape()),
                             has_payload: c.ty.is_some(),
                         })
                         .collect(),
@@ -433,9 +433,10 @@ impl<'a> Summary<'a> {
                     } else {
                         &self.resolve.worlds[self.world].name
                     }
-                    .to_upper_camel_case(),
+                    .to_upper_camel_case()
+                    .escape(),
 
-                    name: function.name.to_snake_case(),
+                    name: function.name.to_snake_case().escape(),
                 });
             }
         }
@@ -448,7 +449,10 @@ impl<'a> Summary<'a> {
         Symbols {
             types_package: format!(
                 "{}.types",
-                &self.resolve.worlds[self.world].name.to_snake_case()
+                &self.resolve.worlds[self.world]
+                    .name
+                    .to_snake_case()
+                    .escape()
             ),
             exports,
             types,
@@ -494,7 +498,7 @@ impl<'a> Summary<'a> {
 
             let camel = || {
                 if let Some(name) = &ty.name {
-                    name.to_upper_camel_case()
+                    name.to_upper_camel_case().escape()
                 } else {
                     format!("AnonymousType{index}")
                 }
@@ -529,7 +533,7 @@ class {name}:
                     record
                         .fields
                         .iter()
-                        .map(|field| (field.name.to_snake_case(), field.ty))
+                        .map(|field| (field.name.to_snake_case().escape(), field.ty))
                         .collect::<Vec<_>>(),
                 )),
                 TypeDefKind::Variant(variant) => {
@@ -540,7 +544,7 @@ class {name}:
                         .map(|case| {
                             make_class(
                                 &mut names,
-                                format!("{camel}{}", case.name.to_upper_camel_case()),
+                                format!("{camel}{}", case.name.to_upper_camel_case().escape()),
                                 if let Some(ty) = case.ty {
                                     vec![("value".into(), ty)]
                                 } else {
@@ -554,7 +558,7 @@ class {name}:
                     let cases = variant
                         .cases
                         .iter()
-                        .map(|case| format!("{camel}{}", case.name.to_upper_camel_case()))
+                        .map(|case| format!("{camel}{}", case.name.to_upper_camel_case().escape()))
                         .collect::<Vec<_>>()
                         .join(", ");
 
@@ -694,13 +698,17 @@ class {camel}(Flag):
                         },
                     );
 
-                    let snake = function.name.to_snake_case();
+                    let snake = function.name.to_snake_case().escape();
 
                     let params = function
                         .params
                         .iter()
                         .map(|(name, ty)| {
-                            format!("{}: {}", name.to_snake_case(), names.type_name(*ty))
+                            format!(
+                                "{}: {}",
+                                name.to_snake_case().escape(),
+                                names.type_name(*ty)
+                            )
                         })
                         .collect::<Vec<_>>()
                         .join(", ");
@@ -708,7 +716,7 @@ class {camel}(Flag):
                     let args = function
                         .params
                         .iter()
-                        .map(|(name, _)| name.to_snake_case())
+                        .map(|(name, _)| name.to_snake_case().escape())
                         .collect::<Vec<_>>()
                         .join(", ");
 
@@ -835,7 +843,8 @@ Result = Union[Ok[T], Err[E]]
             fs::create_dir(&dir)?;
             File::create(dir.join("__init__.py"))?;
             for (name, code) in interface_imports {
-                let mut file = File::create(dir.join(&format!("{}.py", name.to_snake_case())))?;
+                let mut file =
+                    File::create(dir.join(&format!("{}.py", name.to_snake_case().escape())))?;
                 let types = code.types.concat();
                 let functions = code.functions.concat();
                 let imports = code
@@ -865,7 +874,8 @@ import componentize_py
             let mut protocol_imports = HashSet::new();
             let mut protocols = String::new();
             for (name, code) in interface_exports {
-                let mut file = File::create(dir.join(&format!("{}.py", name.to_snake_case())))?;
+                let mut file =
+                    File::create(dir.join(&format!("{}.py", name.to_snake_case().escape())))?;
                 let types = code.types.concat();
                 let imports = code
                     .type_imports
@@ -883,7 +893,7 @@ from ..types import Result, Ok, Err, Some
 "
                 )?;
 
-                let camel = name.to_upper_camel_case();
+                let camel = name.to_upper_camel_case().escape();
                 let methods = if code.functions.is_empty() {
                     "    pass".to_owned()
                 } else {
@@ -921,7 +931,10 @@ from ..types import Result, Ok, Err, Some
             let mut file = File::create(path.join("__init__.py"))?;
             let function_imports = world_imports.functions.concat();
             let type_exports = world_exports.types.concat();
-            let camel = self.resolve.worlds[self.world].name.to_upper_camel_case();
+            let camel = self.resolve.worlds[self.world]
+                .name
+                .to_upper_camel_case()
+                .escape();
             let methods = if world_exports.functions.is_empty() {
                 "    pass".to_owned()
             } else {
@@ -959,11 +972,13 @@ class {camel}(Protocol):
 
     fn interface_package(&self, interface: InterfaceId) -> (&'static str, String) {
         if let Some(name) = self.imported_interfaces.get(&interface) {
-            ("imports", name.to_snake_case())
+            ("imports", name.to_snake_case().escape())
         } else {
             (
                 "exports",
-                self.exported_interfaces[&interface].to_snake_case(),
+                self.exported_interfaces[&interface]
+                    .to_snake_case()
+                    .escape(),
             )
         }
     }
@@ -974,10 +989,15 @@ class {camel}(Protocol):
                 let (module, package) = self.interface_package(interface);
                 Some(format!(
                     "{}.{module}.{package}",
-                    self.resolve.worlds[self.world].name.to_snake_case(),
+                    self.resolve.worlds[self.world]
+                        .name
+                        .to_snake_case()
+                        .escape(),
                 ))
             }
-            TypeOwner::World(world) => Some(self.resolve.worlds[world].name.to_snake_case()),
+            TypeOwner::World(world) => {
+                Some(self.resolve.worlds[world].name.to_snake_case().escape())
+            }
             TypeOwner::None => None,
         }
     }
@@ -1060,7 +1080,7 @@ impl<'a> TypeNames<'a> {
                         };
 
                         let name = if let Some(name) = &ty.name {
-                            name.to_upper_camel_case()
+                            name.to_upper_camel_case().escape()
                         } else {
                             format!(
                                 "AnonymousType{}",
@@ -1131,5 +1151,25 @@ fn raw_union_type(ty: Type) -> RawUnionType {
         Type::Float32 | Type::Float64 => RawUnionType::Float,
         Type::Char | Type::String => RawUnionType::Str,
         Type::Id(_) => RawUnionType::Other,
+    }
+}
+
+trait Escape {
+    fn escape(self) -> Self;
+}
+
+impl Escape for String {
+    fn escape(self) -> Self {
+        // Escape Python keywords
+        // Source: https://docs.python.org/3/reference/lexical_analysis.html#keywords
+        match self.as_str() {
+            "False" | "None" | "True" | "and" | "as" | "assert" | "async" | "await" | "break"
+            | "class" | "continue" | "def" | "del" | "elif" | "else" | "except" | "finally"
+            | "for" | "from" | "global" | "if" | "import" | "in" | "is" | "lambda" | "nonlocal"
+            | "not" | "or" | "pass" | "raise" | "return" | "try" | "while" | "with" | "yield" => {
+                format!("{self}_")
+            }
+            _ => self,
+        }
     }
 }
