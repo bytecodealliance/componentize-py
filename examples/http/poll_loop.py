@@ -1,6 +1,6 @@
 import asyncio
-import proxy
-from proxy.imports import types2 as types, streams2 as streams
+
+from proxy.imports import types2 as types, streams2 as streams, poll2 as poll
 from proxy.imports.streams2 import StreamStatus
 from typing import Optional
 
@@ -17,7 +17,7 @@ class Stream:
             return None
         else:
             while True:
-                (buffer, status) = streams.read(self.body, READ_SIZE)
+                buffer, status = streams.read(self.body, READ_SIZE)
                 if status == StreamStatus.ENDED:
                     types.finish_incoming_stream(self.body)
                     self.saw_end = True
@@ -66,6 +66,7 @@ class PollLoop(asyncio.AbstractEventLoop):
         future = asyncio.ensure_future(future, loop=self)
 
         self.running = True
+        asyncio.events._set_running_loop(self)
         while self.running and not future.done():
             handle = self.handles[0]
             self.handles = self.handles[1:]
@@ -76,7 +77,7 @@ class PollLoop(asyncio.AbstractEventLoop):
                 [pollables, wakers] = list(map(list, zip(*self.wakers)))
                 
                 new_wakers = []
-                for ((ready, pollable), waker) in zip(zip(poll.poll_oneoff(pollables), pollables), wakers):
+                for (ready, pollable), waker in zip(zip(poll.poll_oneoff(pollables), pollables), wakers):
                     if ready:
                         waker.set_result(None)
                     else:
@@ -116,4 +117,4 @@ class PollLoop(asyncio.AbstractEventLoop):
         return asyncio.Task(coroutine, loop=self)
 
     def create_future(self):
-        return futures.Future(loop=self)
+        return asyncio.Future(loop=self)

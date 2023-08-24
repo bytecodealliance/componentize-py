@@ -43,4 +43,16 @@ EOF
 
 The above should echo the request body in the response.
 
+In addition to the `/echo` endpoint, the app supports a `/hash-all` endpoint
+which concurrently downloads one or more URLs and streams the SHA-256 hashes of
+their contents.  You can test it with e.g.:
+
+```
+curl -i \
+    -H 'url: https://news.ycombinator.com' \
+    -H 'url: https://google.com' \
+    -H 'url: https://cloudflare.com' \
+    http://127.0.0.1:3000/hash-all
+```
+
 If you run into any problems, please file an issue!
