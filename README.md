@@ -11,7 +11,9 @@ following as input:
 
 The output is a component which may be run using
 e.g. [`wasmtime`](https://github.com/bytecodealliance/wasmtime).  See the
-[tests](https://github.com/dicej/componentize-py/tree/main/src/test) for examples.
+[examples](https://github.com/dicej/componentize-py/tree/main/examples) and
+[test](https://github.com/dicej/componentize-py/tree/main/src/test) directories
+for examples.
 
 For an example of running a sandboxed Python guest within a Python host, see
 [component-sandbox-demo](https://github.com/dicej/component-sandbox-demo).

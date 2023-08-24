@@ -1,4 +1,4 @@
-# `matrix-math`
+# Example: `matrix-math`
 
 This is an example of how to use [wasmtime-py] and [componentize-py] to do
 matrix multiplication using [NumPy] inside a sandboxed WASI component.  This
@@ -12,7 +12,7 @@ within a guest component.
 ## Prerequisites
 
 * `wasmtime-py` 13 or later
-* `componentize-py` 0.3.1 or later
+* `componentize-py` 0.3.2 or later
 * `NumPy`, built for WASI
 
 Note that we must build `wasmtime-py` from source until version 13 has been

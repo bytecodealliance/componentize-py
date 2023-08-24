@@ -7,3 +7,5 @@ examples/matrix-math/*.wasm
 examples/matrix-math/numpy*
 examples/matrix-math/matrix_math
 examples/matrix-math/wasmtime-py
+examples/http/.spin
+examples/http/http.wasm

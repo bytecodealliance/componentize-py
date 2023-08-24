@@ -1,0 +1,16 @@
+spin_manifest_version = "1"
+authors = ["Fermyon Engineering <engineering@fermyon.com>"]
+description = "An example using `wasi-http`"
+name = "http"
+trigger = { type = "http", base = "/" }
+version = "1.0.0"
+
+[[component]]
+id = "http"
+source = "http.wasm"
+[component.trigger]
+route = "/..."
+executor =  { type = "wasi" }
+[component.build]
+command = "componentize-py -d wit -w proxy componentize app -o http.wasm"
+watch = ["app.py"]
