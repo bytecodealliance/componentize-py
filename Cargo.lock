@@ -362,6 +362,7 @@ dependencies = [
  "hex",
  "indexmap 2.0.0",
  "once_cell",
+ "pretty_env_logger",
  "proptest",
  "pyo3",
  "tar",
@@ -1310,6 +1311,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b40af805b3121feab8a3c29f04d8ad262fa8e0561883e7653e024ae4479e6de"
 
 [[package]]
+name = "pretty_env_logger"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "865724d4dbe39d9f3dd3b52b88d859d66bcb2d6a0acfd5ea68a65fb66d4bdc1c"
+dependencies = [
+ "env_logger",
+ "log",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.66"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2136,7 +2147,7 @@ dependencies = [
 [[package]]
 name = "wasm-encoder"
 version = "0.31.1"
-source = "git+https://github.com/bytecodealliance/wasm-tools#13e11ef876f85fc6201a452228817cdab4adfba3"
+source = "git+https://github.com/bytecodealliance/wasm-tools#6b4a8b01b9d1d3d94a34423a828946f548a7c41e"
 dependencies = [
  "leb128",
 ]
@@ -2157,7 +2168,7 @@ dependencies = [
 [[package]]
 name = "wasm-metadata"
 version = "0.10.2"
-source = "git+https://github.com/bytecodealliance/wasm-tools#13e11ef876f85fc6201a452228817cdab4adfba3"
+source = "git+https://github.com/bytecodealliance/wasm-tools#6b4a8b01b9d1d3d94a34423a828946f548a7c41e"
 dependencies = [
  "anyhow",
  "indexmap 2.0.0",
@@ -2191,7 +2202,7 @@ dependencies = [
 [[package]]
 name = "wasmparser"
 version = "0.111.0"
-source = "git+https://github.com/bytecodealliance/wasm-tools#13e11ef876f85fc6201a452228817cdab4adfba3"
+source = "git+https://github.com/bytecodealliance/wasm-tools#6b4a8b01b9d1d3d94a34423a828946f548a7c41e"
 dependencies = [
  "indexmap 2.0.0",
  "semver",
@@ -2768,12 +2779,14 @@ dependencies = [
 [[package]]
 name = "wit-component"
 version = "0.13.2"
-source = "git+https://github.com/bytecodealliance/wasm-tools#13e11ef876f85fc6201a452228817cdab4adfba3"
+source = "git+https://github.com/bytecodealliance/wasm-tools#6b4a8b01b9d1d3d94a34423a828946f548a7c41e"
 dependencies = [
  "anyhow",
  "bitflags 2.3.3",
  "indexmap 2.0.0",
  "log",
+ "serde",
+ "serde_json",
  "wasm-encoder 0.31.1 (git+https://github.com/bytecodealliance/wasm-tools)",
  "wasm-metadata 0.10.2",
  "wasmparser 0.111.0 (git+https://github.com/bytecodealliance/wasm-tools)",
@@ -2815,7 +2828,7 @@ dependencies = [
 [[package]]
 name = "wit-parser"
 version = "0.10.0"
-source = "git+https://github.com/bytecodealliance/wasm-tools#13e11ef876f85fc6201a452228817cdab4adfba3"
+source = "git+https://github.com/bytecodealliance/wasm-tools#6b4a8b01b9d1d3d94a34423a828946f548a7c41e"
 dependencies = [
  "anyhow",
  "id-arena",

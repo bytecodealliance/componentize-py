@@ -311,7 +311,13 @@ pub unsafe extern "C" fn componentize_py_dispatch(
         let result = EXPORTS.get().unwrap()[export].call1(py, PyTuple::new(py, params_lifted));
 
         let result = match return_style {
-            ReturnStyle::Normal => result.unwrap(),
+            ReturnStyle::Normal => match result {
+                Ok(result) => result,
+                Err(error) => {
+                    error.print(py);
+                    panic!("Python function threw an unexpected exception")
+                }
+            },
             ReturnStyle::Result => match result {
                 Ok(result) => OK_CONSTRUCTOR.get().unwrap().call1(py, (result,)).unwrap(),
                 Err(result) => result.to_object(py),
