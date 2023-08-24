@@ -735,15 +735,21 @@ pub fn generate() -> Result<()> {
 
         // Guest function implementations
         {
-            let params = (0..params.len())
+            let args = (0..params.len())
                 .map(|index| format!("v{index}"))
                 .collect::<Vec<_>>()
                 .join(", ");
 
+            let params = if params.is_empty() {
+                "self".to_string()
+            } else {
+                format!("self, {args}")
+            };
+
             write!(
                 &mut guest_functions,
                 "    def echo{test_index}({params}):
-        return echoes_generated.echo{test_index}({params})
+        return echoes_generated.echo{test_index}({args})
 "
             )
             .unwrap();

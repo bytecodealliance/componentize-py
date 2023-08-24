@@ -1,9 +1,10 @@
+import numpy
 import matrix_math
 from matrix_math.types import Err
 from matrix_math import log
-import numpy
+from typing import NoReturn
 
-def handle(e: Exception) -> None:
+def handle(e: Exception) -> NoReturn:
     message = str(e)
     if message == '':
         raise Err(f"{type(e).__name__}")
@@ -11,7 +12,7 @@ def handle(e: Exception) -> None:
         raise Err(f"{type(e).__name__}: {message}")
 
 class MatrixMath(matrix_math.MatrixMath):
-    def multiply(a: list[list[float]], b: list[list[float]]) -> list[list[float]]:
+    def multiply(self, a: list[list[float]], b: list[list[float]]) -> list[list[float]]:
         try:
             log(f"matrix_multiply received arguments {a} and {b}")
             return numpy.matmul(a, b).tolist()

@@ -25,7 +25,7 @@ async fn simple_export() -> Result<()> {
 from simple_export_test import exports
 
 class SimpleExport(exports.SimpleExport):
-    def foo(v: int) -> int:
+    def foo(self, v: int) -> int:
         return v + 3
 "#,
         Some(&command::add_to_linker),
@@ -92,7 +92,7 @@ from simple_import_and_export_test import exports
 from simple_import_and_export_test.imports import simple_import_and_export
 
 class SimpleImportAndExport(exports.SimpleImportAndExport):
-    def foo(v: int) -> int:
+    def foo(self, v: int) -> int:
         return simple_import_and_export.foo(v) + 3
 "#,
         if add_to_linker {

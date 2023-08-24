@@ -772,6 +772,12 @@ def {snake}({params}) -> {return_type}:
                             definitions.function_imports.extend(names.imports);
                         }
                         FunctionKind::Export => {
+                            let params = if params.is_empty() {
+                                "self".to_owned()
+                            } else {
+                                format!("self, {params}")
+                            };
+
                             let code = format!(
                                 "
     @abstractmethod
