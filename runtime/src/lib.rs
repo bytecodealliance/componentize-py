@@ -25,7 +25,7 @@ wit_bindgen::generate!({
     path: "../wit/init.wit"
 });
 
-static EXPORTS: OnceCell<Vec<PyObject>> = OnceCell::new();
+static EXPORTS: OnceCell<Vec<(Py<PyString>, PyObject)>> = OnceCell::new();
 static TYPES: OnceCell<Vec<Type>> = OnceCell::new();
 static ENVIRON: OnceCell<Py<PyMapping>> = OnceCell::new();
 static SOME_CONSTRUCTOR: OnceCell<PyObject> = OnceCell::new();
@@ -138,10 +138,10 @@ fn do_init(app_name: String, symbols: Symbols) -> Result<()> {
                     .exports
                     .iter()
                     .map(|function| {
-                        Ok(app
-                            .getattr(function.protocol.as_str())?
-                            .getattr(function.name.as_str())?
-                            .into())
+                        Ok((
+                            PyString::intern(py, &function.name).into(),
+                            app.getattr(function.protocol.as_str())?.call0()?.into(),
+                        ))
                     })
                     .collect::<PyResult<_>>()?,
             )
@@ -308,7 +308,8 @@ pub unsafe extern "C" fn componentize_py_dispatch(
             environ.set_item(k, v).unwrap();
         }
 
-        let result = EXPORTS.get().unwrap()[export].call1(py, PyTuple::new(py, params_lifted));
+        let (name, target) = &EXPORTS.get().unwrap()[export];
+        let result = target.call_method1(py, name.as_ref(py), PyTuple::new(py, params_lifted));
 
         let result = match return_style {
             ReturnStyle::Normal => match result {

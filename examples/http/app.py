@@ -1,16 +1,17 @@
 import asyncio
 import hashlib
+import poll_loop
 
 from proxy import exports
 from proxy.types import Ok
 from proxy.imports import types2 as types, streams2 as streams, outgoing_handler2 as outgoing_handler
-from proxy.imports.types2 import MethodGet, MethodPost, SchemeHttp, SchemeHttps, SchemeOther
+from proxy.imports.types2 import MethodGet, MethodPost, Scheme, SchemeHttp, SchemeHttps, SchemeOther
 from poll_loop import Stream, Sink, PollLoop
-from typing import Tuple
+from typing import Tuple, cast
 from urllib import parse
 
 class IncomingHandler2(exports.IncomingHandler2):
-    def handle(request: int, response_out: int):
+    def handle(self, request: int, response_out: int):
         loop = PollLoop()
         asyncio.set_event_loop(loop)
         loop.run_until_complete(handle_async(request, response_out))
@@ -62,7 +63,7 @@ async def sha256(url: str) -> Tuple[str, str]:
 
     match url_parsed.scheme:
         case "http":
-            scheme = SchemeHttp()
+            scheme: Scheme = SchemeHttp()
         case "https":
             scheme = SchemeHttps()
         case _:
@@ -101,7 +102,7 @@ async def outgoing_request_send(request: int) -> int:
     while True:
         response = types.future_incoming_response_get(future)
         if response is None:
-            await asyncio.get_event_loop().register(pollable)
+            await poll_loop.register(cast(PollLoop, asyncio.get_event_loop()), pollable)
         else:
             if isinstance(response, Ok):
                 return response.value

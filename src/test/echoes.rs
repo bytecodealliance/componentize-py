@@ -212,100 +212,100 @@ from echoes_test import exports
 from echoes_test.imports import echoes
 
 class Echoes(exports.Echoes):
-    def echo_nothing():
+    def echo_nothing(self):
         echoes.echo_nothing()
 
-    def echo_bool(v):
+    def echo_bool(self, v):
         return echoes.echo_bool(v)
 
-    def echo_u8(v):
+    def echo_u8(self, v):
         return echoes.echo_u8(v)
 
-    def echo_s8(v):
+    def echo_s8(self, v):
         return echoes.echo_s8(v)
 
-    def echo_u16(v):
+    def echo_u16(self, v):
         return echoes.echo_u16(v)
 
-    def echo_s16(v):
+    def echo_s16(self, v):
         return echoes.echo_s16(v)
 
-    def echo_u32(v):
+    def echo_u32(self, v):
         return echoes.echo_u32(v)
 
-    def echo_s32(v):
+    def echo_s32(self, v):
         return echoes.echo_s32(v)
 
-    def echo_char(v):
+    def echo_char(self, v):
         return echoes.echo_char(v)
 
-    def echo_u64(v):
+    def echo_u64(self, v):
         return echoes.echo_u64(v)
 
-    def echo_s64(v):
+    def echo_s64(self, v):
         return echoes.echo_s64(v)
 
-    def echo_float32(v):
+    def echo_float32(self, v):
         return echoes.echo_float32(v)
 
-    def echo_float64(v):
+    def echo_float64(self, v):
         return echoes.echo_float64(v)
 
-    def echo_string(v):
+    def echo_string(self, v):
         return echoes.echo_string(v)
 
-    def echo_list_bool(v):
+    def echo_list_bool(self, v):
         return echoes.echo_list_bool(v)
 
-    def echo_list_u8(v):
+    def echo_list_u8(self, v):
         return echoes.echo_list_u8(v)
 
-    def echo_list_s8(v):
+    def echo_list_s8(self, v):
         return echoes.echo_list_s8(v)
 
-    def echo_list_u16(v):
+    def echo_list_u16(self, v):
         return echoes.echo_list_u16(v)
 
-    def echo_list_s16(v):
+    def echo_list_s16(self, v):
         return echoes.echo_list_s16(v)
 
-    def echo_list_u32(v):
+    def echo_list_u32(self, v):
         return echoes.echo_list_u32(v)
 
-    def echo_list_s32(v):
+    def echo_list_s32(self, v):
         return echoes.echo_list_s32(v)
 
-    def echo_list_char(v):
+    def echo_list_char(self, v):
         return echoes.echo_list_char(v)
 
-    def echo_list_u64(v):
+    def echo_list_u64(self, v):
         return echoes.echo_list_u64(v)
 
-    def echo_list_s64(v):
+    def echo_list_s64(self, v):
         return echoes.echo_list_s64(v)
 
-    def echo_list_float32(v):
+    def echo_list_float32(self, v):
         return echoes.echo_list_float32(v)
 
-    def echo_list_float64(v):
+    def echo_list_float64(self, v):
         return echoes.echo_list_float64(v)
 
-    def echo_list_string(v):
+    def echo_list_string(self, v):
         return echoes.echo_list_string(v)
 
-    def echo_list_list_u8(v):
+    def echo_list_list_u8(self, v):
         return echoes.echo_list_list_u8(v)
 
-    def echo_list_list_list_u8(v):
+    def echo_list_list_list_u8(self, v):
         return echoes.echo_list_list_list_u8(v)
 
-    def echo_option_u8(v):
+    def echo_option_u8(self, v):
         return echoes.echo_option_u8(v)
 
-    def echo_option_option_u8(v):
+    def echo_option_option_u8(self, v):
         return echoes.echo_option_option_u8(v)
 
-    def echo_many(v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16):
+    def echo_many(self, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16):
         return echoes.echo_many(v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16)
 "#;
 
