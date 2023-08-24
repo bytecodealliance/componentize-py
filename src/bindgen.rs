@@ -938,6 +938,7 @@ impl<'a> FunctionBindgen<'a> {
     fn search_variant(
         &mut self,
         block_type: BlockType,
+        base: usize,
         types: &[Option<Type>],
         discriminant: u32,
         predicate: impl (Fn(&Self, Option<Type>) -> bool) + Copy,
@@ -950,12 +951,26 @@ impl<'a> FunctionBindgen<'a> {
                 if types.iter().any(|ty| predicate(self, *ty)) {
                     let middle = types.len() / 2;
                     self.push(Ins::LocalGet(discriminant));
-                    self.push(Ins::I32Const(middle.try_into().unwrap()));
+                    self.push(Ins::I32Const((base + middle).try_into().unwrap()));
                     self.push(Ins::I32LtU);
                     self.push(Ins::If(block_type));
-                    self.search_variant(block_type, &types[..middle], discriminant, predicate, fun);
+                    self.search_variant(
+                        block_type,
+                        base,
+                        &types[..middle],
+                        discriminant,
+                        predicate,
+                        fun,
+                    );
                     self.push(Ins::Else);
-                    self.search_variant(block_type, &types[middle..], discriminant, predicate, fun);
+                    self.search_variant(
+                        block_type,
+                        base + middle,
+                        &types[middle..],
+                        discriminant,
+                        predicate,
+                        fun,
+                    );
                     self.push(Ins::End);
                 } else {
                     fun(self, None);
@@ -1016,6 +1031,7 @@ impl<'a> FunctionBindgen<'a> {
 
             self.search_variant(
                 BlockType::Empty,
+                0,
                 &types,
                 discriminant,
                 |_, ty| ty.is_some(),
@@ -1257,6 +1273,7 @@ impl<'a> FunctionBindgen<'a> {
 
             self.search_variant(
                 BlockType::Empty,
+                0,
                 &types,
                 source[0],
                 |_, ty| ty.is_some(),
@@ -1535,6 +1552,7 @@ impl<'a> FunctionBindgen<'a> {
         self.get_stack();
         self.search_variant(
             BlockType::Result(ValType::I32),
+            0,
             &types,
             source[0],
             |_, ty| ty.is_some(),
@@ -1846,6 +1864,7 @@ impl<'a> FunctionBindgen<'a> {
 
             self.search_variant(
                 BlockType::Result(ValType::I32),
+                0,
                 &types,
                 discriminant,
                 |_, ty| ty.is_some(),
@@ -2047,6 +2066,7 @@ impl<'a> FunctionBindgen<'a> {
 
             self.search_variant(
                 BlockType::Empty,
+                0,
                 &types,
                 discriminant,
                 |_, ty| ty.is_some(),
@@ -2242,6 +2262,7 @@ impl<'a> FunctionBindgen<'a> {
     ) {
         self.search_variant(
             BlockType::Empty,
+            0,
             &types.into_iter().collect::<Vec<_>>(),
             value[0],
             |this, ty| {
@@ -2467,6 +2488,7 @@ impl<'a> FunctionBindgen<'a> {
 
             self.search_variant(
                 BlockType::Empty,
+                0,
                 &types,
                 discriminant,
                 predicate,
