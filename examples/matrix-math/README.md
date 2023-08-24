@@ -12,7 +12,7 @@ within a guest component.
 ## Prerequisites
 
 * `wasmtime-py` 13 or later
-* `componentize-py` 0.3.2 or later
+* `componentize-py` 0.3.3 or later
 * `NumPy`, built for WASI
 
 Note that we must build `wasmtime-py` from source until version 13 has been
