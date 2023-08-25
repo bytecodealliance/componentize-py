@@ -64,7 +64,7 @@ class Sink:
             else:
                 await register(cast(PollLoop, asyncio.get_event_loop()), self.pollable)
 
-    async def close(self):
+    def close(self):
         """Close the stream, indicating no further data will be written."""
         
         types.finish_outgoing_stream(self.stream)
