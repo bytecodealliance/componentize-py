@@ -50,12 +50,14 @@ pub struct MyInterface<'a> {
     pub id: InterfaceId,
     pub package: Option<PackageName<'a>>,
     pub name: &'a str,
+    pub docs: Option<&'a str>,
 }
 
 pub struct MyFunction<'a> {
     pub kind: FunctionKind,
     pub interface: Option<MyInterface<'a>>,
     pub name: &'a str,
+    pub docs: Option<&'a str>,
     pub params: &'a [(String, Type)],
     pub results: &'a Results,
 }
@@ -121,13 +123,18 @@ impl<'a> MyFunction<'a> {
     }
 }
 
+pub struct InterfaceInfo<'a> {
+    name: &'a str,
+    docs: Option<&'a str>,
+}
+
 pub struct Summary<'a> {
     pub resolve: &'a Resolve,
     pub world: WorldId,
     pub functions: Vec<MyFunction<'a>>,
     pub types: IndexSet<TypeId>,
-    pub imported_interfaces: HashMap<InterfaceId, &'a str>,
-    pub exported_interfaces: HashMap<InterfaceId, &'a str>,
+    pub imported_interfaces: HashMap<InterfaceId, InterfaceInfo<'a>>,
+    pub exported_interfaces: HashMap<InterfaceId, InterfaceInfo<'a>>,
     pub tuple_types: HashMap<usize, TypeId>,
     pub option_type: Option<TypeId>,
     pub nesting_option_type: Option<TypeId>,
@@ -238,6 +245,7 @@ impl<'a> Summary<'a> {
         &mut self,
         interface: Option<MyInterface<'a>>,
         name: &'a str,
+        docs: Option<&'a str>,
         params: &'a [(String, Type)],
         results: &'a Results,
         direction: Direction,
@@ -254,6 +262,7 @@ impl<'a> Summary<'a> {
             kind,
             interface,
             name,
+            docs,
             params,
             results,
         };
@@ -315,19 +324,25 @@ impl<'a> Summary<'a> {
                         }
                     };
 
-                    match direction {
-                        Direction::Import => self.imported_interfaces.insert(*id, item_name),
-                        Direction::Export => self.exported_interfaces.insert(*id, item_name),
-                    };
                     let interface = &self.resolve.interfaces[*id];
+                    let info = InterfaceInfo {
+                        name: item_name,
+                        docs: interface.docs.contents.as_deref(),
+                    };
+                    match direction {
+                        Direction::Import => self.imported_interfaces.insert(*id, info),
+                        Direction::Export => self.exported_interfaces.insert(*id, info),
+                    };
                     for (func_name, func) in &interface.functions {
                         self.visit_function(
                             Some(MyInterface {
                                 package,
                                 name: item_name,
                                 id: *id,
+                                docs: interface.docs.contents.as_deref(),
                             }),
                             func_name,
+                            func.docs.contents.as_deref(),
                             &func.params,
                             &func.results,
                             direction,
@@ -336,7 +351,14 @@ impl<'a> Summary<'a> {
                 }
 
                 WorldItem::Function(func) => {
-                    self.visit_function(None, &func.name, &func.params, &func.results, direction);
+                    self.visit_function(
+                        None,
+                        &func.name,
+                        func.docs.contents.as_deref(),
+                        &func.params,
+                        &func.results,
+                        direction,
+                    );
                 }
 
                 WorldItem::Type(ty) => self.visit_type(Type::Id(*ty)),
@@ -460,8 +482,6 @@ impl<'a> Summary<'a> {
     }
 
     pub fn generate_code(&self, path: &Path) -> Result<()> {
-        // todo: insert doc comments into generated code based on the docs in the `Resolve`
-
         enum SpecialReturn<'a> {
             Result(&'a Result_),
             None,
@@ -480,12 +500,31 @@ impl<'a> Summary<'a> {
         };
 
         #[derive(Default)]
-        struct Definitions {
+        struct Definitions<'a> {
             types: Vec<String>,
             functions: Vec<String>,
             type_imports: HashSet<InterfaceId>,
             function_imports: HashSet<InterfaceId>,
+            docs: Option<&'a str>,
         }
+
+        let docstring = |docs: Option<&str>, indent_level| {
+            if let Some(docs) = docs {
+                let newline = '\n';
+                let indent = (0..indent_level)
+                    .map(|_| "    ")
+                    .collect::<Vec<_>>()
+                    .concat();
+                let docs = docs
+                    .lines()
+                    .map(|line| format!("{indent}{line}\n"))
+                    .collect::<Vec<_>>()
+                    .concat();
+                format!(r#""""{newline}{docs}{indent}"""{newline}{indent}"#)
+            } else {
+                String::new()
+            }
+        };
 
         let mut interface_imports = HashMap::<&str, Definitions>::new();
         let mut interface_exports = HashMap::<&str, Definitions>::new();
@@ -503,7 +542,7 @@ impl<'a> Summary<'a> {
                 }
             };
 
-            let make_class = |names: &mut TypeNames, name, fields: Vec<(String, Type)>| {
+            let make_class = |names: &mut TypeNames, name, docs, fields: Vec<(String, Type)>| {
                 let mut fields = fields
                     .iter()
                     .map(|(field_name, field_type)| {
@@ -516,11 +555,13 @@ impl<'a> Summary<'a> {
                     fields = "pass".to_owned()
                 }
 
+                let docs = docstring(docs, 1);
+
                 format!(
                     "
 @dataclass
 class {name}:
-    {fields}
+    {docs}{fields}
 "
                 )
             };
@@ -529,6 +570,7 @@ class {name}:
                 TypeDefKind::Record(record) => Some(make_class(
                     &mut names,
                     camel(),
+                    ty.docs.contents.as_deref(),
                     record
                         .fields
                         .iter()
@@ -544,6 +586,7 @@ class {name}:
                             make_class(
                                 &mut names,
                                 format!("{camel}{}", case.name.to_upper_camel_case().escape()),
+                                None,
                                 if let Some(ty) = case.ty {
                                     vec![("value".into(), ty)]
                                 } else {
@@ -561,11 +604,20 @@ class {name}:
                         .collect::<Vec<_>>()
                         .join(", ");
 
+                    let docs = if let Some(docs) = &ty.docs.contents {
+                        docs.lines()
+                            .map(|line| format!("# {line}\n"))
+                            .collect::<Vec<_>>()
+                            .concat()
+                    } else {
+                        String::new()
+                    };
+
                     Some(format!(
                         "
 {classes}
 
-{camel} = Union[{cases}]
+{docs}{camel} = Union[{cases}]
 "
                     ))
                 }
@@ -581,10 +633,12 @@ class {name}:
                         .collect::<Vec<_>>()
                         .join("\n    ");
 
+                    let docs = docstring(ty.docs.contents.as_deref(), 1);
+
                     Some(format!(
                         "
 class {camel}(Enum):
-    {cases}
+    {docs}{cases}
 "
                     ))
                 }
@@ -611,6 +665,7 @@ class {camel}(Enum):
                                         make_class(
                                             &mut names,
                                             format!("{camel}{index}"),
+                                            None,
                                             vec![("value".into(), case.ty)],
                                         )
                                     })
@@ -624,9 +679,18 @@ class {camel}(Enum):
                         )
                     };
 
+                    let docs = if let Some(docs) = &ty.docs.contents {
+                        docs.lines()
+                            .map(|line| format!("# {line}\n"))
+                            .collect::<Vec<_>>()
+                            .concat()
+                    } else {
+                        String::new()
+                    };
+
                     Some(format!(
                         "
-{classes}{camel} = Union[{cases}]
+{classes}{docs}{camel} = Union[{cases}]
 "
                     ))
                 }
@@ -645,10 +709,12 @@ class {camel}(Enum):
                         flags
                     };
 
+                    let docs = docstring(ty.docs.contents.as_deref(), 1);
+
                     Some(format!(
                         "
 class {camel}(Flag):
-    {flags}
+    {docs}{flags}
 "
                     ))
                 }
@@ -660,24 +726,28 @@ class {camel}(Flag):
             };
 
             if let Some(code) = code {
-                let definitions = match ty.owner {
+                let (definitions, docs) = match ty.owner {
                     TypeOwner::Interface(interface) => {
-                        if let Some(name) = self.imported_interfaces.get(&interface) {
-                            interface_imports.entry(name).or_default()
-                        } else if let Some(name) = self.exported_interfaces.get(&interface) {
-                            interface_exports.entry(name).or_default()
+                        if let Some(info) = self.imported_interfaces.get(&interface) {
+                            (interface_imports.entry(info.name).or_default(), info.docs)
+                        } else if let Some(info) = self.exported_interfaces.get(&interface) {
+                            (interface_exports.entry(info.name).or_default(), info.docs)
                         } else {
                             unreachable!()
                         }
                     }
 
-                    TypeOwner::World(_) => &mut world_exports,
+                    TypeOwner::World(_) => (
+                        &mut world_exports,
+                        self.resolve.worlds[self.world].docs.contents.as_deref(),
+                    ),
 
                     TypeOwner::None => unreachable!(),
                 };
 
                 definitions.types.push(code);
                 definitions.type_imports.extend(names.imports);
+                definitions.docs = docs;
             }
         }
 
@@ -753,22 +823,31 @@ class {camel}(Flag):
 
                     match function.kind {
                         FunctionKind::Import => {
+                            let docs = docstring(function.docs, 1);
+
                             let code = format!(
                                 "
 def {snake}({params}) -> {return_type}:
-    result = componentize_py_runtime.call_import({index}, [{args}], {result_count})
+    {docs}result = componentize_py_runtime.call_import({index}, [{args}], {result_count})
     {return_statement}
 "
                             );
 
-                            let definitions = if let Some(interface) = function.interface {
-                                interface_imports.entry(interface.name).or_default()
+                            let (definitions, docs) = if let Some(interface) = function.interface {
+                                (
+                                    interface_imports.entry(interface.name).or_default(),
+                                    interface.docs,
+                                )
                             } else {
-                                &mut world_imports
+                                (
+                                    &mut world_imports,
+                                    self.resolve.worlds[self.world].docs.contents.as_deref(),
+                                )
                             };
 
                             definitions.functions.push(code);
                             definitions.function_imports.extend(names.imports);
+                            definitions.docs = docs;
                         }
                         FunctionKind::Export => {
                             let params = if params.is_empty() {
@@ -777,22 +856,31 @@ def {snake}({params}) -> {return_type}:
                                 format!("self, {params}")
                             };
 
+                            let docs = docstring(function.docs, 2);
+
                             let code = format!(
                                 "
     @abstractmethod
     def {snake}({params}) -> {return_type}:
-        raise NotImplementedError
+        {docs}raise NotImplementedError
 "
                             );
 
-                            let definitions = if let Some(interface) = function.interface {
-                                interface_exports.entry(interface.name).or_default()
+                            let (definitions, docs) = if let Some(interface) = function.interface {
+                                (
+                                    interface_exports.entry(interface.name).or_default(),
+                                    interface.docs,
+                                )
                             } else {
-                                &mut world_exports
+                                (
+                                    &mut world_exports,
+                                    self.resolve.worlds[self.world].docs.contents.as_deref(),
+                                )
                             };
 
                             definitions.functions.push(code);
                             definitions.function_imports.extend(names.imports);
+                            definitions.docs = docs;
                         }
                         _ => unreachable!(),
                     }
@@ -858,10 +946,11 @@ Result = Union[Ok[T], Err[E]]
                     .map(|&interface| import("..", interface))
                     .collect::<Vec<_>>()
                     .concat();
+                let docs = docstring(code.docs, 0);
 
                 write!(
                     file,
-                    "{python_imports}
+                    "{docs}{python_imports}
 from ..types import Result, Ok, Err, Some
 import componentize_py_runtime
 {imports}
@@ -888,10 +977,11 @@ import componentize_py_runtime
                     .map(|interface| import("..", interface))
                     .collect::<Vec<_>>()
                     .concat();
+                let docs = docstring(code.docs, 0);
 
                 write!(
                     file,
-                    "{python_imports}
+                    "{docs}{python_imports}
 from ..types import Result, Ok, Err, Some
 {imports}
 {types}
@@ -957,10 +1047,11 @@ from ..types import Result, Ok, Err, Some
                 .map(|&interface| import(".", interface))
                 .collect::<Vec<_>>()
                 .concat();
+            let docs = docstring(world_exports.docs, 0);
 
             write!(
                 file,
-                "{python_imports}
+                "{docs}{python_imports}
 from .types import Result, Ok, Err, Some
 import componentize_py_runtime
 {imports}
@@ -976,12 +1067,13 @@ class {camel}(Protocol):
     }
 
     fn interface_package(&self, interface: InterfaceId) -> (&'static str, String) {
-        if let Some(name) = self.imported_interfaces.get(&interface) {
-            ("imports", name.to_snake_case().escape())
+        if let Some(info) = self.imported_interfaces.get(&interface) {
+            ("imports", info.name.to_snake_case().escape())
         } else {
             (
                 "exports",
                 self.exported_interfaces[&interface]
+                    .name
                     .to_snake_case()
                     .escape(),
             )
