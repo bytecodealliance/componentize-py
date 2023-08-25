@@ -1,3 +1,10 @@
+"""Defines a custom `asyncio` event loop backed by WASI's `poll_oneoff`.
+
+As of WASI Preview 2, there is not yet a standard for first-class, composable
+asynchronous functions and streams.  We expect that little or none of this
+boilerplate will be needed once those features arrive in Preview 3.
+"""
+
 import asyncio
 import socket
 import subprocess
@@ -6,22 +13,28 @@ from proxy.imports import types2 as types, streams2 as streams, poll2 as poll
 from proxy.imports.streams2 import StreamStatus
 from typing import Optional, cast
 
+# Maximum number of bytes to read at a time
 READ_SIZE: int = 16 * 1024
 
 class Stream:
-    def __init__(self, body: int):
-        self.pollable = streams.subscribe_to_input_stream(body)
-        self.body = body
+    """Reader abstraction over `wasi-cli`'s low-level stream pseudo-resource."""
+    def __init__(self, stream: int):
+        self.pollable = streams.subscribe_to_input_stream(stream)
+        self.stream = stream
         self.saw_end = False
 
     async def next(self) -> Optional[bytes]:
+        """Wait for the next chunk of data to arrive on the stream.
+
+        This will return `None` when the end of the stream has been reached.
+        """
         if self.saw_end:
             return None
         else:
             while True:
-                buffer, status = streams.read(self.body, READ_SIZE)
+                buffer, status = streams.read(self.stream, READ_SIZE)
                 if status == StreamStatus.ENDED:
-                    types.finish_incoming_stream(self.body)
+                    types.finish_incoming_stream(self.stream)
                     self.saw_end = True
 
                 if buffer:
@@ -32,14 +45,19 @@ class Stream:
                     await register(cast(PollLoop, asyncio.get_event_loop()), self.pollable)
 
 class Sink:
-    def __init__(self, body: int):
-        self.pollable = streams.subscribe_to_output_stream(body)
-        self.body = body
+    """Writer abstraction over `wasi-cli`'s low-level stream pseudo-resource."""
+    def __init__(self, stream: int):
+        self.pollable = streams.subscribe_to_output_stream(stream)
+        self.stream = stream
 
     async def send(self, chunk: bytes):
+        """Write the specified bytes to the stream.
+
+        This may need to yield according to the backpressure requirements of the stream.
+        """
         offset = 0
         while True:
-            count = streams.write(self.body, chunk[offset:])
+            count = streams.write(self.stream, chunk[offset:])
             offset += count
             if offset == len(chunk):
                 return
@@ -47,9 +65,13 @@ class Sink:
                 await register(cast(PollLoop, asyncio.get_event_loop()), self.pollable)
 
     async def close(self):
-        types.finish_outgoing_stream(self.body)
+        """Close the stream, indicating no further data will be written."""
+        
+        types.finish_outgoing_stream(self.stream)
         
 class PollLoop(asyncio.AbstractEventLoop):
+    """Custom `asyncio` event loop backed by WASI's `poll_oneoff` function."""
+    
     def __init__(self):
         self.wakers = []
         self.running = False
