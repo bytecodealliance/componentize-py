@@ -49,9 +49,9 @@ their contents.  You can test it with e.g.:
 
 ```
 curl -i \
-    -H 'url: https://news.ycombinator.com' \
-    -H 'url: https://google.com' \
-    -H 'url: https://cloudflare.com' \
+    -H 'url: https://webassembly.github.io/spec/core/' \
+    -H 'url: https://www.w3.org/groups/wg/wasm/' \
+    -H 'url: https://bytecodealliance.org/' \
     http://127.0.0.1:3000/hash-all
 ```
 
