@@ -119,7 +119,7 @@ fn call_import<'a>(
 }
 
 #[pyo3::pymodule]
-#[pyo3(name = "componentize_py")]
+#[pyo3(name = "componentize_py_runtime")]
 fn componentize_py_module(_py: Python<'_>, module: &PyModule) -> PyResult<()> {
     module.add_function(pyo3::wrap_pyfunction!(call_import, module)?)
 }

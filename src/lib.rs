@@ -13,12 +13,12 @@ use {
         env,
         fs::{self, File},
         hash::{Hash, Hasher},
-        io::Cursor,
+        io::{Cursor, Write},
         mem,
         path::{Path, PathBuf},
         str,
     },
-    summary::Summary,
+    summary::{Escape, Summary},
     tar::Archive,
     wasmtime::{
         component::{Component, Instance, Linker},
@@ -153,8 +153,24 @@ impl Invoker for MyInvoker {
 pub fn generate_bindings(wit_path: &Path, world: Option<&str>, output_dir: &Path) -> Result<()> {
     let (resolve, world) = parse_wit(wit_path, world)?;
     let summary = Summary::try_new(&resolve, world)?;
-    fs::create_dir_all(output_dir)?;
-    summary.generate_code(output_dir)
+    let world_dir = output_dir.join(resolve.worlds[world].name.to_snake_case().escape());
+    fs::create_dir_all(&world_dir)?;
+    summary.generate_code(&world_dir)?;
+
+    // Also generate `componentize_py_runtime` stub for type checking purposes:
+    let internal_dir = output_dir.join("componentize_py_runtime");
+    fs::create_dir_all(&internal_dir)?;
+    let mut file = File::create(internal_dir.join("__init__.py"))?;
+    file.write_all(
+        b"
+from typing import List, Any
+
+def call_import(index: int, args: List[Any], result_count: int) -> List[Any]:
+    raise NotImplementedError
+",
+    )?;
+
+    Ok(())
 }
 
 #[allow(clippy::type_complexity)]

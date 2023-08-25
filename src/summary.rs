@@ -460,8 +460,7 @@ impl<'a> Summary<'a> {
     }
 
     pub fn generate_code(&self, path: &Path) -> Result<()> {
-        // todo: doc comments
-        // todo: reuse `wasmtime-py`'s type generation machinery if appropriate
+        // todo: insert doc comments into generated code based on the docs in the `Resolve`
 
         enum SpecialReturn<'a> {
             Result(&'a Result_),
@@ -757,7 +756,7 @@ class {camel}(Flag):
                             let code = format!(
                                 "
 def {snake}({params}) -> {return_type}:
-    result = componentize_py.call_import({index}, [{args}], {result_count})
+    result = componentize_py_runtime.call_import({index}, [{args}], {result_count})
     {return_statement}
 "
                             );
@@ -864,7 +863,7 @@ Result = Union[Ok[T], Err[E]]
                     file,
                     "{python_imports}
 from ..types import Result, Ok, Err, Some
-import componentize_py
+import componentize_py_runtime
 {imports}
 {types}
 {functions}
@@ -963,7 +962,7 @@ from ..types import Result, Ok, Err, Some
                 file,
                 "{python_imports}
 from .types import Result, Ok, Err, Some
-import componentize_py
+import componentize_py_runtime
 {imports}
 {function_imports}
 {type_exports}
@@ -1160,7 +1159,7 @@ fn raw_union_type(ty: Type) -> RawUnionType {
     }
 }
 
-trait Escape {
+pub trait Escape {
     fn escape(self) -> Self;
 }
 
