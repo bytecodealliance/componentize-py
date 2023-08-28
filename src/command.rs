@@ -50,13 +50,12 @@ pub struct Componentize {
     /// The name of a Python module containing the app to wrap
     pub app_name: String,
 
-    /// `PYTHONPATH` for specifying directory containing the app and optionally other directories containing
-    /// dependencies.
+    /// Specify a directory containing the app and/or its dependencies.  May be specified more than once.
     ///
     /// If `pipenv` is in `$PATH` and `pipenv --venv` produces a path containing a `site-packages` subdirectory,
-    /// that directory will be appended to this value as a convenience for `pipenv` users.
+    /// that directory will be appended to these values as a convenience for `pipenv` users.
     #[arg(short = 'p', long, default_value = ".")]
-    pub python_path: String,
+    pub python_path: Vec<String>,
 
     /// Output file to which to write the resulting component
     #[arg(short = 'o', long, default_value = "index.wasm")]
@@ -91,19 +90,18 @@ fn componentize(common: Common, componentize: Componentize) -> Result<()> {
     let mut python_path = componentize.python_path;
 
     if let Some(site_packages) = find_site_packages()? {
-        python_path = format!(
-            "{python_path}{}{}",
-            crate::NATIVE_PATH_DELIMITER,
+        python_path.push(
             site_packages
                 .to_str()
                 .context("non-UTF-8 site-packages name")?
-        )
+                .to_owned(),
+        );
     }
 
     Runtime::new()?.block_on(crate::componentize(
         &common.wit_path,
         common.world.as_deref(),
-        &python_path,
+        &python_path.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
         &componentize.app_name,
         &componentize.output,
         None,

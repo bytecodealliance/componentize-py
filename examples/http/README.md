@@ -14,7 +14,7 @@ which may differ from later revisions.
 ## Prerequisites
 
 * `dicej/spin` branch `wasi-http`
-* `componentize-py` 0.3.3 or later
+* `componentize-py` 0.4.0
 * `Rust`, for installing `Spin`
 
 ```

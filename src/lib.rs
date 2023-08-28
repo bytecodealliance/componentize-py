@@ -14,7 +14,7 @@ use {
         fs::{self, File},
         hash::{Hash, Hasher},
         io::{Cursor, Write},
-        mem,
+        iter, mem,
         path::{Path, PathBuf},
         str,
     },
@@ -60,12 +60,6 @@ impl Hash for RawUnionType {
         mem::discriminant(self).hash(state)
     }
 }
-
-#[cfg(unix)]
-const NATIVE_PATH_DELIMITER: char = ':';
-
-#[cfg(windows)]
-const NATIVE_PATH_DELIMITER: char = ';';
 
 pub struct Ctx {
     wasi: WasiCtx,
@@ -177,7 +171,7 @@ def call_import(index: int, args: List[Any], result_count: int) -> List[Any]:
 pub async fn componentize(
     wit_path: &Path,
     world: Option<&str>,
-    python_path: &str,
+    python_path: &[&str],
     app_name: &str,
     output_path: &Path,
     add_to_linker: Option<&dyn Fn(&mut Linker<Ctx>) -> Result<()>>,
@@ -281,7 +275,7 @@ pub async fn componentize(
             ))))?,
         )?;
 
-    for (index, path) in python_path.split(NATIVE_PATH_DELIMITER).enumerate() {
+    for (index, path) in python_path.iter().enumerate() {
         let index = index + 1;
         let mut libraries = Vec::new();
         find_native_extensions(Path::new(path), &mut libraries)?;
@@ -305,13 +299,14 @@ pub async fn componentize(
     fs::create_dir_all(&world_dir)?;
     summary.generate_code(&world_dir)?;
 
-    let python_path = format!(
-        "{}{NATIVE_PATH_DELIMITER}{python_path}",
+    let python_path = iter::once(
         generated_code
             .path()
             .to_str()
-            .context("non-UTF-8 temporary directory name")?
-    );
+            .context("non-UTF-8 temporary directory name")?,
+    )
+    .chain(python_path.iter().copied())
+    .collect::<Vec<_>>();
 
     let stdout = MemoryOutputPipe::new();
     let stderr = MemoryOutputPipe::new();
@@ -330,18 +325,16 @@ pub async fn componentize(
             "python",
         );
 
-    let mut count = 0;
-    for (index, path) in python_path.split(NATIVE_PATH_DELIMITER).enumerate() {
+    for (index, path) in python_path.iter().enumerate() {
         wasi.preopened_dir(
             Dir::from_std_file(File::open(path)?),
             DirPerms::all(),
             FilePerms::all(),
             &index.to_string(),
         );
-        count += 1;
     }
 
-    let python_path = (0..count)
+    let python_path = (0..python_path.len())
         .map(|index| format!("/{index}"))
         .collect::<Vec<_>>()
         .join(":");

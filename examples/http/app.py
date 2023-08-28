@@ -20,7 +20,7 @@ import poll_loop
 
 from proxy import exports
 from proxy.types import Ok
-from proxy.imports import types2 as types, streams2 as streams, outgoing_handler2 as outgoing_handler
+from proxy.imports import types2 as types, outgoing_handler2 as outgoing_handler
 from proxy.imports.types2 import MethodGet, MethodPost, Scheme, SchemeHttp, SchemeHttps, SchemeOther
 from poll_loop import Stream, Sink, PollLoop
 from typing import Tuple, cast
@@ -95,7 +95,8 @@ async def sha256(url: str) -> Tuple[str, str]:
     """Download the contents of the specified URL, computing the SHA-256
     incrementally as the response body arrives.
 
-    This returns a tuple of the original URL and the hex-encoded hash.
+    This returns a tuple of the original URL and either the hex-encoded hash or
+    an error message.
     """
     
     url_parsed = parse.urlparse(url)
@@ -119,14 +120,12 @@ async def sha256(url: str) -> Tuple[str, str]:
     response = await outgoing_request_send(request)
 
     status = types.incoming_response_status(response)
-
     if status < 200 or status > 299:
         return url, f"unexpected status: {status}"
 
     stream = Stream(types.incoming_response_consume(response))
 
     hasher = hashlib.sha256()
-    
     while True:
         chunk = await stream.next()
         if chunk is None:
