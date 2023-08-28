@@ -10,7 +10,7 @@ use {
 fn python_componentize(
     wit_path: PathBuf,
     world: Option<&str>,
-    python_path: &str,
+    python_path: Vec<&str>,
     app_name: &str,
     output_path: PathBuf,
 ) -> PyResult<()> {
@@ -18,7 +18,7 @@ fn python_componentize(
         Runtime::new()?.block_on(crate::componentize(
             &wit_path,
             world,
-            python_path,
+            &python_path,
             app_name,
             &output_path,
             None,

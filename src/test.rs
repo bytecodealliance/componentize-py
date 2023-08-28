@@ -54,10 +54,10 @@ async fn make_component(
     crate::componentize(
         &tempdir.path().join("app.wit"),
         None,
-        tempdir
+        &[tempdir
             .path()
             .to_str()
-            .ok_or_else(|| anyhow!("unable to parse temporary directory path as UTF-8"))?,
+            .ok_or_else(|| anyhow!("unable to parse temporary directory path as UTF-8"))?],
         "app",
         &tempdir.path().join("app.wasm"),
         add_to_linker,
