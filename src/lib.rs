@@ -50,7 +50,7 @@ mod util;
 static NATIVE_EXTENSION_SUFFIX: &str = ".cpython-311-wasm32-wasi.so";
 
 wasmtime::component::bindgen!({
-    path: "wit/init.wit",
+    path: "wit",
     world: "init",
     async: true
 });

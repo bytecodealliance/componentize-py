@@ -13,16 +13,16 @@ use {
     },
     std::{
         alloc::{self, Layout},
-        env,
         ffi::c_void,
         mem::{self, MaybeUninit},
         ptr, slice, str,
     },
+    wasi::cli::environment,
 };
 
 wit_bindgen::generate!({
     world: "init",
-    path: "../wit/init.wit"
+    path: "../wit"
 });
 
 static EXPORTS: OnceCell<Vec<(Py<PyString>, PyObject)>> = OnceCell::new();
@@ -287,8 +287,6 @@ pub unsafe extern "C" fn componentize_py_dispatch(
     params: *const c_void,
     results: *mut c_void,
 ) {
-    run_ctors();
-
     Python::with_gil(|py| {
         let mut params_lifted =
             vec![MaybeUninit::<&PyAny>::uninit(); param_count.try_into().unwrap()];
@@ -303,8 +301,10 @@ pub unsafe extern "C" fn componentize_py_dispatch(
         // todo: is this sound, or do we need to `.into_iter().map(MaybeUninit::assume_init).collect()` instead?
         let params_lifted = mem::transmute::<Vec<MaybeUninit<&PyAny>>, Vec<&PyAny>>(params_lifted);
 
+        // We must call directly into the host to get the runtime environment since libc's version will only
+        // contain the build-time pre-init snapshot.
         let environ = ENVIRON.get().unwrap().as_ref(py);
-        for (k, v) in env::vars() {
+        for (k, v) in environment::get_environment() {
             environ.set_item(k, v).unwrap();
         }
 
@@ -321,7 +321,20 @@ pub unsafe extern "C" fn componentize_py_dispatch(
             },
             ReturnStyle::Result => match result {
                 Ok(result) => OK_CONSTRUCTOR.get().unwrap().call1(py, (result,)).unwrap(),
-                Err(result) => result.to_object(py),
+                Err(result) => {
+                    if ERR_CONSTRUCTOR
+                        .get()
+                        .unwrap()
+                        .as_ref(py)
+                        .eq(result.get_type(py))
+                        .unwrap()
+                    {
+                        result.to_object(py)
+                    } else {
+                        result.print(py);
+                        panic!("Python function threw an unexpected exception")
+                    }
+                }
             },
         };
 
@@ -335,15 +348,6 @@ pub unsafe extern "C" fn componentize_py_dispatch(
             lower,
         );
     });
-}
-
-pub fn run_ctors() {
-    unsafe {
-        extern "C" {
-            fn __wasm_call_ctors();
-        }
-        __wasm_call_ctors();
-    }
 }
 
 /// # Safety
@@ -803,6 +807,18 @@ pub unsafe extern "C" fn cabi_realloc(
 /// TODO
 #[export_name = "cabi_export_realloc"]
 pub unsafe extern "C" fn cabi_export_realloc(
+    old_ptr: *mut u8,
+    old_len: usize,
+    align: usize,
+    new_size: usize,
+) -> *mut u8 {
+    cabi_realloc(old_ptr, old_len, align, new_size)
+}
+
+/// # Safety
+/// TODO
+#[export_name = "cabi_import_realloc"]
+pub unsafe extern "C" fn cabi_import_realloc(
     old_ptr: *mut u8,
     old_len: usize,
     align: usize,

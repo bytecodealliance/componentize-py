@@ -1,6 +1,8 @@
 package componentize-py:init
 
 world init {
+    import wasi:cli/environment
+
     export exports: interface {
         record function-export {
             protocol: string,
