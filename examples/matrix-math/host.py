@@ -1,13 +1,23 @@
 import matrix_math
+import sys
+
 from matrix_math import Root, RootImports, imports
 from matrix_math.types import Ok, Err, Result
+from matrix_math.imports import environment
 from wasmtime import Store
-import sys
+from typing import List, Tuple
 
 class Host(imports.Host):
     def log(self, message: str) -> Result[None, str]:
         print(f"guest log: {message}")
         return Ok(None)
+
+class HostEnvironment(environment.HostEnvironment):
+    def get_environment(self) -> List[Tuple[str, str]]:
+        return []
+
+    def get_arguments(self) -> List[str]:
+        return []
 
 args = sys.argv[1:]
 if len(args) != 2:
@@ -30,7 +40,7 @@ matrix_math = Root(
         types=None,
         preopens=None,
         random=None,
-        environment=None,
+        environment=HostEnvironment(),
         exit=None,
         stdin=None,
         stdout=None,
