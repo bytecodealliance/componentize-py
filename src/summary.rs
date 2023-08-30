@@ -2,9 +2,7 @@ use {
     crate::{
         abi::{self, MAX_FLAT_PARAMS, MAX_FLAT_RESULTS},
         bindgen::DISPATCHABLE_CORE_PARAM_COUNT,
-        exports::exports::{
-            self, Case, FunctionExport, OwnedKind, OwnedType, RawUnionType, Symbols,
-        },
+        exports::exports::{self, Case, FunctionExport, OwnedKind, OwnedType, Symbols},
         util::Types as _,
     },
     anyhow::{bail, Result},
@@ -20,8 +18,8 @@ use {
     },
     wasm_encoder::ValType,
     wit_parser::{
-        InterfaceId, Resolve, Result_, Results, Type, TypeDefKind, TypeId, TypeOwner, Union,
-        WorldId, WorldItem, WorldKey,
+        InterfaceId, Resolve, Result_, Results, Type, TypeDefKind, TypeId, TypeOwner, WorldId,
+        WorldItem, WorldKey,
     },
 };
 
@@ -193,12 +191,6 @@ impl<'a> Summary<'a> {
                     self.types.insert(id);
                 }
                 TypeDefKind::Enum(_) | TypeDefKind::Flags(_) => {
-                    self.types.insert(id);
-                }
-                TypeDefKind::Union(un) => {
-                    for case in &un.cases {
-                        self.visit_type(case.ty);
-                    }
                     self.types.insert(id);
                 }
                 TypeDefKind::Option(some) => {
@@ -394,20 +386,6 @@ impl<'a> Summary<'a> {
                         .collect(),
                 ),
                 TypeDefKind::Enum(en) => OwnedKind::Enum(en.cases.len().try_into().unwrap()),
-                TypeDefKind::Union(un) => {
-                    if self.is_raw_union(un) {
-                        OwnedKind::RawUnion(un.cases.iter().map(|c| raw_union_type(c.ty)).collect())
-                    } else {
-                        OwnedKind::Variant(
-                            (0..un.cases.len())
-                                .map(|index| Case {
-                                    name: format!("{name}{index}"),
-                                    has_payload: true,
-                                })
-                                .collect(),
-                        )
-                    }
-                }
                 TypeDefKind::Flags(flags) => {
                     OwnedKind::Flags(flags.repr().count().try_into().unwrap())
                 }
@@ -639,58 +617,6 @@ class {name}:
                         "
 class {camel}(Enum):
     {docs}{cases}
-"
-                    ))
-                }
-                TypeDefKind::Union(un) => {
-                    let camel = camel();
-
-                    let (classes, cases) = if self.is_raw_union(un) {
-                        (
-                            String::new(),
-                            un.cases
-                                .iter()
-                                .map(|case| names.type_name(case.ty))
-                                .collect::<Vec<_>>()
-                                .join(", "),
-                        )
-                    } else {
-                        (
-                            format!(
-                                "{}\n\n",
-                                un.cases
-                                    .iter()
-                                    .enumerate()
-                                    .map(|(index, case)| {
-                                        make_class(
-                                            &mut names,
-                                            format!("{camel}{index}"),
-                                            None,
-                                            vec![("value".into(), case.ty)],
-                                        )
-                                    })
-                                    .collect::<Vec<_>>()
-                                    .join("\n")
-                            ),
-                            (0..un.cases.len())
-                                .map(|index| format!("{camel}{index}"))
-                                .collect::<Vec<_>>()
-                                .join(", "),
-                        )
-                    };
-
-                    let docs = if let Some(docs) = &ty.docs.contents {
-                        docs.lines()
-                            .map(|line| format!("# {line}\n"))
-                            .collect::<Vec<_>>()
-                            .concat()
-                    } else {
-                        String::new()
-                    };
-
-                    Some(format!(
-                        "
-{classes}{docs}{camel} = Union[{cases}]
 "
                     ))
                 }
@@ -1098,33 +1024,6 @@ class {camel}(Protocol):
             TypeOwner::None => None,
         }
     }
-
-    fn is_allowed_for_raw_union(&self, ty: Type) -> bool {
-        // Raw unions can't contain options or other raw unions since that can create ambiguity:
-        if let Type::Id(id) = ty {
-            match &self.resolve.types[id].kind {
-                TypeDefKind::Union(un) => !self.is_raw_union(un),
-                TypeDefKind::Option(_) => false,
-                TypeDefKind::Type(ty) => self.is_allowed_for_raw_union(*ty),
-                _ => true,
-            }
-        } else {
-            true
-        }
-    }
-
-    fn is_raw_union(&self, un: &Union) -> bool {
-        un.cases
-            .iter()
-            .all(|case| self.is_allowed_for_raw_union(case.ty))
-            && un.cases.len()
-                == un
-                    .cases
-                    .iter()
-                    .map(|case| raw_union_type(case.ty))
-                    .collect::<HashSet<_>>()
-                    .len()
-    }
 }
 
 struct TypeNames<'a> {
@@ -1161,7 +1060,6 @@ impl<'a> TypeNames<'a> {
                     TypeDefKind::Record(_)
                     | TypeDefKind::Variant(_)
                     | TypeDefKind::Enum(_)
-                    | TypeDefKind::Union(_)
                     | TypeDefKind::Flags(_) => {
                         let package = if ty.owner == self.owner {
                             String::new()
@@ -1231,23 +1129,6 @@ impl<'a> TypeNames<'a> {
                 }
             }
         }
-    }
-}
-
-fn raw_union_type(ty: Type) -> RawUnionType {
-    match ty {
-        Type::Bool
-        | Type::U8
-        | Type::U16
-        | Type::U32
-        | Type::U64
-        | Type::S8
-        | Type::S16
-        | Type::S32
-        | Type::S64 => RawUnionType::Int,
-        Type::Float32 | Type::Float64 => RawUnionType::Float,
-        Type::Char | Type::String => RawUnionType::Str,
-        Type::Id(_) => RawUnionType::Other,
     }
 }
 

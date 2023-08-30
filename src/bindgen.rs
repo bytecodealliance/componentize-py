@@ -579,15 +579,6 @@ impl<'a> FunctionBindgen<'a> {
                         value,
                     );
                 }
-                TypeDefKind::Union(un) => {
-                    self.lower_variant(
-                        id,
-                        &abi::abi(self.resolve, ty),
-                        un.cases.iter().map(|c| Some(c.ty)),
-                        context,
-                        value,
-                    );
-                }
                 TypeDefKind::Option(some) => {
                     self.lower_variant(
                         self.get_option_type(*some),
@@ -828,16 +819,6 @@ impl<'a> FunctionBindgen<'a> {
                         id,
                         &abi::abi(self.resolve, ty),
                         en.cases.iter().map(|_| None),
-                        context,
-                        value,
-                        destination,
-                    );
-                }
-                TypeDefKind::Union(un) => {
-                    self.store_variant(
-                        id,
-                        &abi::abi(self.resolve, ty),
-                        un.cases.iter().map(|c| Some(c.ty)),
                         context,
                         value,
                         destination,
@@ -1112,14 +1093,6 @@ impl<'a> FunctionBindgen<'a> {
                         destination,
                     );
                 }
-                TypeDefKind::Union(un) => {
-                    self.store_copy_variant(
-                        &abi::abi(self.resolve, ty),
-                        un.cases.iter().map(|c| Some(c.ty)),
-                        source,
-                        destination,
-                    );
-                }
                 TypeDefKind::Option(some) => {
                     self.store_copy_variant(
                         &abi::abi(self.resolve, ty),
@@ -1352,15 +1325,6 @@ impl<'a> FunctionBindgen<'a> {
                         id,
                         &abi::abi(self.resolve, ty),
                         en.cases.iter().map(|_| None),
-                        context,
-                        value,
-                    );
-                }
-                TypeDefKind::Union(un) => {
-                    self.lift_variant(
-                        id,
-                        &abi::abi(self.resolve, ty),
-                        un.cases.iter().map(|c| Some(c.ty)),
                         context,
                         value,
                     );
@@ -1687,15 +1651,6 @@ impl<'a> FunctionBindgen<'a> {
                         source,
                     );
                 }
-                TypeDefKind::Union(un) => {
-                    self.load_variant(
-                        id,
-                        &abi::abi(self.resolve, ty),
-                        un.cases.iter().map(|c| Some(c.ty)),
-                        context,
-                        source,
-                    );
-                }
                 TypeDefKind::Option(some) => {
                     self.load_variant(
                         self.get_option_type(*some),
@@ -1955,13 +1910,6 @@ impl<'a> FunctionBindgen<'a> {
                         source,
                     );
                 }
-                TypeDefKind::Union(un) => {
-                    self.load_copy_variant(
-                        &abi::abi(self.resolve, ty),
-                        un.cases.iter().map(|c| Some(c.ty)),
-                        source,
-                    );
-                }
                 TypeDefKind::Option(some) => {
                     self.load_copy_variant(
                         &abi::abi(self.resolve, ty),
@@ -2158,13 +2106,6 @@ impl<'a> FunctionBindgen<'a> {
                         value,
                     );
                 }
-                TypeDefKind::Union(un) => {
-                    self.free_lowered_variant(
-                        &abi::abi(self.resolve, ty),
-                        un.cases.iter().map(|c| Some(c.ty)),
-                        value,
-                    );
-                }
                 TypeDefKind::Option(some) => {
                     self.free_lowered_variant(
                         &abi::abi(self.resolve, ty),
@@ -2325,13 +2266,6 @@ impl<'a> FunctionBindgen<'a> {
                     self.free_stored_variant(
                         &abi::abi(self.resolve, ty),
                         en.cases.iter().map(|_| None),
-                        value,
-                    );
-                }
-                TypeDefKind::Union(un) => {
-                    self.free_stored_variant(
-                        &abi::abi(self.resolve, ty),
-                        un.cases.iter().map(|c| Some(c.ty)),
                         value,
                     );
                 }

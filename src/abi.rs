@@ -132,7 +132,6 @@ pub fn has_pointer(resolve: &Resolve, ty: Type) -> bool {
                 .iter()
                 .any(|case| case.ty.map(|ty| has_pointer(resolve, ty)).unwrap_or(false)),
             TypeDefKind::Enum(_) | TypeDefKind::Flags(_) => false,
-            TypeDefKind::Union(un) => un.cases.iter().any(|case| has_pointer(resolve, case.ty)),
             TypeDefKind::Option(ty) => has_pointer(resolve, *ty),
             TypeDefKind::Result(result) => {
                 result
@@ -197,9 +196,6 @@ pub fn abi(resolve: &Resolve, ty: Type) -> Abi {
                 variant_abi(resolve, variant.cases.iter().map(|case| case.ty))
             }
             TypeDefKind::Enum(en) => variant_abi(resolve, en.cases.iter().map(|_| None)),
-            TypeDefKind::Union(un) => {
-                variant_abi(resolve, un.cases.iter().map(|case| Some(case.ty)))
-            }
             TypeDefKind::Option(ty) => variant_abi(resolve, [None, Some(*ty)]),
             TypeDefKind::Result(result) => variant_abi(resolve, [result.ok, result.err]),
             TypeDefKind::Flags(flags) => {
