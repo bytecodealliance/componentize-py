@@ -17,9 +17,8 @@ zstd = "0.11.1"
 componentize-py-shared = { path = "shared" }
 wasmparser = "0.107.0"
 wasm-encoder = "0.29.0"
-# TODO: switch to release once https://github.com/bytecodealliance/wasm-tools/pull/1176 is released
-wit-parser = { git = "https://github.com/bytecodealliance/wasm-tools" }
-wit-component = { git = "https://github.com/bytecodealliance/wasm-tools" }
+wit-parser = "0.11.0"
+wit-component = "0.14.0"
 indexmap = "2.0.0"
 bincode = "1.3.3"
 heck = "0.4.1"

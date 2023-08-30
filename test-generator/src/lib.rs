@@ -6,10 +6,7 @@ use {
         strategy::{Just, Strategy, ValueTree},
         test_runner::{Config, TestRng, TestRunner},
     },
-    std::{
-        cell::Cell, collections::HashMap, env, fmt::Write, fs, path::PathBuf, process::Command,
-        rc::Rc, str::FromStr,
-    },
+    std::{cell::Cell, env, fmt::Write, fs, path::PathBuf, process::Command, rc::Rc, str::FromStr},
 };
 
 const DEFAULT_TEST_COUNT: usize = 10;
@@ -55,10 +52,6 @@ enum Type {
         id: usize,
         count: u32,
     },
-    Union {
-        id: usize,
-        cases: Vec<Type>,
-    },
     Option(Box<Type>),
     Result {
         ok: Option<Box<Type>>,
@@ -68,58 +61,8 @@ enum Type {
     List(Box<Type>),
 }
 
-fn union_case_name(ty: &Type) -> String {
-    match ty {
-        Type::Bool => "Bool".into(),
-        Type::U8 => "U8".into(),
-        Type::U16 => "U16".into(),
-        Type::U32 => "U32".into(),
-        Type::U64 => "U64".into(),
-        Type::S8 => "I8".into(),
-        Type::S16 => "I16".into(),
-        Type::S32 => "I32".into(),
-        Type::S64 => "I64".into(),
-        Type::Float32 => "F32".into(),
-        Type::Float64 => "F64".into(),
-        Type::Char => "Char".into(),
-        Type::String => "String".into(),
-        Type::Record { id, .. } => format!("Record{id}Type"),
-        Type::Variant { id, .. } => format!("Variant{id}Type"),
-        Type::Flags { id, .. } => format!("Flags{id}Type"),
-        Type::Enum { id, .. } => format!("Enum{id}Type"),
-        Type::Union { id, .. } => format!("Union{id}Type"),
-        Type::Option(ty) => format!("Optional{}", union_case_name(ty)),
-        Type::Result { .. } => "Result".into(),
-        Type::Tuple(_) => "Tuple".into(),
-        Type::List(ty) => format!("{}List", union_case_name(ty)),
-    }
-}
-
-fn union_case_names(types: &[Type]) -> Vec<String> {
-    let mut indexes = HashMap::<_, Vec<_>>::new();
-    let mut names = types
-        .iter()
-        .enumerate()
-        .map(|(index, ty)| {
-            let name = union_case_name(ty);
-            indexes.entry(name.clone()).or_default().push(index);
-            name
-        })
-        .collect::<Vec<_>>();
-
-    for indexes in indexes.into_values() {
-        if indexes.len() > 1 {
-            for (n, index) in indexes.into_iter().enumerate() {
-                names[index] = format!("{}{n}", names[index]);
-            }
-        }
-    }
-
-    names
-}
-
 fn any_type(max_size: usize, next_id: Rc<Cell<usize>>) -> impl Strategy<Value = Type> {
-    (0..22).prop_flat_map(move |index| match index {
+    (0..21).prop_flat_map(move |index| match index {
         0 => Just(Type::Bool).boxed(),
         1 => Just(Type::U8).boxed(),
         2 => Just(Type::S8).boxed(),
@@ -178,22 +121,10 @@ fn any_type(max_size: usize, next_id: Rc<Cell<usize>>) -> impl Strategy<Value = 
                 }
             })
             .boxed(),
-        17 => {
-            proptest::collection::vec(any_type(max_size / 2, next_id.clone()), 1..max_size.max(2))
-                .prop_map({
-                    let next_id = next_id.clone();
-                    move |cases| {
-                        let id = next_id.get();
-                        next_id.set(id + 1);
-                        Type::Union { id, cases }
-                    }
-                })
-                .boxed()
-        }
-        18 => any_type(max_size, next_id.clone())
+        17 => any_type(max_size, next_id.clone())
             .prop_map(|ty| Type::Option(Box::new(ty)))
             .boxed(),
-        19 => (
+        18 => (
             proptest::option::of(any_type(max_size, next_id.clone())),
             proptest::option::of(any_type(max_size, next_id.clone())),
         )
@@ -202,12 +133,12 @@ fn any_type(max_size: usize, next_id: Rc<Cell<usize>>) -> impl Strategy<Value = 
                 err: err.map(Box::new),
             })
             .boxed(),
-        20 => {
+        19 => {
             proptest::collection::vec(any_type(max_size / 2, next_id.clone()), 1..max_size.max(2))
                 .prop_map(Type::Tuple)
                 .boxed()
         }
-        21 => any_type(max_size, next_id.clone())
+        20 => any_type(max_size, next_id.clone())
             .prop_map(|ty| Type::List(Box::new(ty)))
             .boxed(),
         _ => unreachable!(),
@@ -315,25 +246,6 @@ fn wit_type_name(wit: &mut String, ty: &Type) -> String {
 
             format!("enum{id}-type")
         }
-        Type::Union { id, cases } => {
-            let cases = cases
-                .iter()
-                .map(|ty| wit_type_name(wit, ty))
-                .collect::<Vec<_>>()
-                .join(",\n        ");
-
-            write!(
-                wit,
-                "
-    union union{id}-type {{
-        {cases}
-    }}
-"
-            )
-            .unwrap();
-
-            format!("union{id}-type")
-        }
         Type::Option(ty) => {
             format!("option<{}>", wit_type_name(wit, ty))
         }
@@ -387,9 +299,6 @@ fn rust_type_name(ty: &Type) -> String {
         }
         Type::Enum { id, .. } => {
             format!("{PREFIX}::Enum{id}Type")
-        }
-        Type::Union { id, .. } => {
-            format!("{PREFIX}::Union{id}Type")
         }
         Type::Option(ty) => {
             format!("Option<{}>", rust_type_name(ty))
@@ -462,20 +371,6 @@ fn equality(a: &str, b: &str, ty: &Type) -> String {
                     } else {
                         format!("({name}::C{index}, {name}::C{index}) => {{ true }}")
                     }
-                })
-                .collect::<Vec<_>>()
-                .join(" ");
-            format!("(match (&{a}, &{b}) {{ {cases} _ => false }})")
-        }
-        Type::Union { id, cases } => {
-            assert!(!cases.is_empty());
-            let name = format!("{PREFIX}::Union{id}Type");
-            let cases = union_case_names(cases)
-                .iter()
-                .zip(cases)
-                .map(|(case_name, ty)| {
-                    let test = equality("a", "b", ty);
-                    format!("({name}::{case_name}(a), {name}::{case_name}(b)) => {{ {test} }}")
                 })
                 .collect::<Vec<_>>()
                 .join(" ");
@@ -604,21 +499,6 @@ fn strategy(ty: &Type, max_list_size: usize) -> String {
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("(0..{count}).prop_map(move |index| match index {{ {cases}, _ => unreachable!() }})")
-        }
-        Type::Union { id, cases } => {
-            assert!(!cases.is_empty());
-            let name = format!("{PREFIX}::Union{id}Type");
-            let length = cases.len();
-            let cases = union_case_names(cases)
-                .iter()
-                .zip(cases)
-                .map(|(case_name, ty)| {
-                    let strategy = strategy(ty, max_list_size);
-                    format!("index => {strategy}.prop_map({name}::{case_name}).boxed()")
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("(0..{length}).prop_flat_map(move |index| match index {{ {cases}, _ => unreachable!() }})")
         }
         Type::Option(ty) => {
             format!("proptest::option::of({})", strategy(ty, max_list_size))

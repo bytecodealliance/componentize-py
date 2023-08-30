@@ -3,12 +3,12 @@
 use {
     anyhow::{Error, Result},
     componentize_py_shared::ReturnStyle,
-    exports::exports::{self as exp, Exports, OwnedKind, OwnedType, RawUnionType, Symbols},
+    exports::exports::{self as exp, Exports, OwnedKind, OwnedType, Symbols},
     num_bigint::BigUint,
     once_cell::sync::OnceCell,
     pyo3::{
         exceptions::PyAssertionError,
-        types::{PyBytes, PyDict, PyFloat, PyInt, PyList, PyMapping, PyModule, PyString, PyTuple},
+        types::{PyBytes, PyDict, PyList, PyMapping, PyModule, PyString, PyTuple},
         Py, PyAny, PyErr, PyObject, PyResult, Python, ToPyObject,
     },
     std::{
@@ -54,10 +54,6 @@ enum Type {
     Enum {
         constructor: PyObject,
         count: usize,
-    },
-    RawUnion {
-        types_to_discriminants: Py<PyDict>,
-        other_discriminant: Option<usize>,
     },
     Flags {
         constructor: PyObject,
@@ -199,30 +195,6 @@ fn do_init(app_name: String, symbols: Symbols) -> Result<()> {
                                         .into(),
                                     count: count.try_into().unwrap(),
                                 },
-                                OwnedKind::RawUnion(types) => {
-                                    let types_to_discriminants = PyDict::new(py);
-                                    let mut other_discriminant = None;
-                                    for (index, ty) in types.iter().enumerate() {
-                                        let ty = match ty {
-                                            RawUnionType::Int => Some(py.get_type::<PyInt>()),
-                                            RawUnionType::Float => Some(py.get_type::<PyFloat>()),
-                                            RawUnionType::Str => Some(py.get_type::<PyString>()),
-                                            RawUnionType::Other => None,
-                                        };
-
-                                        if let Some(ty) = ty {
-                                            types_to_discriminants.set_item(ty, index)?;
-                                        } else {
-                                            assert!(other_discriminant.is_none());
-                                            other_discriminant = Some(index);
-                                        }
-                                    }
-
-                                    Type::RawUnion {
-                                        types_to_discriminants: types_to_discriminants.into(),
-                                        other_discriminant,
-                                    }
-                                }
                                 OwnedKind::Flags(u32_count) => Type::Flags {
                                     constructor: py
                                         .import(package.as_str())?
@@ -442,18 +414,6 @@ pub extern "C" fn componentize_py_get_field<'a>(
             PAYLOAD_FIELD_INDEX => py.None().into_ref(*py),
             _ => unreachable!(),
         },
-        Type::RawUnion {
-            types_to_discriminants,
-            other_discriminant,
-        } => match i32::try_from(field).unwrap() {
-            DISCRIMINANT_FIELD_INDEX => types_to_discriminants
-                .as_ref(*py)
-                .get_item(value.get_type())
-                .or_else(|| other_discriminant.map(|v| v.to_object(*py).into_ref(*py)))
-                .unwrap(),
-            PAYLOAD_FIELD_INDEX => value,
-            _ => unreachable!(),
-        },
         Type::Flags { u32_count, .. } => {
             assert!(field < *u32_count);
             let value = value
@@ -644,22 +604,6 @@ pub unsafe extern "C" fn componentize_py_init<'a>(
                 )
                 .unwrap()
                 .into_ref(*py)
-        }
-        Type::RawUnion {
-            types_to_discriminants,
-            other_discriminant,
-        } => {
-            assert!(len == 2);
-            let discriminant =
-                ptr::read(data.offset(isize::try_from(DISCRIMINANT_FIELD_INDEX).unwrap()))
-                    .extract::<usize>()
-                    .unwrap();
-            assert!(
-                discriminant
-                    < types_to_discriminants.as_ref(*py).len()
-                        + other_discriminant.map(|_| 1).unwrap_or(0)
-            );
-            ptr::read(data.offset(isize::try_from(PAYLOAD_FIELD_INDEX).unwrap()))
         }
         Type::Flags {
             constructor,

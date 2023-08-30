@@ -5,16 +5,14 @@ use {
     async_trait::async_trait,
     bytes::Bytes,
     component_init::Invoker,
-    exports::exports::RawUnionType,
     futures::future::FutureExt,
     heck::ToSnakeCase,
     std::{
         collections::HashMap,
         env,
         fs::{self, File},
-        hash::{Hash, Hasher},
         io::{Cursor, Write},
-        iter, mem,
+        iter,
         path::{Path, PathBuf},
         str,
     },
@@ -54,12 +52,6 @@ wasmtime::component::bindgen!({
     world: "init",
     async: true
 });
-
-impl Hash for RawUnionType {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        mem::discriminant(self).hash(state)
-    }
-}
 
 pub struct Ctx {
     wasi: WasiCtx,
