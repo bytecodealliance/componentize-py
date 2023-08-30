@@ -348,12 +348,13 @@ dependencies = [
 
 [[package]]
 name = "componentize-py"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "async-trait",
  "bincode",
  "bytes",
+ "cap-std",
  "clap",
  "component-init",
  "componentize-py-shared",

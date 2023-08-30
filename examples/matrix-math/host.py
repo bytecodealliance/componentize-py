@@ -30,9 +30,10 @@ matrix_math = Root(
     store,
     RootImports(
         host=Host(),
+        environment=HostEnvironment(),
         # As of this writing, `wasmtime-py` does not yet support WASI Preview 2,
         # and our example won't use it at runtime anyway, so we provide `None`
-        # for all `wasi-cli` interfaces:
+        # for most `wasi-cli` interfaces:
         poll=None,
         monotonic_clock=None,
         wall_clock=None,
@@ -40,13 +41,12 @@ matrix_math = Root(
         types=None,
         preopens=None,
         random=None,
-        environment=HostEnvironment(),
         exit=None,
         stdin=None,
         stdout=None,
         stderr=None,
         terminal_input=None,
-        terminal_output=None,        
+        terminal_output=None,
         terminal_stdin=None,
         terminal_stdout=None,
         terminal_stderr=None
@@ -59,4 +59,3 @@ if isinstance(result, Ok):
     print(f"result: {result.value}")
 else:
     print(f"eval error: {result.value}")
-

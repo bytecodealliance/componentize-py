@@ -319,7 +319,8 @@ pub async fn componentize(
         .env("COMPONENTIZE_PY_APP_NAME", app_name)
         .env("PYTHONHOME", "/python")
         .preopened_dir(
-            Dir::from_std_file(File::open(stdlib.path())?),
+            Dir::open_ambient_dir(stdlib.path(), cap_std::ambient_authority())
+                .with_context(|| format!("unable to open {}", stdlib.path().display()))?,
             DirPerms::all(),
             FilePerms::all(),
             "python",
@@ -327,7 +328,8 @@ pub async fn componentize(
 
     for (index, path) in python_path.iter().enumerate() {
         wasi.preopened_dir(
-            Dir::from_std_file(File::open(path)?),
+            Dir::open_ambient_dir(path, cap_std::ambient_authority())
+                .with_context(|| format!("unable to open {path}"))?,
             DirPerms::all(),
             FilePerms::all(),
             &index.to_string(),
