@@ -1,5 +1,7 @@
 # componentize-py
 
+**A [Bytecode Alliance](https://bytecodealliance.org/) project**
+
 This is a tool to convert a Python application to a [WebAssembly
 component](https://github.com/WebAssembly/component-model).  It takes the
 following as input:

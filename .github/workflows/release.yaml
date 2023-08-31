@@ -4,6 +4,10 @@ on:
     branches: [main]
     tags:
       - "v*"
+    paths-ignore:
+      - "examples/**"
+      - "README.md"
+      - "CONTRIBUTING.md"
   workflow_dispatch:
 
 env:

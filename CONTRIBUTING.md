@@ -38,10 +38,10 @@ First, make sure you've got all the submodules cloned.
 git submodule update --init --recursive
 ```
 
-Next, install WASI SDK to `/opt/wasi-sdk` (alternatively, you can specify an
-alternative location and reference it later using the `WASI_SDK_PATH`
-environment variable).  Replace `linux` with `macos` or `mingw` (Windows) below
-depending on your OS.
+Next, install WASI SDK to `/opt/wasi-sdk` (alternatively, you can specify a
+different location and reference it later using the `WASI_SDK_PATH` environment
+variable).  Replace `linux` with `macos` or `mingw` (Windows) below depending on
+your OS.
 
 ```shell
 curl -LO https://github.com/dicej/wasi-sdk/releases/download/shared-library-alpha-2/wasi-sdk-20.16g86c5c116b0a6-linux.tar.gz
