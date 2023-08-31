@@ -4,7 +4,7 @@ This is an example of how to use [componentize-py] and [Spin] to build and run a
 Python-based component targetting the [wasi-http] `proxy` world.
 
 Note that, as of this writing, neither `wasi-http` nor the portions of
-`wasi-cli` on which it is based have stablized.  Here we use a snapshot of both,
+`wasi-cli` on which it is based have stabilized.  Here we use a snapshot of both,
 which may differ from later revisions.
 
 [componentize-py]: https://github.com/dicej/componentize-py
