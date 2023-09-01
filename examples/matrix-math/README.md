@@ -6,7 +6,7 @@ demonstrates using a non-trivial Python package containing native extensions
 within a guest component.
 
 [wasmtime-py]: https://github.com/bytecodealliance/wasmtime-py
-[componentize-py]: https://github.com/dicej/componentize-py
+[componentize-py]: https://github.com/bytecodealliance/componentize-py
 [NumPy]: https://numpy.org
 
 ## Prerequisites
