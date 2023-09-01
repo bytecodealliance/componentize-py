@@ -7,7 +7,7 @@ Note that, as of this writing, neither `wasi-http` nor the portions of
 `wasi-cli` on which it is based have stabilized.  Here we use a snapshot of both,
 which may differ from later revisions.
 
-[componentize-py]: https://github.com/dicej/componentize-py
+[componentize-py]: https://github.com/bytecodealliance/componentize-py
 [Spin]: https://github.com/fermyon/spin
 [wasi-http]: https://github.com/WebAssembly/wasi-http
 

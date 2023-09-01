@@ -1,7 +1,7 @@
 ## Contributing
 
 Please file issues (bug reports, questions, feature requests, etc.) on [the
-GitHub repository](https://github.com/dicej/componentize-py).  That's also the
+GitHub repository](https://github.com/bytecodealliance/componentize-py).  That's also the
 place for pull requests.  If you're planning to make a big change, please file
 an issue first to avoid duplicate effort.
 

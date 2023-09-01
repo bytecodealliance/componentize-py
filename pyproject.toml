@@ -16,7 +16,7 @@ maintainers = [ { name = "Fermyon Engineering", email = "engineering@fermyon.com
 keywords = [ "webassembly", "wasm", "component" ]
 
 [project.urls]
-repository = "https://github.com/dicej/componentize-py"
+repository = "https://github.com/bytecodealliance/componentize-py"
 
 [project.scripts]
 componentize-py = "componentize_py:script"
