@@ -75,6 +75,33 @@ or [interface
 versions](https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md#package-declaration).
 Both are coming soon.
 
+Currently, the application can only import dependencies during build time, which
+means any imports used at runtime must be resolved at the top level of the
+application module.  For example, if `x` is a module with a submodule named `y`
+the following may not work:
+
+```python
+import x
+
+class Hello(hello.Hello):
+    def hello(self) -> str:
+        return x.y.foo()
+```
+
+That's because importing `x` does not necessarily resolve `y`.  This can be
+addressed by modifying the code to import `y` at the top level of the file:
+
+```python
+from x import y
+
+class Hello(hello.Hello):
+    def hello(self) -> str:
+        return y.foo()
+```
+
+This limitation is being tracked as [issue
+#23](https://github.com/bytecodealliance/componentize-py/issues/23).
+
 See [the issue tracker](https://github.com/bytecodealliance/componentize-py/issues) for other known issues.
 
 ## Contributing

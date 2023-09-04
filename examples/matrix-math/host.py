@@ -58,4 +58,4 @@ result = matrix_math.multiply(store, eval(args[0]), eval(args[1]))
 if isinstance(result, Ok):
     print(f"result: {result.value}")
 else:
-    print(f"eval error: {result.value}")
+    print(f"error: {result.value}")

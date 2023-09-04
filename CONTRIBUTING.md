@@ -5,6 +5,13 @@ GitHub repository](https://github.com/bytecodealliance/componentize-py).  That's
 place for pull requests.  If you're planning to make a big change, please file
 an issue first to avoid duplicate effort.
 
+Outside of GitHub, most development discussion happens at the [SIG Guest
+Languages](https://github.com/bytecodealliance/meetings/tree/main/SIG-Guest-Languages)
+[Python
+subgroup](https://github.com/bytecodealliance/meetings/tree/main/SIG-Guest-Languages/Python)
+meetings and the Guest Languages [Zulip
+channel](https://bytecodealliance.zulipchat.com/#narrow/stream/394175-SIG-Guest-Languages).
+
 ## Building from source
 
 For the time being, we use a temporary fork of WASI-SDK which enables both
