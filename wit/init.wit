@@ -4,9 +4,27 @@ world init {
     import wasi:cli/environment
 
     export exports: interface {
-        record function-export {
+        record function {
             protocol: string,
             name: string
+        }
+
+        record %constructor {
+            module: string,
+            protocol: string
+        }
+
+        record %static {
+            module: string,
+            protocol: string,
+            name: string
+        }
+
+        variant function-export {
+            freestanding(%function),
+            %constructor(%constructor),
+            %method(string),
+            %static(%static)
         }
 
         record case {
@@ -14,11 +32,27 @@ world init {
             has-payload: bool,
         }
 
+        record local-resource {
+            new: u32,
+            rep: u32,
+            drop: u32
+        }
+
+        record remote-resource {
+            drop: u32
+        }
+        
+        record %resource {
+            local: option<local-resource>,
+            remote: option<remote-resource>
+        }
+
         variant owned-kind {
             %record(list<string>),
             %variant(list<case>),
             %enum(u32),
-            %flags(u32)
+            %flags(u32),
+            %resource(%resource),
         }
 
         record owned-type {
@@ -32,7 +66,8 @@ world init {
             %option,
             nesting-option,
             %result,
-            %tuple(u32)
+            %tuple(u32),
+            handle
         }
 
         record symbols {

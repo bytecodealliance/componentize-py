@@ -30,7 +30,7 @@ use {
         },
         Dir,
     },
-    wit_parser::{Resolve, UnresolvedPackage, WorldId, WorldItem, WorldKey},
+    wit_parser::{Resolve, TypeDefKind, UnresolvedPackage, WorldId, WorldItem, WorldKey},
     zstd::Decoder,
 };
 
@@ -357,6 +357,8 @@ pub async fn componentize(
     let app_name = app_name.to_owned();
     let component = component_init::initialize(&component, move |instrumented| {
         async move {
+            std::fs::write("/tmp/component.wasm", &instrumented)?;
+
             let component = &Component::new(&engine, instrumented)?;
             if !added_to_linker {
                 add_wasi_and_stubs(&resolve, world, component, &mut linker)?;
@@ -407,63 +409,96 @@ fn add_wasi_and_stubs(
 ) -> Result<()> {
     wasi_command::add_to_linker(linker)?;
 
-    let mut functions = HashMap::<_, Vec<_>>::new();
-    for (key, item) in &resolve.worlds[world].imports {
-        let interface_name = match key {
-            WorldKey::Name(name) => name.clone(),
-            WorldKey::Interface(interface) => {
-                let interface = &resolve.interfaces[*interface];
-                format!(
-                    "{}{}",
-                    if let Some(package) = interface.package {
-                        let package = &resolve.packages[package];
-                        format!("{}:{}/", package.name.namespace, package.name.name)
-                    } else {
-                        String::new()
-                    },
-                    interface.name.as_deref().unwrap()
-                )
-            }
-        };
+    enum Stub<'a> {
+        Function(&'a String),
+        Resource(&'a String),
+    }
 
+    let mut stubs = HashMap::<_, Vec<_>>::new();
+    for (key, item) in &resolve.worlds[world].imports {
         match item {
             WorldItem::Interface(interface) => {
+                let interface_name = match key {
+                    WorldKey::Name(name) => name.clone(),
+                    WorldKey::Interface(interface) => {
+                        let interface = &resolve.interfaces[*interface];
+                        format!(
+                            "{}{}",
+                            if let Some(package) = interface.package {
+                                let package = &resolve.packages[package];
+                                format!("{}:{}/", package.name.namespace, package.name.name)
+                            } else {
+                                String::new()
+                            },
+                            interface.name.as_deref().unwrap()
+                        )
+                    }
+                };
+
                 let interface = &resolve.interfaces[*interface];
                 for function_name in interface.functions.keys() {
-                    functions
+                    stubs
                         .entry(Some(interface_name.clone()))
                         .or_default()
-                        .push(function_name);
+                        .push(Stub::Function(function_name));
+                }
+
+                for (type_name, id) in interface.types.iter() {
+                    if let TypeDefKind::Resource = &resolve.types[*id].kind {
+                        stubs
+                            .entry(Some(interface_name.clone()))
+                            .or_default()
+                            .push(Stub::Resource(type_name));
+                    }
                 }
             }
             WorldItem::Function(function) => {
-                functions.entry(None).or_default().push(&function.name);
+                stubs
+                    .entry(None)
+                    .or_default()
+                    .push(Stub::Function(&function.name));
             }
-            WorldItem::Type(_) => {}
+            WorldItem::Type(id) => {
+                let ty = &resolve.types[*id];
+                if let TypeDefKind::Resource = &ty.kind {
+                    stubs
+                        .entry(None)
+                        .or_default()
+                        .push(Stub::Resource(ty.name.as_ref().unwrap()));
+                }
+            }
         }
     }
 
-    for (interface_name, functions) in functions {
+    for (interface_name, stubs) in stubs {
         if let Some(interface_name) = interface_name {
             let mut instance = linker.instance(&interface_name)?;
-            for function_name in functions {
-                instance.func_new(component, function_name, {
-                    let interface_name = interface_name.clone();
-                    let function_name = function_name.clone();
-                    move |_, _, _| {
-                        Err(anyhow!(
-                            "called trapping stub: {interface_name}#{function_name}"
-                        ))
-                    }
-                })?;
+            for stub in stubs {
+                let interface_name = interface_name.clone();
+                match stub {
+                    Stub::Function(name) => instance.func_new(component, name, {
+                        let name = name.clone();
+                        move |_, _, _| Err(anyhow!("called trapping stub: {interface_name}#{name}"))
+                    }),
+                    Stub::Resource(name) => instance.resource::<()>(name, {
+                        let name = name.clone();
+                        move |_, _| Err(anyhow!("called trapping stub: {interface_name}#{name}"))
+                    }),
+                }?;
             }
         } else {
             let mut instance = linker.root();
-            for function_name in functions {
-                instance.func_new(component, function_name, {
-                    let function_name = function_name.clone();
-                    move |_, _, _| Err(anyhow!("called trapping stub: {function_name}"))
-                })?;
+            for stub in stubs {
+                match stub {
+                    Stub::Function(name) => instance.func_new(component, name, {
+                        let name = name.clone();
+                        move |_, _, _| Err(anyhow!("called trapping stub: {name}"))
+                    }),
+                    Stub::Resource(name) => instance.resource::<()>(name, {
+                        let name = name.clone();
+                        move |_, _| Err(anyhow!("called trapping stub: {name}"))
+                    }),
+                }?;
             }
         }
     }

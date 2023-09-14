@@ -1,7 +1,7 @@
 use {
     crate::{
         abi::{self, Abi, MAX_FLAT_PARAMS, MAX_FLAT_RESULTS},
-        summary::{MyFunction, Summary},
+        summary::{Direction, MyFunction, Summary},
         util::Types as _,
     },
     componentize_py_shared::ReturnStyle,
@@ -9,7 +9,7 @@ use {
     once_cell::sync::Lazy,
     std::collections::HashMap,
     wasm_encoder::{BlockType, Instruction as Ins, MemArg, ValType},
-    wit_parser::{Resolve, Results, Type, TypeDefKind, TypeId},
+    wit_parser::{Handle, Resolve, Results, Type, TypeDefKind, TypeId},
 };
 
 // Assume Wasm32
@@ -118,6 +118,16 @@ pub static IMPORT_SIGNATURES: &[(&str, &[ValType], &[ValType])] = &[
         &[ValType::I32; 3],
         &[ValType::I32],
     ),
+    (
+        "componentize-py#LiftHandle",
+        &[ValType::I32; 5],
+        &[ValType::I32],
+    ),
+    (
+        "componentize-py#LowerHandle",
+        &[ValType::I32; 5],
+        &[ValType::I32],
+    ),
     ("cabi_realloc", &[ValType::I32; 4], &[ValType::I32]),
 ];
 
@@ -153,6 +163,7 @@ pub struct FunctionBindgen<'a> {
     option_type: Option<TypeId>,
     nesting_option_type: Option<TypeId>,
     result_type: Option<TypeId>,
+    resource_directions: Option<&'a im_rc::HashMap<TypeId, Direction>>,
 }
 
 impl<'a> FunctionBindgen<'a> {
@@ -173,6 +184,10 @@ impl<'a> FunctionBindgen<'a> {
             option_type: summary.option_type,
             nesting_option_type: summary.nesting_option_type,
             result_type: summary.result_type,
+            resource_directions: function
+                .interface
+                .as_ref()
+                .map(|interface| &interface.resource_directions),
         }
     }
 
@@ -458,6 +473,49 @@ impl<'a> FunctionBindgen<'a> {
         }
     }
 
+    pub fn compile_resource_new(&mut self, index: u32) {
+        // Arg 0: *const Python
+        let _ = 0;
+        // Arg 1: *const usize
+        let input = 1;
+        // Arg 2: *mut u32
+        let output = 2;
+
+        self.push(Ins::LocalGet(output));
+        self.push(Ins::LocalGet(input));
+        self.push(Ins::I32Load(mem_arg(0, WORD_ALIGN.try_into().unwrap())));
+        self.push(Ins::Call(index));
+        self.push(Ins::I32Store(mem_arg(0, 2)));
+    }
+
+    pub fn compile_resource_rep(&mut self, index: u32) {
+        // Arg 0: *const Python
+        let _ = 0;
+        // Arg 1: *const u32
+        let input = 1;
+        // Arg 2: *mut usize
+        let output = 2;
+
+        self.push(Ins::LocalGet(output));
+        self.push(Ins::LocalGet(input));
+        self.push(Ins::I32Load(mem_arg(0, 2)));
+        self.push(Ins::Call(index));
+        self.push(Ins::I32Store(mem_arg(0, WORD_ALIGN.try_into().unwrap())));
+    }
+
+    pub fn compile_resource_drop(&mut self, index: u32) {
+        // Arg 0: *const Python
+        let _ = 0;
+        // Arg 1: *const u32
+        let input = 1;
+        // Arg 2: *mut c_void
+        let _ = 2;
+
+        self.push(Ins::LocalGet(input));
+        self.push(Ins::I32Load(mem_arg(0, 2)));
+        self.push(Ins::Call(index));
+    }
+
     fn push_stack(&mut self, size: usize) {
         self.push(Ins::GlobalGet(self.stack_pointer));
         self.push(Ins::I32Const(
@@ -689,10 +747,43 @@ impl<'a> FunctionBindgen<'a> {
                     self.pop_local(destination, ValType::I32);
                     self.pop_local(length, ValType::I32);
                 }
+                TypeDefKind::Handle(handle) => {
+                    self.marshal_handle(handle, context, value);
+                    self.push(Ins::Call(
+                        *IMPORTS.get("componentize-py#LowerHandle").unwrap(),
+                    ));
+                }
                 TypeDefKind::Type(ty) => self.lower(*ty, context, value),
                 kind => todo!("{kind:?}"),
             },
         }
+    }
+
+    fn marshal_handle(&mut self, handle: &Handle, context: u32, value: u32) {
+        let (borrow, resource) = match handle {
+            Handle::Own(resource) => (0, resource),
+            Handle::Borrow(resource) => (1, resource),
+        };
+        let resource = dealias(self.resolve, *resource);
+        let local = if let Some(Direction::Export) = self
+            .resource_directions
+            .and_then(|directions| directions.get(&resource))
+        {
+            1
+        } else {
+            0
+        };
+        self.push(Ins::LocalGet(context));
+        self.push(Ins::LocalGet(value));
+        self.push(Ins::I32Const(borrow));
+        self.push(Ins::I32Const(local));
+        self.push(Ins::I32Const(
+            self.types
+                .get_index_of(&resource)
+                .unwrap()
+                .try_into()
+                .unwrap(),
+        ));
     }
 
     fn lower_record(
@@ -871,6 +962,11 @@ impl<'a> FunctionBindgen<'a> {
                     )));
 
                     self.pop_local(length, ValType::I32);
+                }
+                TypeDefKind::Handle(_) => {
+                    self.push(Ins::LocalGet(destination));
+                    self.lower(ty, context, value);
+                    self.push(Ins::I32Store(mem_arg(0, 2)));
                 }
                 TypeDefKind::Type(ty) => self.store(*ty, context, value, destination),
                 kind => todo!("{kind:?}"),
@@ -1125,6 +1221,11 @@ impl<'a> FunctionBindgen<'a> {
                         WORD_SIZE.try_into().unwrap(),
                         WORD_ALIGN.try_into().unwrap(),
                     )));
+                }
+                TypeDefKind::Handle(_) => {
+                    self.push(Ins::LocalGet(destination));
+                    self.push(Ins::LocalGet(source[0]));
+                    self.push(Ins::I32Store(mem_arg(0, 2)));
                 }
                 TypeDefKind::Type(ty) => self.store_copy(*ty, source, destination),
                 kind => todo!("{kind:?}"),
@@ -1430,6 +1531,12 @@ impl<'a> FunctionBindgen<'a> {
                         self.pop_local(index, ValType::I32);
                     }
                 }
+                TypeDefKind::Handle(handle) => {
+                    self.marshal_handle(handle, context, value[0]);
+                    self.push(Ins::Call(
+                        *IMPORTS.get("componentize-py#LiftHandle").unwrap(),
+                    ));
+                }
                 TypeDefKind::Type(ty) => self.lift(*ty, context, value),
                 kind => todo!("{kind:?}"),
             },
@@ -1705,6 +1812,14 @@ impl<'a> FunctionBindgen<'a> {
                     self.pop_local(length, ValType::I32);
                     self.pop_local(body, ValType::I32);
                 }
+                TypeDefKind::Handle(_) => {
+                    let value = self.push_local(ValType::I32);
+                    self.push(Ins::LocalGet(source));
+                    self.push(Ins::I32Load(mem_arg(0, 2)));
+                    self.push(Ins::LocalSet(value));
+                    self.lift(ty, context, &[value]);
+                    self.pop_local(value, ValType::I32);
+                }
                 TypeDefKind::Type(ty) => self.load(*ty, context, source),
                 kind => todo!("{kind:?}"),
             },
@@ -1938,6 +2053,10 @@ impl<'a> FunctionBindgen<'a> {
                         WORD_SIZE.try_into().unwrap(),
                         WORD_ALIGN.try_into().unwrap(),
                     )));
+                }
+                TypeDefKind::Handle(_) => {
+                    self.push(Ins::LocalGet(source));
+                    self.push(Ins::I32Load(mem_arg(0, 2)));
                 }
                 TypeDefKind::Type(ty) => self.load_copy(*ty, source),
                 kind => todo!("{kind:?}"),
@@ -2178,6 +2297,7 @@ impl<'a> FunctionBindgen<'a> {
                     self.push(Ins::I32Const(abi.align.try_into().unwrap()));
                     self.push(Ins::Call(*IMPORTS.get("componentize-py#Free").unwrap()));
                 }
+                TypeDefKind::Handle(_) => {}
                 TypeDefKind::Type(ty) => self.free_lowered(*ty, value),
                 kind => todo!("{kind:?}"),
             },
@@ -2355,6 +2475,7 @@ impl<'a> FunctionBindgen<'a> {
                     self.pop_local(length, ValType::I32);
                     self.pop_local(body, ValType::I32);
                 }
+                TypeDefKind::Handle(_) => {}
                 TypeDefKind::Type(ty) => self.free_stored(*ty, value),
                 kind => todo!("{kind:?}"),
             },
@@ -2443,6 +2564,15 @@ impl<'a> FunctionBindgen<'a> {
             self.nesting_option_type.unwrap()
         } else {
             self.option_type.unwrap()
+        }
+    }
+}
+
+pub fn dealias(resolve: &Resolve, mut id: TypeId) -> TypeId {
+    loop {
+        match &resolve.types[id].kind {
+            TypeDefKind::Type(Type::Id(that_id)) => id = *that_id,
+            _ => break id,
         }
     }
 }

@@ -1,3 +1,5 @@
+#![deny(warnings)]
+
 use {
     crate::Ctx,
     anyhow::{anyhow, Result},
@@ -10,7 +12,7 @@ use {
     std::{env, fs, marker::PhantomData},
     tokio::runtime::Runtime,
     wasmtime::{
-        component::{Component, InstancePre, Linker},
+        component::{Component, Instance, InstancePre, Linker},
         Config, Engine, Store,
     },
     wasmtime_wasi::preview2::{Table, WasiCtxBuilder},
@@ -18,7 +20,7 @@ use {
 
 mod echoes;
 mod echoes_generated;
-mod simple;
+mod tests;
 
 fn get_seed() -> Result<[u8; 32]> {
     let seed = <[u8; 32]>::try_from(hex::decode(env!("COMPONENTIZE_PY_TEST_SEED"))?.as_slice())?;
@@ -44,12 +46,17 @@ static ENGINE: Lazy<Engine> = Lazy::new(|| {
 #[allow(clippy::type_complexity)]
 async fn make_component(
     wit: &str,
-    python: &str,
+    guest_code: &[(&str, &str)],
     add_to_linker: Option<&dyn Fn(&mut Linker<Ctx>) -> Result<()>>,
 ) -> Result<Vec<u8>> {
     let tempdir = tempfile::tempdir()?;
     fs::write(tempdir.path().join("app.wit"), wit)?;
-    fs::write(tempdir.path().join("app.py"), python)?;
+
+    for (name, content) in guest_code {
+        let path = tempdir.path().join(name);
+        fs::create_dir_all(path.parent().unwrap())?;
+        fs::write(&path, content)?;
+    }
 
     crate::componentize(
         &tempdir.path().join("app.wit"),
@@ -91,8 +98,10 @@ trait Host {
 
     fn add_to_linker(linker: &mut Linker<Ctx>) -> Result<()>;
 
-    async fn instantiate_pre(store: &mut Store<Ctx>, pre: &InstancePre<Ctx>)
-        -> Result<Self::World>;
+    async fn instantiate_pre(
+        store: &mut Store<Ctx>,
+        pre: &InstancePre<Ctx>,
+    ) -> Result<(Self::World, Instance)>;
 }
 
 struct Tester<H> {
@@ -102,7 +111,10 @@ struct Tester<H> {
 }
 
 impl<H: Host> Tester<H> {
-    fn new(wit: &str, guest_code: &str, seed: [u8; 32]) -> Result<Self> {
+    fn new(wit: &str, guest_code: &[(&str, &str)], seed: [u8; 32]) -> Result<Self> {
+        // TODO: create two versions of the component -- one with and one without an `add_to_linker` -- and run
+        // each test on each component in the `test` method (but probably not in the `proptest` method, since that
+        // would slow it down a lot).  This will help exercise the stub mechanism when pre-initialization.
         let component =
             &Runtime::new()?.block_on(make_component(wit, guest_code, Some(&H::add_to_linker)))?;
         let mut linker = Linker::<Ctx>::new(&ENGINE);
@@ -114,7 +126,31 @@ impl<H: Host> Tester<H> {
         })
     }
 
-    fn test<S: Strategy>(
+    fn test(
+        &self,
+        test: impl Fn(&H::World, &mut Store<Ctx>, &Runtime) -> Result<()>,
+    ) -> Result<()> {
+        let runtime = Runtime::new()?;
+
+        let mut store = runtime.block_on(async {
+            let mut table = Table::new();
+            let wasi = WasiCtxBuilder::new()
+                .inherit_stdout()
+                .inherit_stderr()
+                .build(&mut table)
+                .unwrap();
+
+            Store::new(&ENGINE, Ctx { wasi, table })
+        });
+
+        let (world, _) = runtime
+            .block_on(H::instantiate_pre(&mut store, &self.pre))
+            .unwrap();
+
+        test(&world, &mut store, &runtime)
+    }
+
+    fn proptest<S: Strategy>(
         &self,
         strategy: &S,
         test: impl Fn(S::Value, &H::World, &mut Store<Ctx>, &Runtime) -> Result<()>,
@@ -129,20 +165,22 @@ impl<H: Host> Tester<H> {
             TestRunner::new_with_rng(config, TestRng::from_seed(algorithm, &self.seed));
 
         Ok(runner.run(strategy, move |v| {
-            let mut table = Table::new();
-            let wasi = WasiCtxBuilder::new()
-                .inherit_stdout()
-                .inherit_stderr()
-                .build(&mut table)
-                .unwrap();
+            let mut store = runtime.block_on(async {
+                let mut table = Table::new();
+                let wasi = WasiCtxBuilder::new()
+                    .inherit_stdout()
+                    .inherit_stderr()
+                    .build(&mut table)
+                    .unwrap();
 
-            let mut store = Store::new(&ENGINE, Ctx { wasi, table });
+                Store::new(&ENGINE, Ctx { wasi, table })
+            });
 
-            let instance = runtime
+            let (world, _) = runtime
                 .block_on(H::instantiate_pre(&mut store, &self.pre))
                 .unwrap();
 
-            test(v, &instance, &mut store, &runtime).unwrap();
+            test(v, &world, &mut store, &runtime).unwrap();
             Ok(())
         })?)
     }
@@ -155,8 +193,8 @@ impl<H: Host> Tester<H> {
     where
         S::Value: PartialEq<S::Value> + Clone + Send + Sync + 'static,
     {
-        self.test(strategy, |v, instance, store, runtime| {
-            assert_eq!(v, echo(v.clone(), instance, store, runtime)?);
+        self.proptest(strategy, |v, world, store, runtime| {
+            assert_eq!(v, echo(v.clone(), world, store, runtime)?);
             Ok(())
         })
     }

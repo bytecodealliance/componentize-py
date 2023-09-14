@@ -1,36 +1,57 @@
 use {
     crate::{
         abi::{self, MAX_FLAT_PARAMS, MAX_FLAT_RESULTS},
-        bindgen::DISPATCHABLE_CORE_PARAM_COUNT,
-        exports::exports::{self, Case, FunctionExport, OwnedKind, OwnedType, Symbols},
+        bindgen::{self, DISPATCHABLE_CORE_PARAM_COUNT},
+        exports::exports::{
+            self, Case, Constructor, Function, FunctionExport, LocalResource, OwnedKind, OwnedType,
+            RemoteResource, Resource, Static, Symbols,
+        },
         util::Types as _,
     },
     anyhow::{bail, Result},
     heck::{ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase},
     indexmap::{IndexMap, IndexSet},
+    once_cell::sync::Lazy,
     std::{
         collections::{hash_map::Entry, HashMap, HashSet},
         fmt::Write as _,
         fs::{self, File},
         io::Write as _,
+        ops::Deref,
         path::Path,
         str,
     },
     wasm_encoder::ValType,
     wit_parser::{
-        InterfaceId, Resolve, Result_, Results, Type, TypeDefKind, TypeId, TypeOwner, WorldId,
-        WorldItem, WorldKey,
+        Handle, InterfaceId, Resolve, Result_, Results, Type, TypeDefKind, TypeId, TypeOwner,
+        WorldId, WorldItem, WorldKey,
     },
 };
 
-#[derive(Copy, Clone)]
-enum Direction {
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+pub enum Direction {
     Import,
     Export,
 }
 
+#[derive(Default, Copy, Clone)]
+struct ResourceInfo {
+    local_dispatch_index: Option<usize>,
+    remote_dispatch_index: Option<usize>,
+}
+
+#[derive(Clone)]
+struct ResourceState<'a> {
+    direction: Direction,
+    interface: Option<MyInterface<'a>>,
+}
+
 pub enum FunctionKind {
     Import,
+    ResourceNew,
+    ResourceRep,
+    ResourceDropLocal,
+    ResourceDropRemote,
     Export,
     ExportLift,
     ExportLower,
@@ -43,12 +64,13 @@ pub struct PackageName<'a> {
     pub name: &'a str,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub struct MyInterface<'a> {
     pub id: InterfaceId,
     pub package: Option<PackageName<'a>>,
     pub name: &'a str,
     pub docs: Option<&'a str>,
+    pub resource_directions: im_rc::HashMap<TypeId, Direction>,
 }
 
 pub struct MyFunction<'a> {
@@ -58,11 +80,12 @@ pub struct MyFunction<'a> {
     pub docs: Option<&'a str>,
     pub params: &'a [(String, Type)],
     pub results: &'a Results,
+    pub wit_kind: wit_parser::FunctionKind,
 }
 
 impl<'a> MyFunction<'a> {
     pub fn internal_name(&self) -> String {
-        if let Some(interface) = self.interface {
+        if let Some(interface) = &self.interface {
             format!(
                 "{}{}#{}{}",
                 if let Some(package) = interface.package {
@@ -74,6 +97,10 @@ impl<'a> MyFunction<'a> {
                 self.name,
                 match self.kind {
                     FunctionKind::Import => "-import",
+                    FunctionKind::ResourceNew => "-resource-new",
+                    FunctionKind::ResourceRep => "-resource-rep",
+                    FunctionKind::ResourceDropLocal => "-resource-drop-local",
+                    FunctionKind::ResourceDropRemote => "-resource-drop-remote",
                     FunctionKind::Export => "-export",
                     FunctionKind::ExportLift => "-lift",
                     FunctionKind::ExportLower => "-lower",
@@ -105,7 +132,13 @@ impl<'a> MyFunction<'a> {
                 abi::record_abi_limit(resolve, self.params.types(), MAX_FLAT_PARAMS).flattened,
                 abi::record_abi_limit(resolve, self.results.types(), MAX_FLAT_RESULTS).flattened,
             ),
-            FunctionKind::Import | FunctionKind::ExportLift | FunctionKind::ExportLower => (
+            FunctionKind::Import
+            | FunctionKind::ResourceNew
+            | FunctionKind::ResourceRep
+            | FunctionKind::ResourceDropLocal
+            | FunctionKind::ResourceDropRemote
+            | FunctionKind::ExportLift
+            | FunctionKind::ExportLower => (
                 vec![ValType::I32; DISPATCHABLE_CORE_PARAM_COUNT],
                 Vec::new(),
             ),
@@ -115,7 +148,13 @@ impl<'a> MyFunction<'a> {
 
     pub fn is_dispatchable(&self) -> bool {
         match self.kind {
-            FunctionKind::Import | FunctionKind::ExportLift | FunctionKind::ExportLower => true,
+            FunctionKind::Import
+            | FunctionKind::ResourceNew
+            | FunctionKind::ResourceRep
+            | FunctionKind::ResourceDropLocal
+            | FunctionKind::ResourceDropRemote
+            | FunctionKind::ExportLift
+            | FunctionKind::ExportLower => true,
             FunctionKind::Export | FunctionKind::ExportPostReturn => false,
         }
     }
@@ -124,6 +163,16 @@ impl<'a> MyFunction<'a> {
 pub struct InterfaceInfo<'a> {
     name: &'a str,
     docs: Option<&'a str>,
+}
+
+struct FunctionCode {
+    snake: String,
+    params: String,
+    args: String,
+    return_statement: &'static str,
+    static_method: &'static str,
+    return_type: String,
+    result_count: usize,
 }
 
 pub struct Summary<'a> {
@@ -137,6 +186,10 @@ pub struct Summary<'a> {
     pub option_type: Option<TypeId>,
     pub nesting_option_type: Option<TypeId>,
     pub result_type: Option<TypeId>,
+    resource_state: Option<ResourceState<'a>>,
+    resource_directions: im_rc::HashMap<TypeId, Direction>,
+    resource_info: HashMap<TypeId, ResourceInfo>,
+    dispatch_count: usize,
 }
 
 impl<'a> Summary<'a> {
@@ -152,12 +205,23 @@ impl<'a> Summary<'a> {
             option_type: None,
             nesting_option_type: None,
             result_type: None,
+            resource_state: None,
+            resource_directions: im_rc::HashMap::new(),
+            resource_info: HashMap::new(),
+            dispatch_count: 0,
         };
 
         me.visit_functions(&resolve.worlds[world].imports, Direction::Import)?;
         me.visit_functions(&resolve.worlds[world].exports, Direction::Export)?;
 
         Ok(me)
+    }
+
+    fn push_function(&mut self, function: MyFunction<'a>) {
+        if function.is_dispatchable() {
+            self.dispatch_count += 1;
+        }
+        self.functions.push(function);
     }
 
     fn visit_type(&mut self, ty: Type) {
@@ -175,64 +239,150 @@ impl<'a> Summary<'a> {
             | Type::Float32
             | Type::Float64
             | Type::String => (),
-            Type::Id(id) => match &self.resolve.types[id].kind {
-                TypeDefKind::Record(record) => {
-                    for field in &record.fields {
-                        self.visit_type(field.ty);
+            Type::Id(id) => {
+                let ty = &self.resolve.types[id];
+                match &ty.kind {
+                    TypeDefKind::Record(record) => {
+                        for field in &record.fields {
+                            self.visit_type(field.ty);
+                        }
+                        self.types.insert(id);
                     }
-                    self.types.insert(id);
-                }
-                TypeDefKind::Variant(variant) => {
-                    for case in &variant.cases {
-                        if let Some(ty) = case.ty {
+                    TypeDefKind::Variant(variant) => {
+                        for case in &variant.cases {
+                            if let Some(ty) = case.ty {
+                                self.visit_type(ty);
+                            }
+                        }
+                        self.types.insert(id);
+                    }
+                    TypeDefKind::Enum(_) | TypeDefKind::Flags(_) | TypeDefKind::Handle(_) => {
+                        self.types.insert(id);
+                    }
+                    TypeDefKind::Option(some) => {
+                        if abi::is_option(self.resolve, *some) {
+                            if self.nesting_option_type.is_none() {
+                                self.nesting_option_type = Some(id);
+                            }
+                        } else if self.option_type.is_none() {
+                            self.option_type = Some(id);
+                        }
+                        self.visit_type(*some);
+                        self.types.insert(id);
+                    }
+                    TypeDefKind::Result(result) => {
+                        if self.result_type.is_none() {
+                            self.result_type = Some(id);
+                        }
+                        if let Some(ty) = result.ok {
                             self.visit_type(ty);
                         }
-                    }
-                    self.types.insert(id);
-                }
-                TypeDefKind::Enum(_) | TypeDefKind::Flags(_) => {
-                    self.types.insert(id);
-                }
-                TypeDefKind::Option(some) => {
-                    if abi::is_option(self.resolve, *some) {
-                        if self.nesting_option_type.is_none() {
-                            self.nesting_option_type = Some(id);
+                        if let Some(ty) = result.err {
+                            self.visit_type(ty);
                         }
-                    } else if self.option_type.is_none() {
-                        self.option_type = Some(id);
+                        self.types.insert(id);
                     }
-                    self.visit_type(*some);
-                    self.types.insert(id);
-                }
-                TypeDefKind::Result(result) => {
-                    if self.result_type.is_none() {
-                        self.result_type = Some(id);
+                    TypeDefKind::Tuple(tuple) => {
+                        if let Entry::Vacant(entry) = self.tuple_types.entry(tuple.types.len()) {
+                            entry.insert(id);
+                        }
+                        for ty in &tuple.types {
+                            self.visit_type(*ty);
+                        }
+                        self.types.insert(id);
                     }
-                    if let Some(ty) = result.ok {
-                        self.visit_type(ty);
-                    }
-                    if let Some(ty) = result.err {
-                        self.visit_type(ty);
-                    }
-                    self.types.insert(id);
-                }
-                TypeDefKind::Tuple(tuple) => {
-                    if let Entry::Vacant(entry) = self.tuple_types.entry(tuple.types.len()) {
-                        entry.insert(id);
-                    }
-                    for ty in &tuple.types {
+                    TypeDefKind::List(ty) => {
                         self.visit_type(*ty);
                     }
-                    self.types.insert(id);
+                    TypeDefKind::Type(ty) => {
+                        // When visiting a type alias, we must use the state already stored for any `use`d
+                        // resources rather than overwrite it.
+                        let resource_state = self.resource_state.take();
+                        self.visit_type(*ty);
+                        self.resource_state = resource_state;
+                    }
+                    TypeDefKind::Resource => {
+                        if let Some(state) = self.resource_state.clone() {
+                            self.resource_directions.insert(id, state.direction);
+                            let info = self.resource_info.entry(id).or_default();
+
+                            let make = |kind, params, results| MyFunction {
+                                kind,
+                                interface: state.interface.clone(),
+                                name: ty.name.as_deref().unwrap(),
+                                docs: None,
+                                params,
+                                results,
+                                wit_kind: wit_parser::FunctionKind::Freestanding,
+                            };
+
+                            match state.direction {
+                                Direction::Import => {
+                                    info.remote_dispatch_index = Some(self.dispatch_count);
+
+                                    static DROP_PARAMS: Lazy<[(String, Type); 1]> =
+                                        Lazy::new(|| [("handle".to_string(), Type::U32)]);
+
+                                    static DROP_RESULTS: Lazy<Results> = Lazy::new(Results::empty);
+
+                                    self.push_function(make(
+                                        FunctionKind::ResourceDropRemote,
+                                        DROP_PARAMS.deref(),
+                                        &DROP_RESULTS,
+                                    ));
+                                }
+
+                                Direction::Export => {
+                                    info.local_dispatch_index = Some(self.dispatch_count);
+
+                                    // The order these functions are added must match the `LocalResource` field
+                                    // initialization order in `summarize_type`.
+                                    // TODO: make this less fragile.
+
+                                    static NEW_PARAMS: Lazy<[(String, Type); 1]> =
+                                        Lazy::new(|| [("rep".to_string(), Type::U32)]);
+
+                                    static NEW_RESULTS: Results = Results::Anon(Type::U32);
+
+                                    self.push_function(make(
+                                        FunctionKind::ResourceNew,
+                                        NEW_PARAMS.deref(),
+                                        &NEW_RESULTS,
+                                    ));
+
+                                    static REP_PARAMS: Lazy<[(String, Type); 1]> =
+                                        Lazy::new(|| [("handle".to_string(), Type::U32)]);
+
+                                    static REP_RESULTS: Results = Results::Anon(Type::U32);
+
+                                    self.push_function(make(
+                                        FunctionKind::ResourceRep,
+                                        REP_PARAMS.deref(),
+                                        &REP_RESULTS,
+                                    ));
+
+                                    static DROP_PARAMS: Lazy<[(String, Type); 1]> =
+                                        Lazy::new(|| [("handle".to_string(), Type::U32)]);
+
+                                    static DROP_RESULTS: Lazy<Results> = Lazy::new(Results::empty);
+
+                                    self.push_function(make(
+                                        FunctionKind::ResourceDropLocal,
+                                        DROP_PARAMS.deref(),
+                                        DROP_RESULTS.deref(),
+                                    ));
+                                }
+                            }
+                        }
+                        self.types.insert(id);
+                    }
+                    kind => todo!("{kind:?}"),
                 }
-                TypeDefKind::List(ty) | TypeDefKind::Type(ty) => {
-                    self.visit_type(*ty);
-                }
-                kind => todo!("{kind:?}"),
-            },
+            }
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn visit_function(
         &mut self,
         interface: Option<MyInterface<'a>>,
@@ -241,6 +391,7 @@ impl<'a> Summary<'a> {
         params: &'a [(String, Type)],
         results: &'a Results,
         direction: Direction,
+        wit_kind: wit_parser::FunctionKind,
     ) {
         for ty in params.types() {
             self.visit_type(ty);
@@ -252,29 +403,30 @@ impl<'a> Summary<'a> {
 
         let make = |kind| MyFunction {
             kind,
-            interface,
+            interface: interface.clone(),
             name,
             docs,
             params,
             results,
+            wit_kind: wit_kind.clone(),
         };
 
         match direction {
             Direction::Import => {
-                self.functions.push(make(FunctionKind::Import));
+                self.push_function(make(FunctionKind::Import));
             }
             Direction::Export => {
                 // NB: We rely on this order when compiling, so please don't change it:
                 // todo: make this less fragile
-                self.functions.push(make(FunctionKind::Export));
-                self.functions.push(make(FunctionKind::ExportLift));
-                self.functions.push(make(FunctionKind::ExportLower));
+                self.push_function(make(FunctionKind::Export));
+                self.push_function(make(FunctionKind::ExportLift));
+                self.push_function(make(FunctionKind::ExportLower));
                 if abi::record_abi(self.resolve, results.types())
                     .flattened
                     .len()
                     > MAX_FLAT_RESULTS
                 {
-                    self.functions.push(make(FunctionKind::ExportPostReturn));
+                    self.push_function(make(FunctionKind::ExportPostReturn));
                 } else {
                     // As of this writing, no type involving heap allocation can fit into `MAX_FLAT_RESULTS`, so
                     // nothing to do.  We'll need to revisit this if `MAX_FLAT_RESULTS` changes or if new types are
@@ -321,6 +473,22 @@ impl<'a> Summary<'a> {
                         name: item_name,
                         docs: interface.docs.contents.as_deref(),
                     };
+
+                    self.resource_state = Some(ResourceState {
+                        direction,
+                        interface: Some(MyInterface {
+                            package,
+                            name: item_name,
+                            id: *id,
+                            docs: interface.docs.contents.as_deref(),
+                            resource_directions: Default::default(),
+                        }),
+                    });
+                    for id in interface.types.values() {
+                        self.visit_type(Type::Id(*id));
+                    }
+                    self.resource_state = None;
+
                     match direction {
                         Direction::Import => self.imported_interfaces.insert(*id, info),
                         Direction::Export => self.exported_interfaces.insert(*id, info),
@@ -332,12 +500,14 @@ impl<'a> Summary<'a> {
                                 name: item_name,
                                 id: *id,
                                 docs: interface.docs.contents.as_deref(),
+                                resource_directions: self.resource_directions.clone(),
                             }),
                             func_name,
                             func.docs.contents.as_deref(),
                             &func.params,
                             &func.results,
                             direction,
+                            func.kind.clone(),
                         );
                     }
                 }
@@ -350,6 +520,7 @@ impl<'a> Summary<'a> {
                         &func.params,
                         &func.results,
                         direction,
+                        func.kind.clone(),
                     );
                 }
 
@@ -392,6 +563,24 @@ impl<'a> Summary<'a> {
                 TypeDefKind::Tuple(_) | TypeDefKind::Option(_) | TypeDefKind::Result(_) => {
                     return self.summarize_unowned_type(id)
                 }
+                TypeDefKind::Resource => {
+                    let info = &self.resource_info[&id];
+                    OwnedKind::Resource(Resource {
+                        local: info
+                            .local_dispatch_index
+                            .map(|dispatch_index| LocalResource {
+                                // This must match the order the functions are added in `visit_type`:
+                                new: u32::try_from(dispatch_index).unwrap(),
+                                rep: u32::try_from(dispatch_index + 1).unwrap(),
+                                drop: u32::try_from(dispatch_index + 2).unwrap(),
+                            }),
+                        remote: info
+                            .remote_dispatch_index
+                            .map(|dispatch_index| RemoteResource {
+                                drop: u32::try_from(dispatch_index).unwrap(),
+                            }),
+                    })
+                }
                 kind => todo!("{kind:?}"),
             };
 
@@ -419,6 +608,7 @@ impl<'a> Summary<'a> {
                 }
             }
             TypeDefKind::Result(_) => exports::Type::Result,
+            TypeDefKind::Handle(_) => exports::Type::Handle,
             kind => todo!("{kind:?}"),
         }
     }
@@ -427,16 +617,43 @@ impl<'a> Summary<'a> {
         let mut exports = Vec::new();
         for function in &self.functions {
             if let FunctionKind::Export = function.kind {
-                exports.push(FunctionExport {
-                    protocol: if let Some(interface) = function.interface {
-                        interface.name
-                    } else {
-                        &self.resolve.worlds[self.world].name
-                    }
-                    .to_upper_camel_case()
-                    .escape(),
+                let scope = if let Some(interface) = &function.interface {
+                    interface.name
+                } else {
+                    &self.resolve.worlds[self.world].name
+                };
 
-                    name: function.name.to_snake_case().escape(),
+                exports.push(match function.wit_kind {
+                    wit_parser::FunctionKind::Freestanding => {
+                        FunctionExport::Freestanding(Function {
+                            protocol: scope.to_upper_camel_case().escape(),
+                            name: self.function_name(function),
+                        })
+                    }
+                    wit_parser::FunctionKind::Constructor(id) => {
+                        FunctionExport::Constructor(Constructor {
+                            module: scope.to_snake_case().escape(),
+                            protocol: self.resolve.types[id]
+                                .name
+                                .as_deref()
+                                .unwrap()
+                                .to_upper_camel_case()
+                                .escape(),
+                        })
+                    }
+                    wit_parser::FunctionKind::Method(_) => {
+                        FunctionExport::Method(self.function_name(function))
+                    }
+                    wit_parser::FunctionKind::Static(id) => FunctionExport::Static(Static {
+                        module: scope.to_snake_case().escape(),
+                        protocol: self.resolve.types[id]
+                            .name
+                            .as_deref()
+                            .unwrap()
+                            .to_upper_camel_case()
+                            .escape(),
+                        name: self.function_name(function),
+                    }),
                 });
             }
         }
@@ -459,7 +676,46 @@ impl<'a> Summary<'a> {
         }
     }
 
-    pub fn generate_code(&self, path: &Path) -> Result<()> {
+    fn function_name(&self, function: &MyFunction) -> String {
+        match function.wit_kind {
+            wit_parser::FunctionKind::Freestanding => function.name.to_snake_case().escape(),
+            wit_parser::FunctionKind::Constructor(_) => "__init__".into(),
+            wit_parser::FunctionKind::Method(id) => function
+                .name
+                .strip_prefix(&format!(
+                    "[method]{}.",
+                    self.resolve.types[id].name.as_deref().unwrap()
+                ))
+                .unwrap()
+                .to_snake_case()
+                .escape(),
+            wit_parser::FunctionKind::Static(id) => function
+                .name
+                .strip_prefix(&format!(
+                    "[static]{}.",
+                    self.resolve.types[id].name.as_deref().unwrap()
+                ))
+                .unwrap()
+                .to_snake_case()
+                .escape(),
+        }
+    }
+
+    fn is_self_handle(&self, resource: Option<TypeId>, ty: Type) -> bool {
+        if let (Some(resource), Type::Id(id)) = (resource, ty) {
+            if let TypeDefKind::Handle(Handle::Own(id) | Handle::Borrow(id)) =
+                &self.resolve.types[id].kind
+            {
+                bindgen::dealias(self.resolve, *id) == resource
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
+
+    fn function_code(&self, function: &MyFunction, names: &mut TypeNames) -> FunctionCode {
         enum SpecialReturn<'a> {
             Result(&'a Result_),
             None,
@@ -477,6 +733,94 @@ impl<'a> Summary<'a> {
             }
         };
 
+        let snake = self.function_name(function);
+
+        let (skip_count, self_, resource) = match function.wit_kind {
+            wit_parser::FunctionKind::Freestanding => (0, false, None),
+            wit_parser::FunctionKind::Constructor(resource) => (0, true, Some(resource)),
+            wit_parser::FunctionKind::Method(resource) => (1, true, Some(resource)),
+            wit_parser::FunctionKind::Static(resource) => (0, false, Some(resource)),
+        };
+
+        let mut type_name = |ty| {
+            if self.is_self_handle(resource, ty) {
+                // TODO: we should probably use `typing.Self` here in most cases, but note that it won't work for
+                // static methods as of this writing.  Maybe we can do something fancy with `typing.TypeVar`.
+                "Any".to_string()
+            } else {
+                names.type_name(ty)
+            }
+        };
+
+        let params =
+            self_
+                .then(|| "self".to_string())
+                .into_iter()
+                .chain(function.params.iter().skip(skip_count).map(|(name, ty)| {
+                    format!("{}: {}", name.to_snake_case().escape(), type_name(*ty))
+                }))
+                .collect::<Vec<_>>()
+                .join(", ");
+
+        let args = function
+            .params
+            .iter()
+            .map(|(name, _)| name.to_snake_case().escape())
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let result_types = function.results.types().collect::<Vec<_>>();
+
+        let (return_statement, return_type) =
+            if let wit_parser::FunctionKind::Constructor(_) = function.wit_kind {
+                ("return", "None".to_owned())
+            } else {
+                match result_types.as_slice() {
+                    [] => ("return", "None".to_owned()),
+                    [ty] => match special_return(*ty) {
+                        SpecialReturn::Result(result) => (
+                            "if isinstance(result[0], Err):
+        raise result[0]
+    else:
+        return result[0].value",
+                            result.ok.map(type_name).unwrap_or_else(|| "None".into()),
+                        ),
+                        SpecialReturn::None => ("return result[0]", type_name(*ty)),
+                    },
+                    _ => (
+                        "return result",
+                        format!(
+                            "({})",
+                            result_types
+                                .iter()
+                                .map(|ty| type_name(*ty))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                    ),
+                }
+            };
+
+        let result_count = result_types.len();
+
+        let static_method = if let wit_parser::FunctionKind::Static(_) = function.wit_kind {
+            "\n    @staticmethod"
+        } else {
+            ""
+        };
+
+        FunctionCode {
+            snake,
+            params,
+            args,
+            return_statement,
+            static_method,
+            return_type,
+            result_count,
+        }
+    }
+
+    pub fn generate_code(&self, path: &Path) -> Result<()> {
         #[derive(Default)]
         struct Definitions<'a> {
             types: Vec<String>,
@@ -484,6 +828,15 @@ impl<'a> Summary<'a> {
             type_imports: HashSet<InterfaceId>,
             function_imports: HashSet<InterfaceId>,
             docs: Option<&'a str>,
+        }
+
+        enum Code {
+            None,
+            Shared(String),
+            Separate {
+                import: Option<String>,
+                export: Option<String>,
+            },
         }
 
         let docstring = |docs: Option<&str>, indent_level| {
@@ -545,7 +898,7 @@ class {name}:
             };
 
             let code = match &ty.kind {
-                TypeDefKind::Record(record) => Some(make_class(
+                TypeDefKind::Record(record) => Code::Shared(make_class(
                     &mut names,
                     camel(),
                     ty.docs.contents.as_deref(),
@@ -591,7 +944,7 @@ class {name}:
                         String::new()
                     };
 
-                    Some(format!(
+                    Code::Shared(format!(
                         "
 {classes}
 
@@ -613,7 +966,7 @@ class {name}:
 
                     let docs = docstring(ty.docs.contents.as_deref(), 1);
 
-                    Some(format!(
+                    Code::Shared(format!(
                         "
 class {camel}(Enum):
     {docs}{cases}
@@ -637,115 +990,252 @@ class {camel}(Enum):
 
                     let docs = docstring(ty.docs.contents.as_deref(), 1);
 
-                    Some(format!(
+                    Code::Shared(format!(
                         "
 class {camel}(Flag):
     {docs}{flags}
 "
                     ))
                 }
+                TypeDefKind::Resource => {
+                    let camel = camel();
+
+                    let docs = docstring(ty.docs.contents.as_deref(), 1);
+
+                    let empty = &ResourceInfo::default();
+
+                    let import = if self
+                        .resource_info
+                        .get(id)
+                        .unwrap_or(empty)
+                        .remote_dispatch_index
+                        .is_some()
+                    {
+                        let method = |(index, function)| {
+                            let FunctionCode {
+                                snake,
+                                params,
+                                args,
+                                return_type,
+                                return_statement,
+                                static_method,
+                                result_count,
+                            } = self.function_code(function, &mut names);
+
+                            let docs = docstring(function.docs, 2);
+
+                            if let wit_parser::FunctionKind::Constructor(_) = function.wit_kind {
+                                format!(
+                                    "
+    def {snake}({params}):
+        {docs}tmp = componentize_py_runtime.call_import({index}, [{args}], {result_count})[0]
+        (_, func, args, _) = tmp.finalizer.detach()
+        self.handle = tmp.handle
+        self.finalizer = weakref.finalize(self, func, args[0], args[1])
+"
+                                )
+                            } else {
+                                format!(
+                                    "{static_method}
+    def {snake}({params}) -> {return_type}:
+        {docs}result = componentize_py_runtime.call_import({index}, [{args}], {result_count})
+        {return_statement}
+"
+                                )
+                            }
+                        };
+
+                        let methods = self
+                            .functions
+                            .iter()
+                            .filter_map({
+                                let mut index = 0;
+                                let id = *id;
+                                move |function| {
+                                    let result = matches_resource(function, id, Direction::Import)
+                                        .then_some((index, function));
+
+                                    if function.is_dispatchable() {
+                                        index += 1;
+                                    }
+
+                                    result
+                                }
+                            })
+                            .map(method)
+                            .collect::<Vec<_>>()
+                            .concat();
+
+                        Some(format!(
+                            "
+class {camel}:
+    {docs}{methods}
+"
+                        ))
+                    } else {
+                        None
+                    };
+
+                    let export = if self
+                        .resource_info
+                        .get(id)
+                        .unwrap_or(empty)
+                        .local_dispatch_index
+                        .is_some()
+                    {
+                        let method = |function| {
+                            let FunctionCode {
+                                snake,
+                                params,
+                                return_type,
+                                static_method,
+                                ..
+                            } = self.function_code(function, &mut names);
+
+                            let docs = docstring(function.docs, 2);
+
+                            format!(
+                                "{static_method}
+    @abstractmethod
+    def {snake}({params}) -> {return_type}:
+        {docs}raise NotImplementedError
+"
+                            )
+                        };
+
+                        let methods = self
+                            .functions
+                            .iter()
+                            .filter(|function| matches_resource(function, *id, Direction::Export))
+                            .map(method)
+                            .collect::<Vec<_>>()
+                            .concat();
+
+                        Some(format!(
+                            "
+class {camel}(Protocol):
+    {docs}{methods}
+"
+                        ))
+                    } else {
+                        None
+                    };
+
+                    Code::Separate { import, export }
+                }
                 TypeDefKind::Tuple(_)
                 | TypeDefKind::List(_)
                 | TypeDefKind::Option(_)
-                | TypeDefKind::Result(_) => None,
-                _ => todo!(),
+                | TypeDefKind::Result(_)
+                | TypeDefKind::Handle(_) => Code::None,
+                kind => todo!("{kind:?}"),
             };
 
-            if let Some(code) = code {
-                let (definitions, docs) = match ty.owner {
-                    TypeOwner::Interface(interface) => {
-                        if let Some(info) = self.imported_interfaces.get(&interface) {
-                            (interface_imports.entry(info.name).or_default(), info.docs)
-                        } else if let Some(info) = self.exported_interfaces.get(&interface) {
-                            (interface_exports.entry(info.name).or_default(), info.docs)
-                        } else {
-                            unreachable!()
-                        }
+            let code = match code {
+                Code::Shared(code) if self.has_imported_and_exported_resource(Type::Id(*id)) => {
+                    Code::Separate {
+                        import: Some(code.clone()),
+                        export: Some(code),
                     }
+                }
+                code => code,
+            };
 
-                    TypeOwner::World(_) => (
-                        &mut world_exports,
-                        self.resolve.worlds[self.world].docs.contents.as_deref(),
-                    ),
+            match code {
+                Code::None => {}
+                Code::Shared(_) | Code::Separate { .. } => {
+                    let tuples = match ty.owner {
+                        TypeOwner::Interface(interface) => match code {
+                            Code::None => unreachable!(),
+                            Code::Shared(code) => vec![(
+                                code,
+                                if let Some(info) = self.imported_interfaces.get(&interface) {
+                                    (interface_imports.entry(info.name).or_default(), info.docs)
+                                } else if let Some(info) = self.exported_interfaces.get(&interface)
+                                {
+                                    (interface_exports.entry(info.name).or_default(), info.docs)
+                                } else {
+                                    unreachable!()
+                                },
+                            )],
+                            Code::Separate { import, export } => import
+                                .map(|code| {
+                                    let info = self.imported_interfaces.get(&interface).unwrap();
+                                    (
+                                        code,
+                                        (
+                                            interface_imports.entry(info.name).or_default(),
+                                            info.docs,
+                                        ),
+                                    )
+                                })
+                                .into_iter()
+                                .chain(export.map(|code| {
+                                    let info = self.exported_interfaces.get(&interface).unwrap();
+                                    (
+                                        code,
+                                        (
+                                            interface_exports.entry(info.name).or_default(),
+                                            info.docs,
+                                        ),
+                                    )
+                                }))
+                                .collect(),
+                        },
 
-                    TypeOwner::None => unreachable!(),
-                };
+                        TypeOwner::World(_) => {
+                            let docs = self.resolve.worlds[self.world].docs.contents.as_deref();
+                            match code {
+                                Code::None => unreachable!(),
+                                Code::Shared(code) => vec![(code, (&mut world_exports, docs))],
+                                Code::Separate { import, export } => import
+                                    .map(|code| (code, (&mut world_imports, docs)))
+                                    .into_iter()
+                                    .chain(export.map(|code| (code, (&mut world_exports, docs))))
+                                    .collect(),
+                            }
+                        }
 
-                definitions.types.push(code);
-                definitions.type_imports.extend(names.imports);
-                definitions.docs = docs;
+                        TypeOwner::None => unreachable!(),
+                    };
+
+                    for (code, (definitions, docs)) in tuples {
+                        definitions.types.push(code);
+                        definitions.type_imports.extend(names.imports.clone());
+                        definitions.docs = docs;
+                    }
+                }
             }
         }
 
         let mut index = 0;
         for function in &self.functions {
             #[allow(clippy::single_match)]
-            match function.kind {
-                FunctionKind::Import | FunctionKind::Export => {
+            match (&function.kind, &function.wit_kind) {
+                (
+                    FunctionKind::Import | FunctionKind::Export,
+                    wit_parser::FunctionKind::Freestanding,
+                ) => {
                     let mut names = TypeNames::new(
                         self,
                         if let FunctionKind::Export = function.kind {
                             TypeOwner::None
-                        } else if let Some(interface) = function.interface {
+                        } else if let Some(interface) = &function.interface {
                             TypeOwner::Interface(interface.id)
                         } else {
                             TypeOwner::World(self.world)
                         },
                     );
 
-                    let snake = function.name.to_snake_case().escape();
-
-                    let params = function
-                        .params
-                        .iter()
-                        .map(|(name, ty)| {
-                            format!(
-                                "{}: {}",
-                                name.to_snake_case().escape(),
-                                names.type_name(*ty)
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
-
-                    let args = function
-                        .params
-                        .iter()
-                        .map(|(name, _)| name.to_snake_case().escape())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-
-                    let result_types = function.results.types().collect::<Vec<_>>();
-
-                    let (return_statement, return_type) = match result_types.as_slice() {
-                        [] => ("return", "None".to_owned()),
-                        [ty] => match special_return(*ty) {
-                            SpecialReturn::Result(result) => (
-                                "if isinstance(result[0], Err):
-        raise result[0]
-    else:
-        return result[0].value",
-                                result
-                                    .ok
-                                    .map(|ty| names.type_name(ty))
-                                    .unwrap_or_else(|| "None".into()),
-                            ),
-                            SpecialReturn::None => ("return result[0]", names.type_name(*ty)),
-                        },
-                        _ => (
-                            "return result",
-                            format!(
-                                "({})",
-                                result_types
-                                    .iter()
-                                    .map(|ty| names.type_name(*ty))
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            ),
-                        ),
-                    };
-
-                    let result_count = result_types.len();
+                    let FunctionCode {
+                        snake,
+                        params,
+                        args,
+                        return_type,
+                        return_statement,
+                        result_count,
+                        ..
+                    } = self.function_code(function, &mut names);
 
                     match function.kind {
                         FunctionKind::Import => {
@@ -759,7 +1249,7 @@ def {snake}({params}) -> {return_type}:
 "
                             );
 
-                            let (definitions, docs) = if let Some(interface) = function.interface {
+                            let (definitions, docs) = if let Some(interface) = &function.interface {
                                 (
                                     interface_imports.entry(interface.name).or_default(),
                                     interface.docs,
@@ -792,7 +1282,7 @@ def {snake}({params}) -> {return_type}:
 "
                             );
 
-                            let (definitions, docs) = if let Some(interface) = function.interface {
+                            let (definitions, docs) = if let Some(interface) = &function.interface {
                                 (
                                     interface_exports.entry(interface.name).or_default(),
                                     interface.docs,
@@ -820,10 +1310,11 @@ def {snake}({params}) -> {return_type}:
         }
 
         let python_imports =
-            "from typing import TypeVar, Generic, Union, Optional, Union, Protocol, Tuple, List
+            "from typing import TypeVar, Generic, Union, Optional, Union, Protocol, Tuple, List, Any
 from enum import Flag, Enum, auto
 from dataclasses import dataclass
 from abc import abstractmethod
+import weakref
 ";
 
         {
@@ -871,7 +1362,7 @@ Result = Union[Ok[T], Err[E]]
                     .union(&code.function_imports)
                     .map(|&interface| import("..", interface))
                     .collect::<Vec<_>>()
-                    .concat();
+                    .join("\n");
                 let docs = docstring(code.docs, 0);
 
                 write!(
@@ -902,7 +1393,7 @@ import componentize_py_runtime
                     .into_iter()
                     .map(|interface| import("..", interface))
                     .collect::<Vec<_>>()
-                    .concat();
+                    .join("\n");
                 let docs = docstring(code.docs, 0);
 
                 write!(
@@ -936,7 +1427,7 @@ class {camel}(Protocol):
                 .into_iter()
                 .map(|interface| import("..", interface))
                 .collect::<Vec<_>>()
-                .concat();
+                .join("\n");
 
             write!(
                 init,
@@ -972,7 +1463,7 @@ from ..types import Result, Ok, Err, Some
                 )
                 .map(|&interface| import(".", interface))
                 .collect::<Vec<_>>()
-                .concat();
+                .join("\n");
             let docs = docstring(world_exports.docs, 0);
 
             write!(
@@ -1024,6 +1515,62 @@ class {camel}(Protocol):
             TypeOwner::None => None,
         }
     }
+
+    fn has_imported_and_exported_resource(&self, ty: Type) -> bool {
+        match ty {
+            Type::Bool
+            | Type::U8
+            | Type::S8
+            | Type::U16
+            | Type::S16
+            | Type::U32
+            | Type::S32
+            | Type::Char
+            | Type::U64
+            | Type::S64
+            | Type::Float32
+            | Type::Float64
+            | Type::String => false,
+            Type::Id(id) => match &self.resolve.types[id].kind {
+                TypeDefKind::Record(record) => record
+                    .fields
+                    .iter()
+                    .any(|field| self.has_imported_and_exported_resource(field.ty)),
+                TypeDefKind::Variant(variant) => variant.cases.iter().any(|case| {
+                    case.ty
+                        .map(|ty| self.has_imported_and_exported_resource(ty))
+                        .unwrap_or(false)
+                }),
+                TypeDefKind::Handle(Handle::Own(resource) | Handle::Borrow(resource)) => {
+                    self.has_imported_and_exported_resource(Type::Id(*resource))
+                }
+                TypeDefKind::Enum(_) | TypeDefKind::Flags(_) => false,
+                TypeDefKind::Option(ty) => self.has_imported_and_exported_resource(*ty),
+                TypeDefKind::Result(result) => {
+                    result
+                        .ok
+                        .map(|ty| self.has_imported_and_exported_resource(ty))
+                        .unwrap_or(false)
+                        || result
+                            .err
+                            .map(|ty| self.has_imported_and_exported_resource(ty))
+                            .unwrap_or(false)
+                }
+                TypeDefKind::Tuple(tuple) => tuple
+                    .types
+                    .iter()
+                    .any(|ty| self.has_imported_and_exported_resource(*ty)),
+                TypeDefKind::List(_) => true,
+                TypeDefKind::Type(ty) => self.has_imported_and_exported_resource(*ty),
+                TypeDefKind::Resource => {
+                    let empty = &ResourceInfo::default();
+                    let info = self.resource_info.get(&id).unwrap_or(empty);
+                    info.local_dispatch_index.is_some() && info.remote_dispatch_index.is_some()
+                }
+                kind => todo!("{kind:?}"),
+            },
+        }
+    }
 }
 
 struct TypeNames<'a> {
@@ -1060,7 +1607,8 @@ impl<'a> TypeNames<'a> {
                     TypeDefKind::Record(_)
                     | TypeDefKind::Variant(_)
                     | TypeDefKind::Enum(_)
-                    | TypeDefKind::Flags(_) => {
+                    | TypeDefKind::Flags(_)
+                    | TypeDefKind::Resource => {
                         let package = if ty.owner == self.owner {
                             String::new()
                         } else {
@@ -1124,6 +1672,9 @@ impl<'a> TypeNames<'a> {
                         };
                         format!("Tuple[{types}]")
                     }
+                    TypeDefKind::Handle(Handle::Own(ty) | Handle::Borrow(ty)) => {
+                        self.type_name(Type::Id(*ty))
+                    }
                     TypeDefKind::Type(ty) => self.type_name(*ty),
                     kind => todo!("{kind:?}"),
                 }
@@ -1149,5 +1700,19 @@ impl Escape for String {
             }
             _ => self,
         }
+    }
+}
+
+fn matches_resource(function: &MyFunction, resource: TypeId, direction: Direction) -> bool {
+    match (direction, &function.kind) {
+        (Direction::Import, FunctionKind::Import) | (Direction::Export, FunctionKind::Export) => {
+            match &function.wit_kind {
+                wit_parser::FunctionKind::Freestanding => false,
+                wit_parser::FunctionKind::Method(id)
+                | wit_parser::FunctionKind::Static(id)
+                | wit_parser::FunctionKind::Constructor(id) => *id == resource,
+            }
+        }
+        _ => false,
     }
 }

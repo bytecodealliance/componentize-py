@@ -800,7 +800,7 @@ use {{
     proptest::strategy::{{Just, Strategy}},
     wasmtime_wasi::preview2::command,
     wasmtime::{{
-        component::{{InstancePre, Linker, TypedFunc}},
+        component::{{Instance, InstancePre, Linker, TypedFunc}},
         Store,
     }},
 }};
@@ -835,23 +835,27 @@ impl super::Host for Host {{
     async fn instantiate_pre(
         store: &mut Store<Ctx>,
         pre: &InstancePre<Ctx>,
-    ) -> Result<Self::World> {{
-        let instance = pre.instantiate_async(&mut *store).await?;
-        let mut exports = instance.exports(&mut *store);
+    ) -> Result<(Self::World, Instance)> {{
+        let guest_instance = pre.instantiate_async(&mut *store).await?;
+        let mut exports = guest_instance.exports(&mut *store);
         let mut instance = exports.instance("componentize-py:test/echoes-generated").unwrap();
-        Ok(Self::World {{
+        Ok((Self::World {{
            {typed_function_inits}
-        }})
+        }}, guest_instance))
     }}
 }}
 
-const GUEST_CODE: &str = r#"
+const GUEST_CODE: &[(&str, &str)] = &[
+    (
+        "app.py",
+        r#"
 from echoes_generated_test import exports
 from echoes_generated_test.imports import echoes_generated
 
 class EchoesGenerated(exports.EchoesGenerated):
 {guest_functions}
-"#;
+"#,
+)];
 
 static TESTER: Lazy<Tester<Host>> = Lazy::new(|| {{
     Tester::<Host>::new(include_str!({wit_path:?}), GUEST_CODE, *SEED).unwrap()
