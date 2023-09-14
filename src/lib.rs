@@ -439,7 +439,7 @@ fn add_wasi_and_stubs(
             WorldItem::Function(function) => {
                 functions.entry(None).or_default().push(&function.name);
             }
-            WorldItem::Type(_) => unreachable!(),
+            WorldItem::Type(_) => {}
         }
     }
 
