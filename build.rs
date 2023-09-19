@@ -61,7 +61,7 @@ fn stubs_for_clippy(out_dir: &Path) -> Result<()> {
         "libwasi-emulated-signal.so.zst",
         "libc++.so.zst",
         "libc++abi.so.zst",
-        "wasi_snapshot_preview1.wasm.zst",
+        "wasi_snapshot_preview1.reactor.wasm.zst",
     ];
 
     for file in files {
@@ -184,21 +184,9 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
     } else {
         bail!("no such directory: {}", path.display())
     }
-
-    let mut cmd = Command::new("cargo");
-    cmd.arg("build")
-        .current_dir("wasmtime/crates/wasi-preview1-component-adapter")
-        .arg("--release")
-        .arg("--target=wasm32-unknown-unknown")
-        .env("CARGO_TARGET_DIR", out_dir);
-
-    let status = cmd.status()?;
-    assert!(status.success());
-    println!("cargo:rerun-if-changed=wasmtime");
-
     compress(
-        &out_dir.join("wasm32-unknown-unknown/release"),
-        "wasi_snapshot_preview1.wasm",
+        &repo_dir.join("adapters/2ad057d"),
+        "wasi_snapshot_preview1.reactor.wasm",
         out_dir,
         false,
     )?;
