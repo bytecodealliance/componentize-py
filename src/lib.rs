@@ -263,7 +263,7 @@ pub async fn componentize(
             "wasi_snapshot_preview1",
             &zstd::decode_all(Cursor::new(include_bytes!(concat!(
                 env!("OUT_DIR"),
-                "/wasi_snapshot_preview1.wasm.zst"
+                "/wasi_snapshot_preview1.reactor.wasm.zst"
             ))))?,
         )?;
 
@@ -300,8 +300,8 @@ pub async fn componentize(
     .chain(python_path.iter().copied())
     .collect::<Vec<_>>();
 
-    let stdout = MemoryOutputPipe::new();
-    let stderr = MemoryOutputPipe::new();
+    let stdout = MemoryOutputPipe::new(10000);
+    let stderr = MemoryOutputPipe::new(10000);
 
     let mut wasi = WasiCtxBuilder::new();
     wasi.stdin(MemoryInputPipe::new(Bytes::new()), IsATTY::No)
