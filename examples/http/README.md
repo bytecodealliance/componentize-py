@@ -13,12 +13,12 @@ which may differ from later revisions.
 
 ## Prerequisites
 
-* `dicej/spin` branch `wasi-http`
-* `componentize-py` 0.4.3
+* `dicej/spin` branch `wasi-http-wasmtime-2ad057d7`
+* `componentize-py` 0.5.0
 * `Rust`, for installing `Spin`
 
 ```
-cargo install --locked --git https://github.com/dicej/spin --branch wasi-http
+cargo install --locked --git https://github.com/dicej/spin --branch wasi-http-wasmtime-2ad057d7 spin-cli
 pip install componentize-py
 ```
 
