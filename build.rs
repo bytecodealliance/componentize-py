@@ -185,7 +185,7 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
         bail!("no such directory: {}", path.display())
     }
     compress(
-        &repo_dir.join("adapters/2ad057d"),
+        &repo_dir.join("adapters/40c1f9b8"),
         "wasi_snapshot_preview1.reactor.wasm",
         out_dir,
         false,

@@ -1,5 +1,3 @@
-#![deny(warnings)]
-
 use {
     super::{Ctx, MyFloat32, MyFloat64, Tester, SEED},
     anyhow::Result,
@@ -7,7 +5,7 @@ use {
     once_cell::sync::Lazy,
     proptest::strategy::{Just, Strategy},
     wasmtime::{
-        component::{InstancePre, Linker},
+        component::{Instance, InstancePre, Linker},
         Store,
     },
     wasmtime_wasi::preview2::command,
@@ -202,12 +200,14 @@ impl super::Host for Host {
     async fn instantiate_pre(
         store: &mut Store<Ctx>,
         pre: &InstancePre<Ctx>,
-    ) -> Result<Self::World> {
-        Ok(EchoesTest::instantiate_pre(store, pre).await?.0)
+    ) -> Result<(Self::World, Instance)> {
+        Ok(EchoesTest::instantiate_pre(store, pre).await?)
     }
 }
 
-const GUEST_CODE: &str = r#"
+const GUEST_CODE: &[(&str, &str)] = &[(
+    "app.py",
+    r#"
 from echoes_test import exports
 from echoes_test.imports import echoes
 
@@ -307,7 +307,8 @@ class Echoes(exports.Echoes):
 
     def echo_many(self, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16):
         return echoes.echo_many(v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16)
-"#;
+"#,
+)];
 
 static TESTER: Lazy<Tester<Host>> =
     Lazy::new(|| Tester::<Host>::new(include_str!("wit/echoes.wit"), GUEST_CODE, *SEED).unwrap());

@@ -1,9 +1,0 @@
-package componentize-py:test
-
-interface simple-export {
-     foo: func(v: u32) -> u32
-}
-
-world simple-export-test {
-    export simple-export
-}

@@ -131,7 +131,8 @@ pub fn has_pointer(resolve: &Resolve, ty: Type) -> bool {
                 .cases
                 .iter()
                 .any(|case| case.ty.map(|ty| has_pointer(resolve, ty)).unwrap_or(false)),
-            TypeDefKind::Enum(_) | TypeDefKind::Flags(_) => false,
+            // TODO: should we be calling destructors for handles in post-return functions?
+            TypeDefKind::Handle(_) | TypeDefKind::Enum(_) | TypeDefKind::Flags(_) => false,
             TypeDefKind::Option(ty) => has_pointer(resolve, *ty),
             TypeDefKind::Result(result) => {
                 result
@@ -222,6 +223,11 @@ pub fn abi(resolve: &Resolve, ty: Type) -> Abi {
                 flattened: vec![ValType::I32; 2],
             },
             TypeDefKind::Type(ty) => abi(resolve, *ty),
+            TypeDefKind::Handle(_) => Abi {
+                size: 4,
+                align: 4,
+                flattened: vec![ValType::I32],
+            },
             kind => todo!("{kind:?}"),
         },
     }

@@ -45,32 +45,55 @@ pub fn make_bindings(resolve: &Resolve, world: WorldId, summary: &Summary) -> Re
         function_names.push((offset, (*name).to_owned()));
     }
 
-    for function in summary
-        .functions
-        .iter()
-        .filter(|f| matches!(f.kind, FunctionKind::Import))
-    {
+    for function in summary.functions.iter().filter(|f| {
+        matches!(
+            f.kind,
+            FunctionKind::Import
+                | FunctionKind::ResourceNew
+                | FunctionKind::ResourceRep
+                | FunctionKind::ResourceDropLocal
+                | FunctionKind::ResourceDropRemote
+        )
+    }) {
+        let module = &function
+            .interface
+            .as_ref()
+            .map(|interface| {
+                format!(
+                    "{}{}{}",
+                    if matches!(
+                        function.kind,
+                        FunctionKind::Import | FunctionKind::ResourceDropRemote
+                    ) {
+                        ""
+                    } else {
+                        "[export]"
+                    },
+                    if let Some(package) = interface.package {
+                        format!("{}:{}/", package.namespace, package.name)
+                    } else {
+                        String::new()
+                    },
+                    interface.name
+                )
+            })
+            .unwrap_or_else(|| "$root".to_owned());
+
+        let name = function.name;
+        let name = &match function.kind {
+            FunctionKind::ResourceNew => format!("[resource-new]{name}"),
+            FunctionKind::ResourceRep => format!("[resource-rep]{name}"),
+            FunctionKind::ResourceDropLocal | FunctionKind::ResourceDropRemote => {
+                format!("[resource-drop]{name}")
+            }
+            _ => name.to_owned(),
+        };
+
         let (params, results) = function.core_import_type(resolve);
         let offset = types.len();
+
         types.function(params, results);
-        imports.import(
-            &function
-                .interface
-                .map(|interface| {
-                    format!(
-                        "{}{}",
-                        if let Some(package) = interface.package {
-                            format!("{}:{}/", package.namespace, package.name)
-                        } else {
-                            String::new()
-                        },
-                        interface.name
-                    )
-                })
-                .unwrap_or_else(|| "$root".to_owned()),
-            function.name,
-            EntityType::Function(offset),
-        );
+        imports.import(module, name, EntityType::Function(offset));
         function_names.push((offset, format!("{}-imported", function.internal_name())));
     }
 
@@ -133,7 +156,7 @@ pub fn make_bindings(resolve: &Resolve, world: WorldId, summary: &Summary) -> Re
         .iter()
         .filter_map(|f| {
             if let FunctionKind::Export = f.kind {
-                Some((f.interface.map(|i| i.name), f.name))
+                Some((f.interface.as_ref().map(|i| i.name), f.name))
             } else {
                 None
             }
@@ -157,17 +180,29 @@ pub fn make_bindings(resolve: &Resolve, world: WorldId, summary: &Summary) -> Re
             }
             FunctionKind::Export => gen.compile_export(
                 export_set
-                    .get_index_of(&(function.interface.map(|i| i.name), function.name))
+                    .get_index_of(&(function.interface.as_ref().map(|i| i.name), function.name))
                     .unwrap()
                     .try_into()?,
-                // next two `dispatch_index`es should be the lift and lower functions (see ordering
-                // in `Summary::visit_function`):
+                // The next two `dispatch_index`es should be the lift and lower functions (see ordering in
+                // `Summary::visit_function`):
                 dispatch_index,
                 dispatch_index + 1,
             ),
             FunctionKind::ExportLift => gen.compile_export_lift(),
             FunctionKind::ExportLower => gen.compile_export_lower(),
             FunctionKind::ExportPostReturn => gen.compile_export_post_return(),
+            FunctionKind::ResourceNew => {
+                gen.compile_resource_new(import_index.try_into().unwrap());
+                import_index += 1;
+            }
+            FunctionKind::ResourceRep => {
+                gen.compile_resource_rep(import_index.try_into().unwrap());
+                import_index += 1;
+            }
+            FunctionKind::ResourceDropLocal | FunctionKind::ResourceDropRemote => {
+                gen.compile_resource_drop(import_index.try_into().unwrap());
+                import_index += 1;
+            }
         };
 
         let mut func = Function::new_with_locals_types(gen.local_types);
@@ -191,7 +226,7 @@ pub fn make_bindings(resolve: &Resolve, world: WorldId, summary: &Summary) -> Re
                         } else {
                             ""
                         },
-                        if let Some(interface) = function.interface {
+                        if let Some(interface) = &function.interface {
                             format!(
                                 "{}{}#{}",
                                 if let Some(package) = interface.package {
