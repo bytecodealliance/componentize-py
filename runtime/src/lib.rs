@@ -146,7 +146,7 @@ fn call_import<'a>(
 
 #[pyo3::pyfunction]
 #[pyo3(pass_module)]
-fn drop_resource<'a>(module: &'a PyModule, index: u32, handle: usize) -> PyResult<()> {
+fn drop_resource(module: &PyModule, index: u32, handle: usize) -> PyResult<()> {
     let params = [handle];
     unsafe {
         componentize_py_call_indirect(
