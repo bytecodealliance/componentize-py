@@ -69,11 +69,9 @@ For an example of running a sandboxed Python guest within a Python host, see
 
 ## Known Limitations
 
-This project does not yet support [WIT
-resources](https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md#item-resource)
-or [interface
-versions](https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md#package-declaration).
-Both are coming soon.
+This project does not yet support [interface
+versions](https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md#package-declaration),
+but it's coming soon.
 
 Currently, the application can only import dependencies during build time, which
 means any imports used at runtime must be resolved at the top level of the
