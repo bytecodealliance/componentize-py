@@ -357,8 +357,6 @@ pub async fn componentize(
     let app_name = app_name.to_owned();
     let component = component_init::initialize(&component, move |instrumented| {
         async move {
-            std::fs::write("/tmp/component.wasm", &instrumented)?;
-
             let component = &Component::new(&engine, instrumented)?;
             if !added_to_linker {
                 add_wasi_and_stubs(&resolve, world, component, &mut linker)?;
