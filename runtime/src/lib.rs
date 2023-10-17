@@ -876,7 +876,19 @@ pub extern "C" fn componentize_py_lift_handle<'a>(
                 }
             };
 
-            unsafe { PyObject::from_borrowed_ptr(*py, rep as _) }.into_ref(*py)
+            let value = unsafe { PyObject::from_borrowed_ptr(*py, rep as _) }.into_ref(*py);
+
+            value
+                .delattr(intern!(*py, "__componentize_py_handle"))
+                .unwrap();
+
+            value
+                .getattr(intern!(*py, "finalizer"))
+                .unwrap()
+                .call_method0(intern!(*py, "detach"))
+                .unwrap();
+
+            value
         }
     } else {
         let Some(RemoteResource { drop }) = resource_remote else {
@@ -930,7 +942,7 @@ pub extern "C" fn componentize_py_lower_handle(
     if local != 0 {
         let ty = &TYPES.get().unwrap()[usize::try_from(resource).unwrap()];
         let Type::Resource {
-            local: Some(LocalResource { new, .. }),
+            local: Some(LocalResource { new, drop, .. }),
             ..
         } = ty
         else {
@@ -956,8 +968,26 @@ pub extern "C" fn componentize_py_lower_handle(
                 }
             };
 
-            unsafe { PyObject::from_borrowed_ptr(*py, rep) }
-                .setattr(*py, name, handle.to_object(*py))
+            let instance = unsafe { PyObject::from_borrowed_ptr(*py, rep) };
+
+            instance.setattr(*py, name, handle.to_object(*py)).unwrap();
+
+            let finalizer = FINALIZE
+                .get()
+                .unwrap()
+                .call1(
+                    *py,
+                    (
+                        instance.clone(),
+                        DROP_RESOURCE.get().unwrap(),
+                        drop.to_object(*py),
+                        handle,
+                    ),
+                )
+                .unwrap();
+
+            instance
+                .setattr(*py, intern!(*py, "finalizer"), finalizer)
                 .unwrap();
 
             handle
