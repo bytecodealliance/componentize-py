@@ -40,6 +40,7 @@ static OK_CONSTRUCTOR: OnceCell<PyObject> = OnceCell::new();
 static ERR_CONSTRUCTOR: OnceCell<PyObject> = OnceCell::new();
 static FINALIZE: OnceCell<PyObject> = OnceCell::new();
 static DROP_RESOURCE: OnceCell<PyObject> = OnceCell::new();
+static SEED: OnceCell<PyObject> = OnceCell::new();
 
 const DISCRIMINANT_FIELD_INDEX: i32 = 0;
 const PAYLOAD_FIELD_INDEX: i32 = 1;
@@ -325,6 +326,9 @@ fn do_init(app_name: String, symbols: Symbols) -> Result<()> {
             )
             .unwrap();
 
+        SEED.set(py.import("random")?.getattr("seed")?.into())
+            .unwrap();
+
         Ok(())
     })
 }
@@ -369,6 +373,10 @@ pub unsafe extern "C" fn componentize_py_dispatch(
         for (k, v) in environment::get_environment() {
             environ.set_item(k, v).unwrap();
         }
+
+        // Call `random.seed()` to ensure we get a fresh seed rather than the one that got baked in during
+        // pre-init.
+        SEED.get().unwrap().call0(py).unwrap();
 
         let export = &EXPORTS.get().unwrap()[export];
         let result = match export {
