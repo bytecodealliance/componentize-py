@@ -1,24 +1,27 @@
 # Example: `http`
 
-This is an example of how to use [componentize-py] and [Spin] to build and run a
-Python-based component targetting the [wasi-http] `proxy` world.
+This is an example of how to use [componentize-py] and [Wasmtime] to build and
+run a Python-based component targetting the [wasi-http] `proxy` world.
 
 Note that, as of this writing, neither `wasi-http` nor the portions of
 `wasi-cli` on which it is based have stabilized.  Here we use a snapshot of both,
 which may differ from later revisions.
 
 [componentize-py]: https://github.com/bytecodealliance/componentize-py
-[Spin]: https://github.com/fermyon/spin
+[Wasmtime]: https://github.com/bytecodealliance/wasmtime
 [wasi-http]: https://github.com/WebAssembly/wasi-http
 
 ## Prerequisites
 
-* `dicej/spin` branch `wasi-http-wasmtime-2ad057d7`
-* `componentize-py` 0.5.0
-* `Rust`, for installing `Spin`
+* `Wasmtime` 14.0.3 (later versions may use a different, incompatible `wasi-http` snapshot)
+* `componentize-py` 0.6.0
+
+Below, we use [Rust](https://rustup.rs/)'s `cargo` to install `Wasmtime`.  If
+you don't have `cargo`, you can download and install from
+https://github.com/bytecodealliance/wasmtime/releases/tag/v14.0.3.
 
 ```
-cargo install --locked --git https://github.com/dicej/spin --branch wasi-http-wasmtime-2ad057d7 spin-cli
+cargo install --version 14.0.3 wasmtime-cli
 pip install componentize-py
 ```
 
@@ -27,13 +30,14 @@ pip install componentize-py
 First, build the app and run it:
 
 ```
-spin build --up
+componentize-py -d wit -w proxy componentize app -o http.wasm
+wasmtime serve http.wasm
 ```
 
 Then, in another terminal, use cURL to send a request to the app:
 
 ```
-curl -i -H 'content-type: text/plain' --data-binary @- http://127.0.0.1:3000/echo <<EOF
+curl -i -H 'content-type: text/plain' --data-binary @- http://127.0.0.1:8080/echo <<EOF
 ’Twas brillig, and the slithy toves
       Did gyre and gimble in the wabe:
 All mimsy were the borogoves,
@@ -52,7 +56,7 @@ curl -i \
     -H 'url: https://webassembly.github.io/spec/core/' \
     -H 'url: https://www.w3.org/groups/wg/wasm/' \
     -H 'url: https://bytecodealliance.org/' \
-    http://127.0.0.1:3000/hash-all
+    http://127.0.0.1:8080/hash-all
 ```
 
 If you run into any problems, please file an issue!

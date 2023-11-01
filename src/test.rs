@@ -133,12 +133,11 @@ impl<H: Host> Tester<H> {
         let runtime = Runtime::new()?;
 
         let mut store = runtime.block_on(async {
-            let mut table = Table::new();
+            let table = Table::new();
             let wasi = WasiCtxBuilder::new()
                 .inherit_stdout()
                 .inherit_stderr()
-                .build(&mut table)
-                .unwrap();
+                .build();
 
             Store::new(&ENGINE, Ctx { wasi, table })
         });
@@ -166,12 +165,11 @@ impl<H: Host> Tester<H> {
 
         Ok(runner.run(strategy, move |v| {
             let mut store = runtime.block_on(async {
-                let mut table = Table::new();
+                let table = Table::new();
                 let wasi = WasiCtxBuilder::new()
                     .inherit_stdout()
                     .inherit_stderr()
-                    .build(&mut table)
-                    .unwrap();
+                    .build();
 
                 Store::new(&ENGINE, Ctx { wasi, table })
             });

@@ -1,4 +1,6 @@
-"""Defines a custom `asyncio` event loop backed by WASI's `poll_oneoff`.
+"""Defines a custom `asyncio` event loop backed by `wasi:io/poll#poll-list`.
+
+This also includes helper classes and functions for working with `wasi:http`.
 
 As of WASI Preview 2, there is not yet a standard for first-class, composable
 asynchronous functions and streams.  We expect that little or none of this
@@ -9,68 +11,104 @@ import asyncio
 import socket
 import subprocess
 
-from proxy.imports import types2 as types, streams2 as streams, poll2 as poll
-from proxy.imports.streams2 import StreamStatus
+from proxy.types import Ok, Err
+from proxy.imports import types, streams, poll, outgoing_handler
+from proxy.imports.types import IncomingBody, OutgoingBody, OutgoingRequest, IncomingResponse
+from proxy.imports.streams import StreamErrorClosed, InputStream
+from proxy.imports.poll import Pollable
 from typing import Optional, cast
 
 # Maximum number of bytes to read at a time
 READ_SIZE: int = 16 * 1024
 
+async def send(request: OutgoingRequest) -> IncomingResponse:
+    """Send the specified request and wait asynchronously for the response."""
+    
+    future = outgoing_handler.handle(request, None)
+
+    while True:
+        response = future.get()
+        if response is None:
+            await register(cast(PollLoop, asyncio.get_event_loop()), future.subscribe())
+        else:
+            if isinstance(response, Ok):
+                if isinstance(response.value, Ok):
+                    return response.value.value
+                else:
+                    raise response.value
+            else:
+                raise response
+
 class Stream:
-    """Reader abstraction over `wasi-cli`'s low-level stream pseudo-resource."""
-    def __init__(self, stream: int):
-        self.pollable = streams.subscribe_to_input_stream(stream)
-        self.stream = stream
-        self.saw_end = False
+    """Reader abstraction over `wasi:http/types#incoming-body`."""
+    def __init__(self, body: IncomingBody):
+        self.body: Optional[IncomingBody] = body
+        self.stream: Optional[InputStream] = body.stream()
 
     async def next(self) -> Optional[bytes]:
         """Wait for the next chunk of data to arrive on the stream.
 
         This will return `None` when the end of the stream has been reached.
         """
-        if self.saw_end:
-            return None
-        else:
-            while True:
-                buffer, status = streams.read(self.stream, READ_SIZE)
-                if status == StreamStatus.ENDED:
-                    types.finish_incoming_stream(self.stream)
-                    self.saw_end = True
-
-                if buffer:
-                    return buffer
-                elif status == StreamStatus.ENDED:
+        while True:
+            try:
+                if self.stream is None:
                     return None
                 else:
-                    await register(cast(PollLoop, asyncio.get_event_loop()), self.pollable)
+                    buffer = self.stream.read(READ_SIZE)
+                    if len(buffer) == 0:
+                        await register(cast(PollLoop, asyncio.get_event_loop()), self.stream.subscribe())
+                    else:
+                        return buffer
+            except Err as e:
+                if isinstance(e.value, StreamErrorClosed):
+                    if self.stream is not None:
+                        self.stream.drop()
+                        self.stream = None
+                    if self.body is not None:
+                        IncomingBody.finish(self.body)
+                        self.body = None
+                else:
+                    raise e
 
 class Sink:
-    """Writer abstraction over `wasi-cli`'s low-level stream pseudo-resource."""
-    def __init__(self, stream: int):
-        self.pollable = streams.subscribe_to_output_stream(stream)
-        self.stream = stream
+    """Writer abstraction over `wasi-http/types#outgoing-body`."""
+    def __init__(self, body: OutgoingBody):
+        self.body = body
+        self.stream = body.write()
 
     async def send(self, chunk: bytes):
-        """Write the specified bytes to the stream.
+        """Write the specified bytes to the sink.
 
-        This may need to yield according to the backpressure requirements of the stream.
+        This may need to yield according to the backpressure requirements of the sink.
         """
         offset = 0
+        flushing = False
         while True:
-            count = streams.write(self.stream, chunk[offset:])
-            offset += count
-            if offset == len(chunk):
-                return
+            count = self.stream.check_write()
+            if count == 0:
+                await register(cast(PollLoop, asyncio.get_event_loop()), self.stream.subscribe())
+            elif offset == len(chunk):
+                if flushing:
+                    return
+                else:
+                    self.stream.flush()
+                    flushing = True
             else:
-                await register(cast(PollLoop, asyncio.get_event_loop()), self.pollable)
+                count = min(count, len(chunk) - offset)
+                self.stream.write(chunk[offset:offset+count])
+                offset += count
 
     def close(self):
         """Close the stream, indicating no further data will be written."""
-        
-        types.finish_outgoing_stream(self.stream)
+
+        self.stream.drop()
+        self.stream = None
+        OutgoingBody.finish(self.body, None)
+        self.body = None
         
 class PollLoop(asyncio.AbstractEventLoop):
-    """Custom `asyncio` event loop backed by WASI's `poll_oneoff` function."""
+    """Custom `asyncio` event loop backed by `wasi:io/poll#poll-list`."""
     
     def __init__(self):
         self.wakers = []
@@ -96,8 +134,13 @@ class PollLoop(asyncio.AbstractEventLoop):
                 [pollables, wakers] = list(map(list, zip(*self.wakers)))
                 
                 new_wakers = []
-                for (ready, pollable), waker in zip(zip(poll.poll_oneoff(pollables), pollables), wakers):
+                ready = [False] * len(pollables)
+                for index in poll.poll_list(pollables):
+                    ready[index] = True
+                
+                for (ready, pollable), waker in zip(zip(ready, pollables), wakers):
                     if ready:
+                        pollable.drop()
                         waker.set_result(None)
                     else:
                         new_wakers.append((pollable, waker))
@@ -319,7 +362,7 @@ class PollLoop(asyncio.AbstractEventLoop):
     def set_debug(self, enabled):
         raise NotImplementedError
 
-async def register(loop: PollLoop, pollable: int):
+async def register(loop: PollLoop, pollable: Pollable):
     waker = loop.create_future()
     loop.wakers.append((pollable, waker))
     await waker

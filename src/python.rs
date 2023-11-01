@@ -29,13 +29,14 @@ fn python_componentize(
 
 #[pyo3::pyfunction]
 #[pyo3(name = "generate_bindings")]
-#[pyo3(signature = (wit_path, world, output_dir))]
+#[pyo3(signature = (wit_path, world, output_dir, with_typings))]
 fn python_generate_bindings(
     wit_path: PathBuf,
     world: Option<&str>,
     output_dir: PathBuf,
+    with_typings: bool,
 ) -> PyResult<()> {
-    crate::generate_bindings(&wit_path, world, &output_dir)
+    crate::generate_bindings(&wit_path, world, &output_dir, with_typings)
         .map_err(|e| PyAssertionError::new_err(format!("{e:?}")))
 }
 

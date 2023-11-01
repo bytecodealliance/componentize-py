@@ -1,7 +1,0 @@
-package componentize-py:examples
-
-world matrix-math {
-  import log: func(message: string) -> result<_, string>
-  
-  export multiply: func(a: list<list<float64>>, b: list<list<float64>>) -> result<list<list<float64>>, string>
-}

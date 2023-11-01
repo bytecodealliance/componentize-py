@@ -60,7 +60,7 @@ pub fn make_bindings(resolve: &Resolve, world: WorldId, summary: &Summary) -> Re
             .as_ref()
             .map(|interface| {
                 format!(
-                    "{}{}{}",
+                    "{}{}",
                     if matches!(
                         function.kind,
                         FunctionKind::Import | FunctionKind::ResourceDropRemote
@@ -69,12 +69,11 @@ pub fn make_bindings(resolve: &Resolve, world: WorldId, summary: &Summary) -> Re
                     } else {
                         "[export]"
                     },
-                    if let Some(package) = interface.package {
-                        format!("{}:{}/", package.namespace, package.name)
+                    if let Some(name) = resolve.id_of(interface.id) {
+                        name
                     } else {
-                        String::new()
-                    },
-                    interface.name
+                        interface.name.to_owned()
+                    }
                 )
             })
             .unwrap_or_else(|| "$root".to_owned());
@@ -94,7 +93,10 @@ pub fn make_bindings(resolve: &Resolve, world: WorldId, summary: &Summary) -> Re
 
         types.function(params, results);
         imports.import(module, name, EntityType::Function(offset));
-        function_names.push((offset, format!("{}-imported", function.internal_name())));
+        function_names.push((
+            offset,
+            format!("{}-imported", function.internal_name(resolve)),
+        ));
     }
 
     let import_function_count = imports.len();
@@ -170,7 +172,7 @@ pub fn make_bindings(resolve: &Resolve, world: WorldId, summary: &Summary) -> Re
         let (params, results) = function.core_export_type(resolve);
         types.function(params, results);
         functions.function(offset);
-        function_names.push((offset, function.internal_name()));
+        function_names.push((offset, function.internal_name(resolve)));
         let mut gen = FunctionBindgen::new(summary, function, stack_pointer);
 
         match function.kind {
@@ -228,13 +230,12 @@ pub fn make_bindings(resolve: &Resolve, world: WorldId, summary: &Summary) -> Re
                         },
                         if let Some(interface) = &function.interface {
                             format!(
-                                "{}{}#{}",
-                                if let Some(package) = interface.package {
-                                    format!("{}:{}/", package.namespace, package.name)
+                                "{}#{}",
+                                if let Some(name) = resolve.id_of(interface.id) {
+                                    name
                                 } else {
-                                    String::new()
+                                    interface.name.to_owned()
                                 },
-                                interface.name,
                                 function.name
                             )
                         } else {
@@ -372,6 +373,7 @@ pub fn make_bindings(resolve: &Resolve, world: WorldId, summary: &Summary) -> Re
             resolve,
             world,
             wit_component::StringEncoding::UTF8,
+            None,
             None,
         )?),
     });

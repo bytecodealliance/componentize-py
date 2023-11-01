@@ -1,7 +1,7 @@
 use {
     crate::{
         abi::{self, MAX_FLAT_PARAMS, MAX_FLAT_RESULTS},
-        bindgen::{self, DISPATCHABLE_CORE_PARAM_COUNT},
+        bindgen::DISPATCHABLE_CORE_PARAM_COUNT,
         exports::exports::{
             self, Case, Constructor, Function, FunctionExport, LocalResource, OwnedKind, OwnedType,
             RemoteResource, Resource, Static, Symbols,
@@ -17,6 +17,7 @@ use {
         fmt::Write as _,
         fs::{self, File},
         io::Write as _,
+        iter,
         ops::Deref,
         path::Path,
         str,
@@ -84,16 +85,15 @@ pub struct MyFunction<'a> {
 }
 
 impl<'a> MyFunction<'a> {
-    pub fn internal_name(&self) -> String {
+    pub fn internal_name(&self, resolve: &Resolve) -> String {
         if let Some(interface) = &self.interface {
             format!(
-                "{}{}#{}{}",
-                if let Some(package) = interface.package {
-                    format!("{}:{}/", package.namespace, package.name)
+                "{}#{}{}",
+                if let Some(name) = resolve.id_of(interface.id) {
+                    name
                 } else {
-                    String::new()
+                    interface.name.to_owned()
                 },
-                interface.name,
                 self.name,
                 match self.kind {
                     FunctionKind::Import => "-import",
@@ -169,7 +169,7 @@ struct FunctionCode {
     snake: String,
     params: String,
     args: String,
-    return_statement: &'static str,
+    return_statement: String,
     static_method: &'static str,
     return_type: String,
     result_count: usize,
@@ -701,21 +701,12 @@ impl<'a> Summary<'a> {
         }
     }
 
-    fn is_self_handle(&self, resource: Option<TypeId>, ty: Type) -> bool {
-        if let (Some(resource), Type::Id(id)) = (resource, ty) {
-            if let TypeDefKind::Handle(Handle::Own(id) | Handle::Borrow(id)) =
-                &self.resolve.types[id].kind
-            {
-                bindgen::dealias(self.resolve, *id) == resource
-            } else {
-                false
-            }
-        } else {
-            false
-        }
-    }
-
-    fn function_code(&self, function: &MyFunction, names: &mut TypeNames) -> FunctionCode {
+    fn function_code(
+        &self,
+        function: &MyFunction,
+        names: &mut TypeNames,
+        with_typings: bool,
+    ) -> FunctionCode {
         enum SpecialReturn<'a> {
             Result(&'a Result_),
             None,
@@ -735,32 +726,28 @@ impl<'a> Summary<'a> {
 
         let snake = self.function_name(function);
 
-        let (skip_count, self_, resource) = match function.wit_kind {
-            wit_parser::FunctionKind::Freestanding => (0, false, None),
-            wit_parser::FunctionKind::Constructor(resource) => (0, true, Some(resource)),
-            wit_parser::FunctionKind::Method(resource) => (1, true, Some(resource)),
-            wit_parser::FunctionKind::Static(resource) => (0, false, Some(resource)),
+        let (skip_count, self_) = match function.wit_kind {
+            wit_parser::FunctionKind::Freestanding => (0, false),
+            wit_parser::FunctionKind::Constructor(_) => (0, true),
+            wit_parser::FunctionKind::Method(_) => (1, true),
+            wit_parser::FunctionKind::Static(_) => (0, false),
         };
 
-        let mut type_name = |ty| {
-            if self.is_self_handle(resource, ty) {
-                // TODO: we should probably use `typing.Self` here in most cases, but note that it won't work for
-                // static methods as of this writing.  Maybe we can do something fancy with `typing.TypeVar`.
-                "Any".to_string()
-            } else {
-                names.type_name(ty)
-            }
-        };
+        let mut type_name = |ty| names.type_name(ty);
 
-        let params =
-            self_
-                .then(|| "self".to_string())
-                .into_iter()
-                .chain(function.params.iter().skip(skip_count).map(|(name, ty)| {
-                    format!("{}: {}", name.to_snake_case().escape(), type_name(*ty))
-                }))
-                .collect::<Vec<_>>()
-                .join(", ");
+        let params = self_
+            .then(|| "self".to_string())
+            .into_iter()
+            .chain(function.params.iter().skip(skip_count).map(|(name, ty)| {
+                let snake = name.to_snake_case().escape();
+                if with_typings {
+                    format!("{snake}: {}", type_name(*ty))
+                } else {
+                    snake
+                }
+            }))
+            .collect::<Vec<_>>()
+            .join(", ");
 
         let args = function
             .params
@@ -773,22 +760,30 @@ impl<'a> Summary<'a> {
 
         let (return_statement, return_type) =
             if let wit_parser::FunctionKind::Constructor(_) = function.wit_kind {
-                ("return", "None".to_owned())
+                ("return".to_owned(), "None".to_owned())
             } else {
+                let indent = if let wit_parser::FunctionKind::Freestanding = function.wit_kind {
+                    ""
+                } else {
+                    "    "
+                };
+
                 match result_types.as_slice() {
-                    [] => ("return", "None".to_owned()),
+                    [] => ("return".to_owned(), "None".to_owned()),
                     [ty] => match special_return(*ty) {
                         SpecialReturn::Result(result) => (
-                            "if isinstance(result[0], Err):
-        raise result[0]
-    else:
-        return result[0].value",
+                            format!(
+                                "if isinstance(result[0], Err):
+{indent}        raise result[0]
+{indent}    else:
+{indent}        return result[0].value"
+                            ),
                             result.ok.map(type_name).unwrap_or_else(|| "None".into()),
                         ),
-                        SpecialReturn::None => ("return result[0]", type_name(*ty)),
+                        SpecialReturn::None => ("return result[0]".to_owned(), type_name(*ty)),
                     },
                     _ => (
-                        "return result",
+                        "return result".to_owned(),
                         format!(
                             "({})",
                             result_types
@@ -815,12 +810,16 @@ impl<'a> Summary<'a> {
             args,
             return_statement,
             static_method,
-            return_type,
+            return_type: if with_typings {
+                format!(" -> {return_type}")
+            } else {
+                String::new()
+            },
             result_count,
         }
     }
 
-    pub fn generate_code(&self, path: &Path) -> Result<()> {
+    pub fn generate_code(&self, path: &Path, with_typings: bool) -> Result<()> {
         #[derive(Default)]
         struct Definitions<'a> {
             types: Vec<String>,
@@ -1020,7 +1019,7 @@ class {camel}(Flag):
                                 return_statement,
                                 static_method,
                                 result_count,
-                            } = self.function_code(function, &mut names);
+                            } = self.function_code(function, &mut names, with_typings);
 
                             let docs = docstring(function.docs, 2);
 
@@ -1037,7 +1036,7 @@ class {camel}(Flag):
                             } else {
                                 format!(
                                     "{static_method}
-    def {snake}({params}) -> {return_type}:
+    def {snake}({params}){return_type}:
         {docs}result = componentize_py_runtime.call_import({index}, [{args}], {result_count})
         {return_statement}
 "
@@ -1063,6 +1062,16 @@ class {camel}(Flag):
                                 }
                             })
                             .map(method)
+                            // TODO: avoid potential name conflict:
+                            .chain(iter::once(
+                                "
+    def drop(self):
+        (_, func, args, _) = self.finalizer.detach()
+        self.handle = None
+        func(args[0], args[1])
+"
+                                .to_owned(),
+                            ))
                             .collect::<Vec<_>>()
                             .concat();
 
@@ -1090,14 +1099,14 @@ class {camel}:
                                 return_type,
                                 static_method,
                                 ..
-                            } = self.function_code(function, &mut names);
+                            } = self.function_code(function, &mut names, with_typings);
 
                             let docs = docstring(function.docs, 2);
 
                             format!(
                                 "{static_method}
     @abstractmethod
-    def {snake}({params}) -> {return_type}:
+    def {snake}({params}){return_type}:
         {docs}raise NotImplementedError
 "
                             )
@@ -1235,7 +1244,7 @@ class {camel}(Protocol):
                         return_statement,
                         result_count,
                         ..
-                    } = self.function_code(function, &mut names);
+                    } = self.function_code(function, &mut names, with_typings);
 
                     match function.kind {
                         FunctionKind::Import => {
@@ -1243,7 +1252,7 @@ class {camel}(Protocol):
 
                             let code = format!(
                                 "
-def {snake}({params}) -> {return_type}:
+def {snake}({params}){return_type}:
     {docs}result = componentize_py_runtime.call_import({index}, [{args}], {result_count})
     {return_statement}
 "
@@ -1277,7 +1286,7 @@ def {snake}({params}) -> {return_type}:
                             let code = format!(
                                 "
     @abstractmethod
-    def {snake}({params}) -> {return_type}:
+    def {snake}({params}){return_type}:
         {docs}raise NotImplementedError
 "
                             );
