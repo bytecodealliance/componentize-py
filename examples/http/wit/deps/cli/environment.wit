@@ -1,5 +1,3 @@
-package wasi:cli@0.2.0-rc-2023-10-18;
-
 interface environment {
   /// Get the POSIX-style environment variables.
   ///

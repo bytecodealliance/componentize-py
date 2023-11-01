@@ -80,6 +80,14 @@ fn stubs_for_clippy(out_dir: &Path) -> Result<()> {
             .do_finish()?;
     }
 
+    let path = out_dir.join("bundled.tar.zst");
+
+    if !path.exists() {
+        Builder::new(Encoder::new(File::create(path)?, ZSTD_COMPRESSION_LEVEL)?)
+            .into_inner()?
+            .do_finish()?;
+    }
+
     Ok(())
 }
 
@@ -184,8 +192,24 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
     } else {
         bail!("no such directory: {}", path.display())
     }
+
+    let path = repo_dir.join("bundled");
+
+    if path.exists() {
+        let mut builder = Builder::new(Encoder::new(
+            File::create(out_dir.join("bundled.tar.zst"))?,
+            ZSTD_COMPRESSION_LEVEL,
+        )?);
+
+        add(&mut builder, &path, &path)?;
+
+        builder.into_inner()?.do_finish()?;
+    } else {
+        bail!("no such directory: {}", path.display())
+    }
+
     compress(
-        &repo_dir.join("adapters/40c1f9b8"),
+        &repo_dir.join("adapters/e8766e49"),
         "wasi_snapshot_preview1.reactor.wasm",
         out_dir,
         false,

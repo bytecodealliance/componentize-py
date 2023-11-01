@@ -5,31 +5,25 @@ concurrent requests and streaming bodies.  It uses a custom `asyncio` event loop
 to thread I/O through coroutines.
 """
 
-# Note that we've temporarily renamed various `wasi-http` and `wasi-cli`
-# interfaces (appending a 2 to each name) to avoid conflicting with the
-# implementations in `wasmtime-wasi` which are still under development.
-#
-# Also note that `wasi-http` currently uses pseudo-resources (represented as
-# integers) to model requests, responses, etc.  As of this writing, proper WIT
-# resource support is still under development; we'll update this example to use
-# them once they're ready.
-
 import asyncio
 import hashlib
 import poll_loop
 
 from proxy import exports
 from proxy.types import Ok
-from proxy.imports import types2 as types, outgoing_handler2 as outgoing_handler
-from proxy.imports.types2 import MethodGet, MethodPost, Scheme, SchemeHttp, SchemeHttps, SchemeOther
+from proxy.imports import types
+from proxy.imports.types import (
+    MethodGet, MethodPost, Scheme, SchemeHttp, SchemeHttps, SchemeOther, IncomingRequest, ResponseOutparam,
+    OutgoingResponse, Fields, OutgoingBody, OutgoingRequest
+)
 from poll_loop import Stream, Sink, PollLoop
 from typing import Tuple, cast
 from urllib import parse
 
-class IncomingHandler2(exports.IncomingHandler2):
+class IncomingHandler(exports.IncomingHandler):
     """Implements the `export`ed portion of the `wasi-http` `proxy` world."""
     
-    def handle(self, request: int, response_out: int):
+    def handle(self, request: IncomingRequest, response_out: ResponseOutparam):
         """Handle the specified `request` (represented as a pseudo-resource), sending
         the response to `response_out`.
         """
@@ -39,13 +33,13 @@ class IncomingHandler2(exports.IncomingHandler2):
         asyncio.set_event_loop(loop)
         loop.run_until_complete(handle_async(request, response_out))
 
-async def handle_async(request: int, response_out: int):
+async def handle_async(request: IncomingRequest, response_out: ResponseOutparam):
     """Handle the specified `request` (represented as a pseudo-resource), sending
     the response to `response_out`."""
     
-    method = types.incoming_request_method(request)
-    path = types.incoming_request_path_with_query(request)
-    headers = types.fields_entries(types.incoming_request_headers(request))
+    method = request.method()
+    path = request.path_with_query()
+    headers = request.headers().entries()
 
     if isinstance(method, MethodGet) and path == "/hash-all":
         # Collect one or more "url" headers, download their contents
@@ -55,29 +49,33 @@ async def handle_async(request: int, response_out: int):
         
         urls = map(lambda pair: str(pair[1], "utf-8"), filter(lambda pair: pair[0] == "url", headers))
 
-        response = types.new_outgoing_response(200, types.new_fields([("content-type", b"text/plain")]))
+        response = OutgoingResponse(200, Fields([("content-type", b"text/plain")]))
 
-        types.set_response_outparam(response_out, Ok(response))
+        response_body = response.write()
         
-        sink = Sink(types.outgoing_response_write(response))
-
+        ResponseOutparam.set(response_out, Ok(response))
+        
+        sink = Sink(response_body)
         for result in asyncio.as_completed(map(sha256, urls)):
             url, sha = await result
             await sink.send(bytes(f"{url}: {sha}\n", "utf-8"))
 
         sink.close()
+            
     elif isinstance(method, MethodPost) and path == "/echo":
         # Echo the request body back to the client without buffering.
-        
-        response = types.new_outgoing_response(
+
+        response = OutgoingResponse(
             200,
-            types.new_fields(list(filter(lambda pair: pair[0] == "content-type", headers)))
+            Fields(list(filter(lambda pair: pair[0] == "content-type", headers)))
         )
-        types.set_response_outparam(response_out, Ok(response))
 
-        stream = Stream(types.incoming_request_consume(request))
-        sink = Sink(types.outgoing_response_write(response))
+        response_body = response.write()
+        
+        ResponseOutparam.set(response_out, Ok(response))
 
+        stream = Stream(request.consume())
+        sink = Sink(response_body)
         while True:
             chunk = await stream.next()
             if chunk is None:
@@ -87,9 +85,9 @@ async def handle_async(request: int, response_out: int):
 
         sink.close()
     else:
-        response = types.new_outgoing_response(400, types.new_fields([]))
-        types.set_response_outparam(response_out, Ok(response))
-        types.finish_outgoing_stream(types.outgoing_response_write(response))
+        response = OutgoingResponse(400, Fields([]))
+        ResponseOutparam.set(response_out, Ok(response))
+        OutgoingBody.finish(response.write(), None)
 
 async def sha256(url: str) -> Tuple[str, str]:
     """Download the contents of the specified URL, computing the SHA-256
@@ -109,22 +107,20 @@ async def sha256(url: str) -> Tuple[str, str]:
         case _:
             scheme = SchemeOther(url_parsed.scheme)
 
-    request = types.new_outgoing_request(
+    request = OutgoingRequest(
         MethodGet(),
         url_parsed.path,
         scheme,
         url_parsed.netloc,
-        types.new_fields([])
+        Fields([])
     )
 
-    response = await outgoing_request_send(request)
-
-    status = types.incoming_response_status(response)
+    response = await poll_loop.send(request)
+    status = response.status()
     if status < 200 or status > 299:
         return url, f"unexpected status: {status}"
 
-    stream = Stream(types.incoming_response_consume(response))
-
+    stream = Stream(response.consume())
     hasher = hashlib.sha256()
     while True:
         chunk = await stream.next()
@@ -132,20 +128,3 @@ async def sha256(url: str) -> Tuple[str, str]:
             return url, hasher.hexdigest()
         else:
             hasher.update(chunk)
-
-async def outgoing_request_send(request: int) -> int:
-    """Send the specified request and wait asynchronously for the response."""
-    
-    future = outgoing_handler.handle(request, None)
-    pollable = types.listen_to_future_incoming_response(future)
-
-    while True:
-        response = types.future_incoming_response_get(future)
-        if response is None:
-            await poll_loop.register(cast(PollLoop, asyncio.get_event_loop()), pollable)
-        else:
-            if isinstance(response, Ok):
-                return response.value
-            else:
-                raise response
-

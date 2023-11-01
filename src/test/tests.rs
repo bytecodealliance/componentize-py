@@ -29,6 +29,7 @@ import resource_borrow_in_record
 from tests import exports, imports
 from tests.imports import resource_borrow_import
 from tests.imports import simple_import_and_export
+from tests.exports import resource_alias2
 from tests.types import Result, Ok
 from typing import Tuple, List, Optional
 
