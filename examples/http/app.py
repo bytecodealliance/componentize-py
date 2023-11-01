@@ -17,15 +17,15 @@ from proxy.imports.types import (
     OutgoingResponse, Fields, OutgoingBody, OutgoingRequest
 )
 from poll_loop import Stream, Sink, PollLoop
-from typing import Tuple, cast
+from typing import Tuple
 from urllib import parse
 
 class IncomingHandler(exports.IncomingHandler):
     """Implements the `export`ed portion of the `wasi-http` `proxy` world."""
     
     def handle(self, request: IncomingRequest, response_out: ResponseOutparam):
-        """Handle the specified `request` (represented as a pseudo-resource), sending
-        the response to `response_out`.
+        """Handle the specified `request`, sending the response to `response_out`.
+
         """
         # Dispatch the request using `asyncio`, backed by a custom event loop
         # based on WASI's `poll_oneoff` function.
@@ -34,8 +34,7 @@ class IncomingHandler(exports.IncomingHandler):
         loop.run_until_complete(handle_async(request, response_out))
 
 async def handle_async(request: IncomingRequest, response_out: ResponseOutparam):
-    """Handle the specified `request` (represented as a pseudo-resource), sending
-    the response to `response_out`."""
+    """Handle the specified `request`, sending the response to `response_out`."""
     
     method = request.method()
     path = request.path_with_query()
