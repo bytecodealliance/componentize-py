@@ -1,60 +1,60 @@
-package componentize-py:test
+package componentize-py:test;
 
 interface simple-export {
-     foo: func(v: u32) -> u32
+     foo: func(v: u32) -> u32;
 }
 
 interface simple-import-and-export {
-    foo: func(v: u32) -> u32
+    foo: func(v: u32) -> u32;
 }
 
 interface resource-import-and-export {
     resource thing {
-        constructor(v: u32)
+        constructor(v: u32);
 
-        foo: func() -> u32
-        bar: func(v: u32)
+        foo: func() -> u32;
+        bar: func(v: u32);
 
-        baz: static func(a: thing, b: thing) -> thing
+        baz: static func(a: thing, b: thing) -> thing;
     }
 }
 
 interface resource-borrow-import {
     resource thing {
-        constructor(v: u32)
+        constructor(v: u32);
     }
 
-    foo: func(v: borrow<thing>) -> u32
+    foo: func(v: borrow<thing>) -> u32;
 }
 
 interface resource-borrow-export {
     resource thing {
-        constructor(v: u32)
+        constructor(v: u32);
     }
 
-    foo: func(v: borrow<thing>) -> u32
+    foo: func(v: borrow<thing>) -> u32;
 }
 
 interface resource-with-lists {
     resource thing {
-        constructor(l: list<u8>)
-        foo: func() -> list<u8>
-        bar: func(l: list<u8>)
-        baz: static func(l: list<u8>) -> list<u8>
+        constructor(l: list<u8>);
+        foo: func() -> list<u8>;
+        bar: func(l: list<u8>);
+        baz: static func(l: list<u8>) -> list<u8>;
     }
 }
 
 interface resource-aggregates {
   resource thing {
-      constructor(v: u32)
+      constructor(v: u32);
   }
 
   record r1 {
-    thing: thing
+    thing: thing,
   }
 
   record r2 {
-    thing: borrow<thing>
+    thing: borrow<thing>,
   }
 
   record r3 {
@@ -62,9 +62,9 @@ interface resource-aggregates {
     thing2: thing,
   }
 
-  type t1 = tuple<thing, r1>
+  type t1 = tuple<thing, r1>;
 
-  type t2 = tuple<borrow<thing>>
+  type t2 = tuple<borrow<thing>>;
 
   variant v1 {
     thing(thing),
@@ -74,9 +74,9 @@ interface resource-aggregates {
     thing(borrow<thing>),
   }
 
-  type l1 = list<thing>
+  type l1 = list<thing>;
 
-  type l2 = list<borrow<thing>>
+  type l2 = list<borrow<thing>>;
 
   foo: func(
     r1: r1,
@@ -92,89 +92,89 @@ interface resource-aggregates {
     o2: option<borrow<thing>>,
     result1: result<thing>,
     result2: result<borrow<thing>>,
-  ) -> u32
+  ) -> u32;
 }
 
 interface resource-alias1 {
   resource thing {
-    constructor(s: string)
-    get: func() -> string
+    constructor(s: string);
+    get: func() -> string;
   }
 
   record foo { thing: thing }
 
-  a: func(f: foo) -> list<thing>
+  a: func(f: foo) -> list<thing>;
 }
 
 interface resource-alias2 {
-  use resource-alias1.{thing, foo as bar}
+  use resource-alias1.{thing, foo as bar};
 
   record foo { thing: thing }
 
-  b: func(f: foo, g: bar) -> list<thing>
+  b: func(f: foo, g: bar) -> list<thing>;
 }
 
 interface resource-floats {
   resource float {
-    constructor(v: float64)
-    get: func() -> float64
+    constructor(v: float64);
+    get: func() -> float64;
   }
 }
 
 interface resource-borrow-in-record {
   resource thing {
-    constructor(s: string)
-    get: func() -> string
+    constructor(s: string);
+    get: func() -> string;
   }
 
   record foo {
-    thing: borrow<thing>
+    thing: borrow<thing>,
   }
 
-  test: func(a: list<foo>) -> list<thing>
+  test: func(a: list<foo>) -> list<thing>;
 }
 
 world tests {
-  use resource-alias1.{thing}
-  use resource-floats.{float}
+  use resource-alias1.{thing};
+  use resource-floats.{float};
 
-  export simple-export
-  import simple-import-and-export
-  export simple-import-and-export
-  import resource-import-and-export
-  export resource-import-and-export
-  import resource-borrow-import
-  export resource-borrow-export
-  import resource-with-lists
-  export resource-with-lists
-  import resource-aggregates
-  export resource-aggregates
-  import resource-alias1
-  import resource-alias2
-  export resource-alias1
-  export resource-alias2
-  import resource-borrow-in-record
-  export resource-borrow-in-record  
+  export simple-export;
+  import simple-import-and-export;
+  export simple-import-and-export;
+  import resource-import-and-export;
+  export resource-import-and-export;
+  import resource-borrow-import;
+  export resource-borrow-export;
+  import resource-with-lists;
+  export resource-with-lists;
+  import resource-aggregates;
+  export resource-aggregates;
+  import resource-alias1;
+  import resource-alias2;
+  export resource-alias1;
+  export resource-alias2;
+  import resource-borrow-in-record;
+  export resource-borrow-in-record;
 
   export resource-floats-exports: interface {
     resource float {
-      constructor(v: float64)
-      get: func() -> float64
-      add: static func(a: float, b: float64) -> float
+      constructor(v: float64);
+      get: func() -> float64;
+      add: static func(a: float, b: float64) -> float;
     }
   }
 
   import resource-floats-imports: interface {
     resource float {
-      constructor(v: float64)
-      get: func() -> float64
-      add: static func(a: float, b: float64) -> float
+      constructor(v: float64);
+      get: func() -> float64;
+      add: static func(a: float, b: float64) -> float;
     }
   }
 
-  export test-resource-borrow-import: func(v: u32) -> u32
+  export test-resource-borrow-import: func(v: u32) -> u32;
 
-  export test-resource-alias: func(things: list<thing>) -> list<thing>
+  export test-resource-alias: func(things: list<thing>) -> list<thing>;
 
-  export add: func(a: borrow<float>, b: borrow<float>) -> own<float>
+  export add: func(a: borrow<float>, b: borrow<float>) -> own<float>;
 }
