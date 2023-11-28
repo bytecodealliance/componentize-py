@@ -135,7 +135,7 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
     let path = out_dir.join("wasm32-wasi/release/libcomponentize_py_runtime.a");
 
     if path.exists() {
-        let clang = wasi_sdk.join(&format!("bin/{CLANG_EXECUTABLE}"));
+        let clang = wasi_sdk.join(format!("bin/{CLANG_EXECUTABLE}"));
         if clang.exists() {
             let name = "libcomponentize_py_runtime.so";
 
