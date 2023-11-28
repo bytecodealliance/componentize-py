@@ -1,7 +1,7 @@
-package componentize-py:init
+package componentize-py:init;
 
 world init {
-    import wasi:cli/environment@0.2.0-rc-2023-10-18
+    import wasi:cli/environment@0.2.0-rc-2023-11-10;
 
     export exports: interface {
         record function {
@@ -76,6 +76,6 @@ world init {
             types: list<%type>
         }
 
-        init: func(app-name: string, symbols: symbols) -> result<_, string>
+        init: func(app-name: string, symbols: symbols) -> result<_, string>;
     }
 }
