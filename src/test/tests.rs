@@ -352,31 +352,27 @@ fn resource_import_and_export() -> Result<()> {
     #[async_trait]
     impl HostThing for Ctx {
         async fn new(&mut self, v: u32) -> Result<Resource<Thing>> {
-            Ok(Resource::new_own(
-                self.table_mut().push(Box::new(MyThing(v + 8)))?,
-            ))
+            Ok(self.table_mut().push(Box::new(MyThing(v + 8)))?)
         }
 
         async fn foo(&mut self, this: Resource<Thing>) -> Result<u32> {
-            Ok(self.table().get::<MyThing>(this.rep())?.0 + 1)
+            Ok(self.table().get::<MyThing>(&this)?.0 + 1)
         }
 
         async fn bar(&mut self, this: Resource<Thing>, v: u32) -> Result<()> {
-            self.table_mut().get_mut::<MyThing>(this.rep())?.0 = v + 5;
+            self.table_mut().get_mut::<MyThing>(&this)?.0 = v + 5;
             Ok(())
         }
 
         async fn baz(&mut self, a: Resource<Thing>, b: Resource<Thing>) -> Result<Resource<Thing>> {
-            let a = self.table().get::<MyThing>(a.rep())?.0;
-            let b = self.table().get::<MyThing>(b.rep())?.0;
+            let a = self.table().get::<MyThing>(&a)?.0;
+            let b = self.table().get::<MyThing>(&b)?.0;
 
-            Ok(Resource::new_own(
-                self.table_mut().push(Box::new(MyThing(a + b + 6)))?,
-            ))
+            Ok(self.table_mut().push(Box::new(MyThing(a + b + 6)))?)
         }
 
         fn drop(&mut self, this: Resource<Thing>) -> Result<()> {
-            Ok(self.table_mut().delete::<MyThing>(this.rep()).map(|_| ())?)
+            Ok(self.table_mut().delete::<MyThing>(this).map(|_| ())?)
         }
     }
 
