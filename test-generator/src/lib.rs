@@ -774,15 +774,15 @@ fn test{test_index}() -> Result<()> {{
 
     let wit = format!(
         "\
-package componentize-py:test
+package componentize-py:test;
 
 interface echoes-generated {{
     {wit}
 }}
 
 world echoes-generated-test {{
-    import echoes-generated
-    export echoes-generated
+    import echoes-generated;
+    export echoes-generated;
 }}
 "
     );
