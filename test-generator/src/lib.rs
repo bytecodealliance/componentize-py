@@ -610,7 +610,7 @@ pub fn generate() -> Result<()> {
                 .collect::<Vec<_>>()
                 .join(", ");
 
-            writeln!(&mut wit, "\n    echo{test_index}: func({params}){result}").unwrap();
+            writeln!(&mut wit, "\n    echo{test_index}: func({params}){result};").unwrap();
         }
 
         // Guest function implementations

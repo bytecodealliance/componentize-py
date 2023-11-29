@@ -16,21 +16,23 @@ wasmtime::component::bindgen!({
     world: "tests",
     async: true,
     with: {
-        "resource-import-and-export/thing": ThingU32,
-        "resource-borrow-import/thing": ThingU32,
-        "resource-borrow-export/thing": ThingU32,
-        "resource-with-lists/thing": ThingList,
-        "resource-aggregates/thing": ThingU32,
-        "resource-alias1/thing": ThingString,
-        "resource-floats/floats": MyFloat,
-        "resource-borrow-in-record/thing": ThingString,
+        "componentize-py:test/resource-import-and-export/thing": ThingU32,
+        "componentize-py:test/resource-borrow-import/thing": ThingU32,
+        "componentize-py:test/resource-borrow-export/thing": ThingU32,
+        "componentize-py:test/resource-with-lists/thing": ThingList,
+        "componentize-py:test/resource-aggregates/thing": ThingU32,
+        "componentize-py:test/resource-alias1/thing": ThingString,
+        "componentize-py:test/resource-floats/float": MyFloat,
+        "resource-floats-imports/float": MyFloat,
+        "resource-floats-exports/float": MyFloat,
+        "componentize-py:test/resource-borrow-in-record/thing": ThingString,
     },
 });
 
-struct ThingU32(u32);
-struct ThingList(Vec<u8>);
-struct ThingString(String);
-struct MyFloat(f64);
+pub struct ThingU32(u32);
+pub struct ThingList(Vec<u8>);
+pub struct ThingString(String);
+pub struct MyFloat(f64);
 
 const GUEST_CODE: &[(&str, &str)] = &[
     (
@@ -381,7 +383,7 @@ fn resource_import_and_export() -> Result<()> {
             &mut self,
             a: Resource<ThingU32>,
             b: Resource<ThingU32>,
-        ) -> Result<Resource<Thing>> {
+        ) -> Result<Resource<ThingU32>> {
             let a = self.table().get(&a)?.0;
             let b = self.table().get(&b)?.0;
 
@@ -482,7 +484,7 @@ fn resource_with_lists() -> Result<()> {
     impl HostThing for Ctx {
         async fn new(&mut self, mut v: Vec<u8>) -> Result<Resource<ThingList>> {
             v.extend(b" HostThing.new");
-            Ok(Resource::new_own(self.table_mut().push(ThingList(v))?))
+            Ok(self.table_mut().push(ThingList(v))?)
         }
 
         async fn foo(&mut self, this: Resource<ThingList>) -> Result<Vec<u8>> {
@@ -688,12 +690,10 @@ fn resource_alias() -> Result<()> {
 
     TESTER.test(|world, store, runtime| {
         runtime.block_on(async {
-            let thing1 = Resource::<componentize_py::test::resource_alias1::Thing>::new_own(
-                store
-                    .data_mut()
-                    .table_mut()
-                    .push(ThingString("Ni Hao".to_string()))?,
-            );
+            let thing1 = store
+                .data_mut()
+                .table_mut()
+                .push(ThingString("Ni Hao".to_string()))?;
 
             fn host_things_to_strings(
                 store: &mut Store<Ctx>,
@@ -768,30 +768,25 @@ fn resource_alias() -> Result<()> {
 
 #[test]
 fn resource_floats() -> Result<()> {
-    struct Float(f64);
-
     {
         use resource_floats_imports::{Host, HostFloat};
 
         #[async_trait]
         impl HostFloat for Ctx {
-            async fn new(&mut self, v: f64) -> Result<Resource<Float>> {
-                Ok(self.table_mut().push(Float(v + 2_f64))?)
+            async fn new(&mut self, v: f64) -> Result<Resource<MyFloat>> {
+                Ok(self.table_mut().push(MyFloat(v + 2_f64))?)
             }
 
-            async fn get(&mut self, this: Resource<Float>) -> Result<f64> {
+            async fn get(&mut self, this: Resource<MyFloat>) -> Result<f64> {
                 Ok(self.table().get(&this)?.0 + 4_f64)
             }
 
-            async fn add(&mut self, a: Resource<Float>, b: f64) -> Result<Resource<Float>> {
+            async fn add(&mut self, a: Resource<MyFloat>, b: f64) -> Result<Resource<MyFloat>> {
                 let a = self.table().get(&a)?.0;
-
-                Ok(Resource::new_own(
-                    self.table_mut().push(Float(a + b + 6_f64))?,
-                ))
+                Ok(self.table_mut().push(MyFloat(a + b + 6_f64))?)
             }
 
-            fn drop(&mut self, this: Resource<Float>) -> Result<()> {
+            fn drop(&mut self, this: Resource<MyFloat>) -> Result<()> {
                 Ok(self.table_mut().delete(this).map(|_| ())?)
             }
         }
@@ -800,19 +795,19 @@ fn resource_floats() -> Result<()> {
     }
 
     {
-        use componentize_py::test::resource_floats::{Float, Host, HostFloat};
+        use componentize_py::test::resource_floats::{Host, HostFloat};
 
         #[async_trait]
         impl HostFloat for Ctx {
-            async fn new(&mut self, v: f64) -> Result<Resource<Float>> {
-                Ok(self.table_mut().push(Float(v + 1_f64))?)
+            async fn new(&mut self, v: f64) -> Result<Resource<MyFloat>> {
+                Ok(self.table_mut().push(MyFloat(v + 1_f64))?)
             }
 
-            async fn get(&mut self, this: Resource<Float>) -> Result<f64> {
+            async fn get(&mut self, this: Resource<MyFloat>) -> Result<f64> {
                 Ok(self.table().get(&this)?.0 + 3_f64)
             }
 
-            fn drop(&mut self, this: Resource<Float>) -> Result<()> {
+            fn drop(&mut self, this: Resource<MyFloat>) -> Result<()> {
                 Ok(self.table_mut().delete(this).map(|_| ())?)
             }
         }
@@ -822,14 +817,8 @@ fn resource_floats() -> Result<()> {
 
     TESTER.test(|world, store, runtime| {
         runtime.block_on(async {
-            let float1 = Resource::<componentize_py::test::resource_floats::Float>::new_own(
-                store.data_mut().table_mut().push(Float(42_f64))?,
-            );
-
-            let float2 = Resource::<componentize_py::test::resource_floats::Float>::new_own(
-                store.data_mut().table_mut().push(Float(55_f64))?,
-            );
-
+            let float1 = store.data_mut().table_mut().push(MyFloat(42_f64))?;
+            let float2 = store.data_mut().table_mut().push(MyFloat(55_f64))?;
             let sum = world.call_add(&mut *store, float1, float2).await?;
 
             assert_eq!(
