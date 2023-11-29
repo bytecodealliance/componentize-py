@@ -610,7 +610,7 @@ pub fn generate() -> Result<()> {
                 .collect::<Vec<_>>()
                 .join(", ");
 
-            writeln!(&mut wit, "\n    echo{test_index}: func({params}){result}").unwrap();
+            writeln!(&mut wit, "\n    echo{test_index}: func({params}){result};").unwrap();
         }
 
         // Guest function implementations
@@ -774,15 +774,15 @@ fn test{test_index}() -> Result<()> {{
 
     let wit = format!(
         "\
-package componentize-py:test
+package componentize-py:test;
 
 interface echoes-generated {{
     {wit}
 }}
 
 world echoes-generated-test {{
-    import echoes-generated
-    export echoes-generated
+    import echoes-generated;
+    export echoes-generated;
 }}
 "
     );

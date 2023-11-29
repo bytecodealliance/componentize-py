@@ -1,4 +1,4 @@
-"""Defines a custom `asyncio` event loop backed by `wasi:io/poll#poll-list`.
+"""Defines a custom `asyncio` event loop backed by `wasi:io/poll#poll`.
 
 This also includes helper classes and functions for working with `wasi:http`.
 
@@ -108,7 +108,7 @@ class Sink:
         self.body = None
         
 class PollLoop(asyncio.AbstractEventLoop):
-    """Custom `asyncio` event loop backed by `wasi:io/poll#poll-list`."""
+    """Custom `asyncio` event loop backed by `wasi:io/poll#poll`."""
     
     def __init__(self):
         self.wakers = []
@@ -135,7 +135,7 @@ class PollLoop(asyncio.AbstractEventLoop):
                 
                 new_wakers = []
                 ready = [False] * len(pollables)
-                for index in poll.poll_list(pollables):
+                for index in poll.poll(pollables):
                     ready[index] = True
                 
                 for (ready, pollable), waker in zip(zip(ready, pollables), wakers):

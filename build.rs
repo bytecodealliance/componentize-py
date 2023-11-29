@@ -135,7 +135,7 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
     let path = out_dir.join("wasm32-wasi/release/libcomponentize_py_runtime.a");
 
     if path.exists() {
-        let clang = wasi_sdk.join(&format!("bin/{CLANG_EXECUTABLE}"));
+        let clang = wasi_sdk.join(format!("bin/{CLANG_EXECUTABLE}"));
         if clang.exists() {
             let name = "libcomponentize_py_runtime.so";
 
@@ -209,7 +209,7 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
     }
 
     compress(
-        &repo_dir.join("adapters/e8766e49"),
+        &repo_dir.join("adapters/6f0da84"),
         "wasi_snapshot_preview1.reactor.wasm",
         out_dir,
         false,

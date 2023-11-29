@@ -13,7 +13,7 @@ use {
         exceptions::PyAssertionError,
         intern,
         types::{PyBytes, PyDict, PyList, PyMapping, PyModule, PyString, PyTuple},
-        IntoPyPointer, Py, PyAny, PyErr, PyObject, PyResult, Python, ToPyObject,
+        Py, PyAny, PyErr, PyObject, PyResult, Python, ToPyObject,
     },
     std::{
         alloc::{self, Layout},
@@ -525,6 +525,7 @@ pub extern "C" fn componentize_py_get_field<'a>(
             let discriminant = types_to_discriminants
                 .as_ref(*py)
                 .get_item(value.get_type())
+                .unwrap()
                 .unwrap();
 
             match i32::try_from(field).unwrap() {

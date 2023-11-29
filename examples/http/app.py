@@ -48,9 +48,9 @@ async def handle_async(request: IncomingRequest, response_out: ResponseOutparam)
         
         urls = map(lambda pair: str(pair[1], "utf-8"), filter(lambda pair: pair[0] == "url", headers))
 
-        response = OutgoingResponse(200, Fields([("content-type", b"text/plain")]))
+        response = OutgoingResponse(Fields.from_list([("content-type", b"text/plain")]))
 
-        response_body = response.write()
+        response_body = response.body()
         
         ResponseOutparam.set(response_out, Ok(response))
         
@@ -64,12 +64,9 @@ async def handle_async(request: IncomingRequest, response_out: ResponseOutparam)
     elif isinstance(method, MethodPost) and path == "/echo":
         # Echo the request body back to the client without buffering.
 
-        response = OutgoingResponse(
-            200,
-            Fields(list(filter(lambda pair: pair[0] == "content-type", headers)))
-        )
+        response = OutgoingResponse(Fields.from_list(list(filter(lambda pair: pair[0] == "content-type", headers))))
 
-        response_body = response.write()
+        response_body = response.body()
         
         ResponseOutparam.set(response_out, Ok(response))
 
@@ -84,9 +81,10 @@ async def handle_async(request: IncomingRequest, response_out: ResponseOutparam)
 
         sink.close()
     else:
-        response = OutgoingResponse(400, Fields([]))
+        response = OutgoingResponse(Fields.from_list([]))
+        response.set_status_code(400)
         ResponseOutparam.set(response_out, Ok(response))
-        OutgoingBody.finish(response.write(), None)
+        OutgoingBody.finish(response.body(), None)
 
 async def sha256(url: str) -> Tuple[str, str]:
     """Download the contents of the specified URL, computing the SHA-256
@@ -106,13 +104,10 @@ async def sha256(url: str) -> Tuple[str, str]:
         case _:
             scheme = SchemeOther(url_parsed.scheme)
 
-    request = OutgoingRequest(
-        MethodGet(),
-        url_parsed.path,
-        scheme,
-        url_parsed.netloc,
-        Fields([])
-    )
+    request = OutgoingRequest(Fields.from_list([]))
+    request.set_scheme(scheme)
+    request.set_authority(url_parsed.netloc)
+    request.set_path_with_query(url_parsed.path)
 
     response = await poll_loop.send(request)
     status = response.status()

@@ -293,10 +293,6 @@ pub fn make_bindings(resolve: &Resolve, world: WorldId, summary: &Summary) -> Re
     elements.active(
         Some(0),
         &ConstExpr::global_get(table_base),
-        RefType {
-            nullable: true,
-            heap_type: HeapType::Func,
-        },
         Elements::Functions(
             &summary
                 .functions

@@ -14,8 +14,25 @@ use {
 wasmtime::component::bindgen!({
     path: "src/test/wit",
     world: "tests",
-    async: true
+    async: true,
+    with: {
+        "componentize-py:test/resource-import-and-export/thing": ThingU32,
+        "componentize-py:test/resource-borrow-import/thing": ThingU32,
+        "componentize-py:test/resource-borrow-export/thing": ThingU32,
+        "componentize-py:test/resource-with-lists/thing": ThingList,
+        "componentize-py:test/resource-aggregates/thing": ThingU32,
+        "componentize-py:test/resource-alias1/thing": ThingString,
+        "componentize-py:test/resource-floats/float": MyFloat,
+        "resource-floats-imports/float": MyFloat,
+        "resource-floats-exports/float": MyFloat,
+        "componentize-py:test/resource-borrow-in-record/thing": ThingString,
+    },
 });
+
+pub struct ThingU32(u32);
+pub struct ThingList(Vec<u8>);
+pub struct ThingString(String);
+pub struct MyFloat(f64);
 
 const GUEST_CODE: &[(&str, &str)] = &[
     (
@@ -345,38 +362,36 @@ fn simple_import_and_export() -> Result<()> {
 
 #[test]
 fn resource_import_and_export() -> Result<()> {
-    use componentize_py::test::resource_import_and_export::{Host, HostThing, Thing};
-
-    struct MyThing(u32);
+    use componentize_py::test::resource_import_and_export::{Host, HostThing};
 
     #[async_trait]
     impl HostThing for Ctx {
-        async fn new(&mut self, v: u32) -> Result<Resource<Thing>> {
-            Ok(Resource::new_own(
-                self.table_mut().push(Box::new(MyThing(v + 8)))?,
-            ))
+        async fn new(&mut self, v: u32) -> Result<Resource<ThingU32>> {
+            Ok(self.table_mut().push(ThingU32(v + 8))?)
         }
 
-        async fn foo(&mut self, this: Resource<Thing>) -> Result<u32> {
-            Ok(self.table().get::<MyThing>(this.rep())?.0 + 1)
+        async fn foo(&mut self, this: Resource<ThingU32>) -> Result<u32> {
+            Ok(self.table().get(&this)?.0 + 1)
         }
 
-        async fn bar(&mut self, this: Resource<Thing>, v: u32) -> Result<()> {
-            self.table_mut().get_mut::<MyThing>(this.rep())?.0 = v + 5;
+        async fn bar(&mut self, this: Resource<ThingU32>, v: u32) -> Result<()> {
+            self.table_mut().get_mut(&this)?.0 = v + 5;
             Ok(())
         }
 
-        async fn baz(&mut self, a: Resource<Thing>, b: Resource<Thing>) -> Result<Resource<Thing>> {
-            let a = self.table().get::<MyThing>(a.rep())?.0;
-            let b = self.table().get::<MyThing>(b.rep())?.0;
+        async fn baz(
+            &mut self,
+            a: Resource<ThingU32>,
+            b: Resource<ThingU32>,
+        ) -> Result<Resource<ThingU32>> {
+            let a = self.table().get(&a)?.0;
+            let b = self.table().get(&b)?.0;
 
-            Ok(Resource::new_own(
-                self.table_mut().push(Box::new(MyThing(a + b + 6)))?,
-            ))
+            Ok(self.table_mut().push(ThingU32(a + b + 6))?)
         }
 
-        fn drop(&mut self, this: Resource<Thing>) -> Result<()> {
-            Ok(self.table_mut().delete::<MyThing>(this.rep()).map(|_| ())?)
+        fn drop(&mut self, this: Resource<ThingU32>) -> Result<()> {
+            Ok(self.table_mut().delete(this).map(|_| ())?)
         }
     }
 
@@ -416,27 +431,23 @@ fn resource_import_and_export() -> Result<()> {
 
 #[test]
 fn resource_borrow_import() -> Result<()> {
-    use componentize_py::test::resource_borrow_import::{Host, HostThing, Thing};
-
-    struct MyThing(u32);
+    use componentize_py::test::resource_borrow_import::{Host, HostThing};
 
     #[async_trait]
     impl HostThing for Ctx {
-        async fn new(&mut self, v: u32) -> Result<Resource<Thing>> {
-            Ok(Resource::new_own(
-                self.table_mut().push(Box::new(MyThing(v + 2)))?,
-            ))
+        async fn new(&mut self, v: u32) -> Result<Resource<ThingU32>> {
+            Ok(self.table_mut().push(ThingU32(v + 2))?)
         }
 
-        fn drop(&mut self, this: Resource<Thing>) -> Result<()> {
-            Ok(self.table_mut().delete::<MyThing>(this.rep()).map(|_| ())?)
+        fn drop(&mut self, this: Resource<ThingU32>) -> Result<()> {
+            Ok(self.table_mut().delete(this).map(|_| ())?)
         }
     }
 
     #[async_trait]
     impl Host for Ctx {
-        async fn foo(&mut self, this: Resource<Thing>) -> Result<u32> {
-            Ok(self.table().get::<MyThing>(this.rep())?.0 + 3)
+        async fn foo(&mut self, this: Resource<ThingU32>) -> Result<u32> {
+            Ok(self.table().get(&this)?.0 + 3)
         }
     }
 
@@ -467,28 +478,24 @@ fn resource_borrow_export() -> Result<()> {
 
 #[test]
 fn resource_with_lists() -> Result<()> {
-    use componentize_py::test::resource_with_lists::{Host, HostThing, Thing};
-
-    struct MyThing(Vec<u8>);
+    use componentize_py::test::resource_with_lists::{Host, HostThing};
 
     #[async_trait]
     impl HostThing for Ctx {
-        async fn new(&mut self, mut v: Vec<u8>) -> Result<Resource<Thing>> {
+        async fn new(&mut self, mut v: Vec<u8>) -> Result<Resource<ThingList>> {
             v.extend(b" HostThing.new");
-            Ok(Resource::new_own(
-                self.table_mut().push(Box::new(MyThing(v)))?,
-            ))
+            Ok(self.table_mut().push(ThingList(v))?)
         }
 
-        async fn foo(&mut self, this: Resource<Thing>) -> Result<Vec<u8>> {
-            let mut v = self.table().get::<MyThing>(this.rep())?.0.clone();
+        async fn foo(&mut self, this: Resource<ThingList>) -> Result<Vec<u8>> {
+            let mut v = self.table().get(&this)?.0.clone();
             v.extend(b" HostThing.foo");
             Ok(v)
         }
 
-        async fn bar(&mut self, this: Resource<Thing>, mut v: Vec<u8>) -> Result<()> {
+        async fn bar(&mut self, this: Resource<ThingList>, mut v: Vec<u8>) -> Result<()> {
             v.extend(b" HostThing.bar");
-            self.table_mut().get_mut::<MyThing>(this.rep())?.0 = v;
+            self.table_mut().get_mut(&this)?.0 = v;
             Ok(())
         }
 
@@ -497,8 +504,8 @@ fn resource_with_lists() -> Result<()> {
             Ok(v)
         }
 
-        fn drop(&mut self, this: Resource<Thing>) -> Result<()> {
-            Ok(self.table_mut().delete::<MyThing>(this.rep()).map(|_| ())?)
+        fn drop(&mut self, this: Resource<ThingList>) -> Result<()> {
+            Ok(self.table_mut().delete(this).map(|_| ())?)
         }
     }
 
@@ -536,21 +543,17 @@ fn resource_with_lists() -> Result<()> {
 fn resource_aggregates() -> Result<()> {
     {
         use componentize_py::test::resource_aggregates::{
-            Host, HostThing, Thing, L1, L2, R1, R2, R3, T1, T2, V1, V2,
+            Host, HostThing, L1, L2, R1, R2, R3, T1, T2, V1, V2,
         };
-
-        struct MyThing(u32);
 
         #[async_trait]
         impl HostThing for Ctx {
-            async fn new(&mut self, v: u32) -> Result<Resource<Thing>> {
-                Ok(Resource::new_own(
-                    self.table_mut().push(Box::new(MyThing(v + 2)))?,
-                ))
+            async fn new(&mut self, v: u32) -> Result<Resource<ThingU32>> {
+                Ok(self.table_mut().push(ThingU32(v + 2))?)
             }
 
-            fn drop(&mut self, this: Resource<Thing>) -> Result<()> {
-                Ok(self.table_mut().delete::<MyThing>(this.rep()).map(|_| ())?)
+            fn drop(&mut self, this: Resource<ThingU32>) -> Result<()> {
+                Ok(self.table_mut().delete(this).map(|_| ())?)
             }
         }
 
@@ -567,37 +570,35 @@ fn resource_aggregates() -> Result<()> {
                 v2: V2,
                 l1: L1,
                 l2: L2,
-                o1: Option<Resource<Thing>>,
-                o2: Option<Resource<Thing>>,
-                result1: Result<Resource<Thing>, ()>,
-                result2: Result<Resource<Thing>, ()>,
+                o1: Option<Resource<ThingU32>>,
+                o2: Option<Resource<ThingU32>>,
+                result1: Result<Resource<ThingU32>, ()>,
+                result2: Result<Resource<ThingU32>, ()>,
             ) -> Result<u32> {
                 let V1::Thing(v1) = v1;
                 let V2::Thing(v2) = v2;
-                Ok(self.table_mut().get::<MyThing>(r1.thing.rep())?.0
-                    + self.table_mut().get::<MyThing>(r2.thing.rep())?.0
-                    + self.table_mut().get::<MyThing>(r3.thing1.rep())?.0
-                    + self.table_mut().get::<MyThing>(r3.thing2.rep())?.0
-                    + self.table_mut().get::<MyThing>(t1.0.rep())?.0
-                    + self.table_mut().get::<MyThing>(t1.1.thing.rep())?.0
-                    + self.table_mut().get::<MyThing>(t2.0.rep())?.0
-                    + self.table_mut().get::<MyThing>(v1.rep())?.0
-                    + self.table_mut().get::<MyThing>(v2.rep())?.0
-                    + l1.into_iter().try_fold(0, |n, v| {
-                        Ok::<_, Error>(self.table_mut().get::<MyThing>(v.rep())?.0 + n)
-                    })?
-                    + l2.into_iter().try_fold(0, |n, v| {
-                        Ok::<_, Error>(self.table_mut().get::<MyThing>(v.rep())?.0 + n)
-                    })?
-                    + o1.map(|v| Ok::<_, Error>(self.table_mut().get::<MyThing>(v.rep())?.0))
+                Ok(self.table_mut().get(&r1.thing)?.0
+                    + self.table_mut().get(&r2.thing)?.0
+                    + self.table_mut().get(&r3.thing1)?.0
+                    + self.table_mut().get(&r3.thing2)?.0
+                    + self.table_mut().get(&t1.0)?.0
+                    + self.table_mut().get(&t1.1.thing)?.0
+                    + self.table_mut().get(&t2.0)?.0
+                    + self.table_mut().get(&v1)?.0
+                    + self.table_mut().get(&v2)?.0
+                    + l1.into_iter()
+                        .try_fold(0, |n, v| Ok::<_, Error>(self.table_mut().get(&v)?.0 + n))?
+                    + l2.into_iter()
+                        .try_fold(0, |n, v| Ok::<_, Error>(self.table_mut().get(&v)?.0 + n))?
+                    + o1.map(|v| Ok::<_, Error>(self.table_mut().get(&v)?.0))
                         .unwrap_or(Ok(0))?
-                    + o2.map(|v| Ok::<_, Error>(self.table_mut().get::<MyThing>(v.rep())?.0))
+                    + o2.map(|v| Ok::<_, Error>(self.table_mut().get(&v)?.0))
                         .unwrap_or(Ok(0))?
                     + result1
-                        .map(|v| Ok::<_, Error>(self.table_mut().get::<MyThing>(v.rep())?.0))
+                        .map(|v| Ok::<_, Error>(self.table_mut().get(&v)?.0))
                         .unwrap_or(Ok(0))?
                     + result2
-                        .map(|v| Ok::<_, Error>(self.table_mut().get::<MyThing>(v.rep())?.0))
+                        .map(|v| Ok::<_, Error>(self.table_mut().get(&v)?.0))
                         .unwrap_or(Ok(0))?
                     + 3)
             }
@@ -648,35 +649,27 @@ fn resource_aggregates() -> Result<()> {
 
 #[test]
 fn resource_alias() -> Result<()> {
-    struct MyThing(String);
-
     {
-        use componentize_py::test::resource_alias1::{Foo, Host, HostThing, Thing};
+        use componentize_py::test::resource_alias1::{Foo, Host, HostThing};
 
         #[async_trait]
         impl HostThing for Ctx {
-            async fn new(&mut self, s: String) -> Result<Resource<Thing>> {
-                Ok(Resource::new_own(
-                    self.table_mut()
-                        .push(Box::new(MyThing(s + " HostThing::new")))?,
-                ))
+            async fn new(&mut self, s: String) -> Result<Resource<ThingString>> {
+                Ok(self.table_mut().push(ThingString(s + " HostThing::new"))?)
             }
 
-            async fn get(&mut self, this: Resource<Thing>) -> Result<String> {
-                Ok(format!(
-                    "{} HostThing.get",
-                    self.table().get::<MyThing>(this.rep())?.0
-                ))
+            async fn get(&mut self, this: Resource<ThingString>) -> Result<String> {
+                Ok(format!("{} HostThing.get", self.table().get(&this)?.0))
             }
 
-            fn drop(&mut self, this: Resource<Thing>) -> Result<()> {
-                Ok(self.table_mut().delete::<MyThing>(this.rep()).map(|_| ())?)
+            fn drop(&mut self, this: Resource<ThingString>) -> Result<()> {
+                Ok(self.table_mut().delete(this).map(|_| ())?)
             }
         }
 
         #[async_trait]
         impl Host for Ctx {
-            async fn a(&mut self, f: Foo) -> Result<Vec<Resource<Thing>>> {
+            async fn a(&mut self, f: Foo) -> Result<Vec<Resource<ThingString>>> {
                 Ok(vec![f.thing])
             }
         }
@@ -697,20 +690,18 @@ fn resource_alias() -> Result<()> {
 
     TESTER.test(|world, store, runtime| {
         runtime.block_on(async {
-            let thing1 = Resource::<componentize_py::test::resource_alias1::Thing>::new_own(
-                store
-                    .data_mut()
-                    .table_mut()
-                    .push(Box::new(MyThing("Ni Hao".to_string())))?,
-            );
+            let thing1 = store
+                .data_mut()
+                .table_mut()
+                .push(ThingString("Ni Hao".to_string()))?;
 
             fn host_things_to_strings(
                 store: &mut Store<Ctx>,
-                things: Vec<Resource<componentize_py::test::resource_alias1::Thing>>,
+                things: Vec<Resource<ThingString>>,
             ) -> Result<Vec<String>> {
                 let mut strings = Vec::new();
                 for thing in things {
-                    strings.push(store.data().table().get::<MyThing>(thing.rep())?.0.clone());
+                    strings.push(store.data().table().get(&thing)?.0.clone());
                 }
 
                 Ok(strings)
@@ -777,33 +768,26 @@ fn resource_alias() -> Result<()> {
 
 #[test]
 fn resource_floats() -> Result<()> {
-    struct MyFloat(f64);
-
     {
-        use resource_floats_imports::{Float, Host, HostFloat};
+        use resource_floats_imports::{Host, HostFloat};
 
         #[async_trait]
         impl HostFloat for Ctx {
-            async fn new(&mut self, v: f64) -> Result<Resource<Float>> {
-                Ok(Resource::new_own(
-                    self.table_mut().push(Box::new(MyFloat(v + 2_f64)))?,
-                ))
+            async fn new(&mut self, v: f64) -> Result<Resource<MyFloat>> {
+                Ok(self.table_mut().push(MyFloat(v + 2_f64))?)
             }
 
-            async fn get(&mut self, this: Resource<Float>) -> Result<f64> {
-                Ok(self.table().get::<MyFloat>(this.rep())?.0 + 4_f64)
+            async fn get(&mut self, this: Resource<MyFloat>) -> Result<f64> {
+                Ok(self.table().get(&this)?.0 + 4_f64)
             }
 
-            async fn add(&mut self, a: Resource<Float>, b: f64) -> Result<Resource<Float>> {
-                let a = self.table().get::<MyFloat>(a.rep())?.0;
-
-                Ok(Resource::new_own(
-                    self.table_mut().push(Box::new(MyFloat(a + b + 6_f64)))?,
-                ))
+            async fn add(&mut self, a: Resource<MyFloat>, b: f64) -> Result<Resource<MyFloat>> {
+                let a = self.table().get(&a)?.0;
+                Ok(self.table_mut().push(MyFloat(a + b + 6_f64))?)
             }
 
-            fn drop(&mut self, this: Resource<Float>) -> Result<()> {
-                Ok(self.table_mut().delete::<MyFloat>(this.rep()).map(|_| ())?)
+            fn drop(&mut self, this: Resource<MyFloat>) -> Result<()> {
+                Ok(self.table_mut().delete(this).map(|_| ())?)
             }
         }
 
@@ -811,22 +795,20 @@ fn resource_floats() -> Result<()> {
     }
 
     {
-        use componentize_py::test::resource_floats::{Float, Host, HostFloat};
+        use componentize_py::test::resource_floats::{Host, HostFloat};
 
         #[async_trait]
         impl HostFloat for Ctx {
-            async fn new(&mut self, v: f64) -> Result<Resource<Float>> {
-                Ok(Resource::new_own(
-                    self.table_mut().push(Box::new(MyFloat(v + 1_f64)))?,
-                ))
+            async fn new(&mut self, v: f64) -> Result<Resource<MyFloat>> {
+                Ok(self.table_mut().push(MyFloat(v + 1_f64))?)
             }
 
-            async fn get(&mut self, this: Resource<Float>) -> Result<f64> {
-                Ok(self.table().get::<MyFloat>(this.rep())?.0 + 3_f64)
+            async fn get(&mut self, this: Resource<MyFloat>) -> Result<f64> {
+                Ok(self.table().get(&this)?.0 + 3_f64)
             }
 
-            fn drop(&mut self, this: Resource<Float>) -> Result<()> {
-                Ok(self.table_mut().delete::<MyFloat>(this.rep()).map(|_| ())?)
+            fn drop(&mut self, this: Resource<MyFloat>) -> Result<()> {
+                Ok(self.table_mut().delete(this).map(|_| ())?)
             }
         }
 
@@ -835,25 +817,13 @@ fn resource_floats() -> Result<()> {
 
     TESTER.test(|world, store, runtime| {
         runtime.block_on(async {
-            let float1 = Resource::<componentize_py::test::resource_floats::Float>::new_own(
-                store
-                    .data_mut()
-                    .table_mut()
-                    .push(Box::new(MyFloat(42_f64)))?,
-            );
-
-            let float2 = Resource::<componentize_py::test::resource_floats::Float>::new_own(
-                store
-                    .data_mut()
-                    .table_mut()
-                    .push(Box::new(MyFloat(55_f64)))?,
-            );
-
+            let float1 = store.data_mut().table_mut().push(MyFloat(42_f64))?;
+            let float2 = store.data_mut().table_mut().push(MyFloat(55_f64))?;
             let sum = world.call_add(&mut *store, float1, float2).await?;
 
             assert_eq!(
                 42_f64 + 3_f64 + 55_f64 + 3_f64 + 5_f64 + 1_f64,
-                store.data().table().get::<MyFloat>(sum.rep())?.0
+                store.data().table().get(&sum)?.0
             );
 
             let instance = world.resource_floats_exports();
@@ -889,43 +859,33 @@ fn resource_floats() -> Result<()> {
 
 #[test]
 fn resource_borrow_in_record() -> Result<()> {
-    struct MyThing(String);
-
     {
-        use componentize_py::test::resource_borrow_in_record::{Foo, Host, HostThing, Thing};
+        use componentize_py::test::resource_borrow_in_record::{Foo, Host, HostThing};
 
         #[async_trait]
         impl HostThing for Ctx {
-            async fn new(&mut self, v: String) -> Result<Resource<Thing>> {
-                Ok(Resource::new_own(
-                    self.table_mut()
-                        .push(Box::new(MyThing(v + " HostThing::new")))?,
-                ))
+            async fn new(&mut self, v: String) -> Result<Resource<ThingString>> {
+                Ok(self.table_mut().push(ThingString(v + " HostThing::new"))?)
             }
 
-            async fn get(&mut self, this: Resource<Thing>) -> Result<String> {
-                Ok(format!(
-                    "{} HostThing.get",
-                    self.table().get::<MyThing>(this.rep())?.0
-                ))
+            async fn get(&mut self, this: Resource<ThingString>) -> Result<String> {
+                Ok(format!("{} HostThing.get", self.table().get(&this)?.0))
             }
 
-            fn drop(&mut self, this: Resource<Thing>) -> Result<()> {
-                Ok(self.table_mut().delete::<MyThing>(this.rep()).map(|_| ())?)
+            fn drop(&mut self, this: Resource<ThingString>) -> Result<()> {
+                Ok(self.table_mut().delete(this).map(|_| ())?)
             }
         }
 
         #[async_trait]
         impl Host for Ctx {
-            async fn test(&mut self, list: Vec<Foo>) -> Result<Vec<Resource<Thing>>> {
+            async fn test(&mut self, list: Vec<Foo>) -> Result<Vec<Resource<ThingString>>> {
                 list.into_iter()
                     .map(|foo| {
-                        let value = self.table().get::<MyThing>(foo.thing.rep())?.0.clone();
-
-                        Ok(Resource::new_own(
-                            self.table_mut()
-                                .push(Box::new(MyThing(value + " HostThing::test")))?,
-                        ))
+                        let value = self.table().get(&foo.thing)?.0.clone();
+                        Ok(self
+                            .table_mut()
+                            .push(ThingString(value + " HostThing::test"))?)
                     })
                     .collect()
             }
