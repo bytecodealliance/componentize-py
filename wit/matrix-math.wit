@@ -1,0 +1,5 @@
+world matrix-math {
+  include wasi:cli/command@0.2.0-rc-2023-11-10;
+  
+  export multiply: func(a: list<list<float64>>, b: list<list<float64>>) -> result<list<list<float64>>, string>;
+}

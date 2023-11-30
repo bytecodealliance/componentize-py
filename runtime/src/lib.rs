@@ -41,6 +41,7 @@ static ERR_CONSTRUCTOR: OnceCell<PyObject> = OnceCell::new();
 static FINALIZE: OnceCell<PyObject> = OnceCell::new();
 static DROP_RESOURCE: OnceCell<PyObject> = OnceCell::new();
 static SEED: OnceCell<PyObject> = OnceCell::new();
+static ARGV: OnceCell<Py<PyList>> = OnceCell::new();
 
 const DISCRIMINANT_FIELD_INDEX: i32 = 0;
 const PAYLOAD_FIELD_INDEX: i32 = 1;
@@ -335,6 +336,18 @@ fn do_init(app_name: String, symbols: Symbols) -> Result<()> {
         SEED.set(py.import("random")?.getattr("seed")?.into())
             .unwrap();
 
+        let argv = py
+            .import("sys")?
+            .getattr("argv")?
+            .downcast::<PyList>()
+            .unwrap();
+
+        for i in 0..argv.len() {
+            argv.del_item(i)?;
+        }
+
+        ARGV.set(argv.into()).unwrap();
+
         Ok(())
     })
 }
@@ -393,6 +406,11 @@ pub unsafe extern "C" fn componentize_py_dispatch(
         let environ = ENVIRON.get().unwrap().as_ref(py);
         for (k, v) in environment::get_environment() {
             environ.set_item(k, v).unwrap();
+        }
+
+        // Likewise for CLI arguments.
+        for arg in environment::get_arguments() {
+            ARGV.get().unwrap().as_ref(py).append(arg).unwrap();
         }
 
         // Call `random.seed()` to ensure we get a fresh seed rather than the one that got baked in during
