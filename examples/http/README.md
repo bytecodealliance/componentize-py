@@ -13,8 +13,8 @@ which may differ from later revisions.
 
 ## Prerequisites
 
-* `Wasmtime` 14.0.3 (later versions may use a different, incompatible `wasi-http` snapshot)
-* `componentize-py` 0.7.0
+* `Wasmtime` 15.0.0 (later versions may use a different, incompatible `wasi-http` snapshot)
+* `componentize-py` 0.7.1
 
 Below, we use [Rust](https://rustup.rs/)'s `cargo` to install `Wasmtime`.  If
 you don't have `cargo`, you can download and install from
@@ -30,7 +30,7 @@ pip install componentize-py
 First, build the app and run it:
 
 ```
-componentize-py -d wit -w wasi:http/proxy@0.2.0-rc-2023-11-10 componentize app -o http.wasm
+componentize-py -d ../../wit -w wasi:http/proxy@0.2.0-rc-2023-11-10 componentize app -o http.wasm
 wasmtime serve http.wasm
 ```
 

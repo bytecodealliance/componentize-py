@@ -20,6 +20,7 @@ use {
         ffi::c_void,
         mem::{self, MaybeUninit},
         ptr, slice, str,
+        sync::Once,
     },
     wasi::cli::environment,
 };
@@ -41,6 +42,7 @@ static ERR_CONSTRUCTOR: OnceCell<PyObject> = OnceCell::new();
 static FINALIZE: OnceCell<PyObject> = OnceCell::new();
 static DROP_RESOURCE: OnceCell<PyObject> = OnceCell::new();
 static SEED: OnceCell<PyObject> = OnceCell::new();
+static ARGV: OnceCell<Py<PyList>> = OnceCell::new();
 
 const DISCRIMINANT_FIELD_INDEX: i32 = 0;
 const PAYLOAD_FIELD_INDEX: i32 = 1;
@@ -335,6 +337,18 @@ fn do_init(app_name: String, symbols: Symbols) -> Result<()> {
         SEED.set(py.import("random")?.getattr("seed")?.into())
             .unwrap();
 
+        let argv = py
+            .import("sys")?
+            .getattr("argv")?
+            .downcast::<PyList>()
+            .unwrap();
+
+        for i in 0..argv.len() {
+            argv.del_item(i)?;
+        }
+
+        ARGV.set(argv.into()).unwrap();
+
         Ok(())
     })
 }
@@ -388,16 +402,24 @@ pub unsafe extern "C" fn componentize_py_dispatch(
         // todo: is this sound, or do we need to `.into_iter().map(MaybeUninit::assume_init).collect()` instead?
         let params_lifted = mem::transmute::<Vec<MaybeUninit<&PyAny>>, Vec<&PyAny>>(params_lifted);
 
-        // We must call directly into the host to get the runtime environment since libc's version will only
-        // contain the build-time pre-init snapshot.
-        let environ = ENVIRON.get().unwrap().as_ref(py);
-        for (k, v) in environment::get_environment() {
-            environ.set_item(k, v).unwrap();
-        }
+        static ONCE: Once = Once::new();
+        ONCE.call_once(|| {
+            // We must call directly into the host to get the runtime environment since libc's version will only
+            // contain the build-time pre-init snapshot.
+            let environ = ENVIRON.get().unwrap().as_ref(py);
+            for (k, v) in environment::get_environment() {
+                environ.set_item(k, v).unwrap();
+            }
 
-        // Call `random.seed()` to ensure we get a fresh seed rather than the one that got baked in during
-        // pre-init.
-        SEED.get().unwrap().call0(py).unwrap();
+            // Likewise for CLI arguments.
+            for arg in environment::get_arguments() {
+                ARGV.get().unwrap().as_ref(py).append(arg).unwrap();
+            }
+
+            // Call `random.seed()` to ensure we get a fresh seed rather than the one that got baked in during
+            // pre-init.
+            SEED.get().unwrap().call0(py).unwrap();
+        });
 
         let export = &EXPORTS.get().unwrap()[export];
         let result = match export {
