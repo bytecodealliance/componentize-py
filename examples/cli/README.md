@@ -1,7 +1,5 @@
 # Example: `cli`
 
-**WARNING: As of this writing, this example won't work due to a bug in Wasmtime's `wasi:cli` implementation.  This will be resolved once https://github.com/bytecodealliance/wasmtime/pull/7613 is merged.**
-
 This is an example of how to use [componentize-py] and [Wasmtime] to build and
 run a Python-based component targetting the [wasi-cli] `command` world.
 
@@ -14,15 +12,16 @@ snapshot, which may differ from later revisions.
 
 ## Prerequisites
 
-* `Wasmtime` 15.0.0 (later versions may use a different, incompatible `wasi-cli` snapshot)
+* `Wasmtime` 15.0.1 (later versions may use a different, incompatible `wasi-cli` snapshot)
 * `componentize-py` 0.7.1
 
-Below, we use [Rust](https://rustup.rs/)'s `cargo` to install `Wasmtime`.  If
-you don't have `cargo`, you can download and install from
-https://github.com/bytecodealliance/wasmtime/releases/tag/v15.0.0.
+Below, we use [Rust](https://rustup.rs/)'s `cargo` to install `Wasmtime` since,
+as of this writing, 15.0.1 has not yet been released.  Once it has been
+released, you'll be able to download and install from
+https://github.com/bytecodealliance/wasmtime/releases/tag/v15.0.1.
 
 ```
-cargo install --version 15.0.0 wasmtime-cli
+cargo install --locked --git https://github.com/bytecodealliance/wasmtime --branch release-15.0.0 wasmtime-cli
 pip install componentize-py
 ```
 
