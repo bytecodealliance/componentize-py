@@ -32,7 +32,7 @@ tar xf numpy-wasi.tar.gz
 ## Running the demo
 
 ```
-componentize-py -d wit -w matrix-math componentize app -o matrix-math.wasm
+componentize-py -d ../../wit -w matrix-math componentize app -o matrix-math.wasm
 wasmtime run --wasm component-model matrix-math.wasm '[[1, 2], [4, 5], [6, 7]]' '[[1, 2, 3], [4, 5, 6]]'
 ```
 
