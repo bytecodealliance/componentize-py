@@ -28,9 +28,9 @@ Next, create or download the WIT world you'd like to target, e.g.:
 
 ```shell
 cat >hello.wit <<EOF
-package example:hello
+package example:hello;
 world hello {
-  export hello: func() -> string
+  export hello: func() -> string;
 }
 EOF
 ```

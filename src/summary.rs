@@ -1554,7 +1554,6 @@ class {camel}(Protocol):
                     self.has_imported_and_exported_resource(Type::Id(*resource))
                 }
                 TypeDefKind::Enum(_) | TypeDefKind::Flags(_) => false,
-                TypeDefKind::Option(ty) => self.has_imported_and_exported_resource(*ty),
                 TypeDefKind::Result(result) => {
                     result
                         .ok
@@ -1569,8 +1568,9 @@ class {camel}(Protocol):
                     .types
                     .iter()
                     .any(|ty| self.has_imported_and_exported_resource(*ty)),
-                TypeDefKind::List(_) => true,
-                TypeDefKind::Type(ty) => self.has_imported_and_exported_resource(*ty),
+                TypeDefKind::Option(ty) | TypeDefKind::List(ty) | TypeDefKind::Type(ty) => {
+                    self.has_imported_and_exported_resource(*ty)
+                }
                 TypeDefKind::Resource => {
                     let empty = &ResourceInfo::default();
                     let info = self.resource_info.get(&id).unwrap_or(empty);
