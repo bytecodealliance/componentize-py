@@ -204,10 +204,10 @@ pub async fn componentize(
             false,
         )?
         .library(
-            "libpython3.11.so",
+            "libpython3.12.so",
             &zstd::decode_all(Cursor::new(include_bytes!(concat!(
                 env!("OUT_DIR"),
-                "/libpython3.11.so.zst"
+                "/libpython3.12.so.zst"
             ))))?,
             false,
         )?
