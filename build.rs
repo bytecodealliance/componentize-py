@@ -297,6 +297,7 @@ fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
                     ),
                     &format!("--prefix={}/install", cpython_wasi_dir.to_str().unwrap()),
                     "--disable-test-modules",
+                    "--enable-ipv6",
                 ]))?;
 
             run(Command::new("make")
