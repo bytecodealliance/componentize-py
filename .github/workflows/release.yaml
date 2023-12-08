@@ -12,8 +12,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  WASI_SDK_VERSION: 20.16g86c5c116b0a6
-  WASI_SDK_RELEASE: shared-library-alpha-2
+  WASI_SDK_VERSION: 20.31gfe4d2f01387d
+  WASI_SDK_RELEASE: shared-library-alpha-3
 
 jobs:
   linux:
@@ -27,7 +27,7 @@ jobs:
 
       - uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: '3.12'
 
       - name: Install latest Rust stable toolchain
         uses: actions-rs/toolchain@v1
@@ -141,7 +141,7 @@ jobs:
 
       - uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: '3.12'
 
       - name: Install latest Rust stable toolchain
         uses: actions-rs/toolchain@v1

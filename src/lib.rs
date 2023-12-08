@@ -45,7 +45,7 @@ mod summary;
 mod test;
 mod util;
 
-static NATIVE_EXTENSION_SUFFIX: &str = ".cpython-311-wasm32-wasi.so";
+static NATIVE_EXTENSION_SUFFIX: &str = ".cpython-312-wasm32-wasi.so";
 
 wasmtime::component::bindgen!({
     path: "wit",
