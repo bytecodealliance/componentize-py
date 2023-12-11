@@ -12,8 +12,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  WASI_SDK_VERSION: 20.31gfe4d2f01387d
-  WASI_SDK_RELEASE: shared-library-alpha-3
+  WASI_SDK_VERSION: 20.32g8fc81f7ec348
+  WASI_SDK_RELEASE: shared-library-alpha-4
 
 jobs:
   linux:
