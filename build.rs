@@ -209,7 +209,7 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
     }
 
     compress(
-        &repo_dir.join("adapters/3a6cb41c"),
+        &repo_dir.join("adapters/64c2a247"),
         "wasi_snapshot_preview1.reactor.wasm",
         out_dir,
         false,

@@ -22,7 +22,7 @@ from urllib import parse
 
 class IncomingHandler(exports.IncomingHandler):
     """Implements the `export`ed portion of the `wasi-http` `proxy` world."""
-    
+
     def handle(self, request: IncomingRequest, response_out: ResponseOutparam):
         """Handle the specified `request`, sending the response to `response_out`.
 
@@ -35,7 +35,7 @@ class IncomingHandler(exports.IncomingHandler):
 
 async def handle_async(request: IncomingRequest, response_out: ResponseOutparam):
     """Handle the specified `request`, sending the response to `response_out`."""
-    
+
     method = request.method()
     path = request.path_with_query()
     headers = request.headers().entries()
@@ -45,29 +45,29 @@ async def handle_async(request: IncomingRequest, response_out: ResponseOutparam)
         # concurrently, compute their SHA-256 hashes incrementally (i.e. without
         # buffering the response bodies), and stream the results back to the
         # client as they become available.
-        
+
         urls = map(lambda pair: str(pair[1], "utf-8"), filter(lambda pair: pair[0] == "url", headers))
 
         response = OutgoingResponse(Fields.from_list([("content-type", b"text/plain")]))
 
         response_body = response.body()
-        
+
         ResponseOutparam.set(response_out, Ok(response))
-        
+
         sink = Sink(response_body)
         for result in asyncio.as_completed(map(sha256, urls)):
             url, sha = await result
             await sink.send(bytes(f"{url}: {sha}\n", "utf-8"))
 
         sink.close()
-            
+
     elif isinstance(method, MethodPost) and path == "/echo":
         # Echo the request body back to the client without buffering.
 
         response = OutgoingResponse(Fields.from_list(list(filter(lambda pair: pair[0] == "content-type", headers))))
 
         response_body = response.body()
-        
+
         ResponseOutparam.set(response_out, Ok(response))
 
         stream = Stream(request.consume())
@@ -83,8 +83,9 @@ async def handle_async(request: IncomingRequest, response_out: ResponseOutparam)
     else:
         response = OutgoingResponse(Fields.from_list([]))
         response.set_status_code(400)
+        body = response.body()
         ResponseOutparam.set(response_out, Ok(response))
-        OutgoingBody.finish(response.body(), None)
+        OutgoingBody.finish(body, None)
 
 async def sha256(url: str) -> Tuple[str, str]:
     """Download the contents of the specified URL, computing the SHA-256
@@ -93,7 +94,7 @@ async def sha256(url: str) -> Tuple[str, str]:
     This returns a tuple of the original URL and either the hex-encoded hash or
     an error message.
     """
-    
+
     url_parsed = parse.urlparse(url)
 
     match url_parsed.scheme:
