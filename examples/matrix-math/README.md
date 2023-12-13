@@ -23,7 +23,7 @@ https://github.com/bytecodealliance/wasmtime/releases/tag/v16.0.0.
 
 ```
 cargo install --version 16.0.0 wasmtime-cli
-pip install componentize-py
+pip install componentize-py==0.8.0
 curl -OL https://github.com/dicej/wasi-wheels/releases/download/v0.0.1/numpy-wasi.tar.gz
 tar xf numpy-wasi.tar.gz
 ```
