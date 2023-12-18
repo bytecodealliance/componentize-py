@@ -2,6 +2,7 @@ use {
     anyhow::{Context, Result},
     clap::Parser as _,
     std::{
+        env,
         ffi::OsString,
         fs,
         path::{Path, PathBuf},
@@ -120,7 +121,19 @@ fn componentize(common: Common, componentize: Componentize) -> Result<()> {
 }
 
 fn find_site_packages() -> Result<Option<PathBuf>> {
-    Ok(
+    Ok(if let Ok(env) = env::var("VIRTUAL_ENV") {
+        let dir = Path::new(&env).join("lib");
+
+        if let Some(site_packages) = find_dir("site-packages", &dir)? {
+            Some(site_packages)
+        } else {
+            eprintln!(
+                "warning: site-packages directory not found under {}",
+                dir.display()
+            );
+            None
+        }
+    } else {
         match process::Command::new("pipenv").arg("--venv").output() {
             Ok(output) => {
                 if output.status.success() {
@@ -144,8 +157,8 @@ fn find_site_packages() -> Result<Option<PathBuf>> {
                 // `pipenv` is not in `$PATH -- assume this app isn't using it
                 None
             }
-        },
-    )
+        }
+    })
 }
 
 fn find_dir(name: &str, path: &Path) -> Result<Option<PathBuf>> {
