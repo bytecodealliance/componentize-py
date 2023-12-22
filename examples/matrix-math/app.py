@@ -16,7 +16,7 @@ class Run(exports.Run):
     def run(self):
         args = sys.argv[1:]
         if len(args) != 2:
-            print(f"usage: matrix-math <matrix> <matrix> (got {args})", file=sys.stderr)
+            print(f"usage: matrix-math <matrix> <matrix>", file=sys.stderr)
             exit(-1)
 
         print(MatrixMath().multiply(eval(args[0]), eval(args[1])))

@@ -1,7 +1,8 @@
-# Example: `cli`
+# Example: `tcp`
 
 This is an example of how to use [componentize-py] and [Wasmtime] to build and
-run a Python-based component targetting the [wasi-cli] `command` world.
+run a Python-based component targetting the [wasi-cli] `command` world and
+making an outbound TCP request using `wasi-sockets`.
 
 Note that, as of this writing, `wasi-cli` has not yet stabilized.  Here we use a
 snapshot, which may differ from later revisions.
@@ -26,9 +27,21 @@ pip install componentize-py==0.8.0
 
 ## Running the demo
 
+First, in a separate terminal, run `netcat`, telling it to listen for incoming
+TCP connections.  You can choose any port you like.
+
 ```
-componentize-py -d ../../wit -w wasi:cli/command@0.2.0-rc-2023-12-05 componentize app -o cli.wasm
-wasmtime run --wasm component-model cli.wasm
+nc -l 127.0.0.1 3456
 ```
 
-The `wasmtime run` command above should print "Hello, world!".
+Now, build and run the example, using the same port you gave to `netcat`.
+
+```
+componentize-py -d ../../wit -w wasi:cli/command@0.2.0-rc-2023-12-05 componentize app -o tcp.wasm
+wasmtime run --wasm component-model --wasi inherit-network tcp.wasm 127.0.0.1:3456
+```
+
+The program will open a TCP connection, send a message, and wait to receive a
+response before exiting.  You can give it a response by typing anything you like
+into the terminal where `netcat` is running and then pressing the `Enter` key on
+your keyboard.

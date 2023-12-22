@@ -8,7 +8,7 @@ use {
 #[pyo3(name = "componentize")]
 #[pyo3(signature = (wit_path, world, python_path, app_name, output_path))]
 fn python_componentize(
-    wit_path: PathBuf,
+    wit_path: Option<PathBuf>,
     world: Option<&str>,
     python_path: Vec<&str>,
     app_name: &str,
@@ -16,7 +16,7 @@ fn python_componentize(
 ) -> PyResult<()> {
     (|| {
         Runtime::new()?.block_on(crate::componentize(
-            &wit_path,
+            wit_path.as_deref(),
             world,
             &python_path,
             app_name,

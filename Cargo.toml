@@ -1,6 +1,6 @@
 [package]
 name = "componentize-py"
-version = "0.7.1"
+version = "0.8.0"
 edition = "2021"
 exclude = ["cpython"]
 
@@ -16,16 +16,17 @@ tempfile = "3.8.1"
 zstd = "0.13.0"
 componentize-py-shared = { path = "shared" }
 wasmparser = "0.118.0"
-wasm-encoder = "0.38.0"
-wit-parser = "0.13.0"
-wit-component = "0.18.2"
+wasm-encoder = "0.38.1"
+# TODO: switch to release once https://github.com/bytecodealliance/wasm-tools/pull/1317 is released
+wit-parser = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "231fa81b" }
+wit-component = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "231fa81b" }
 indexmap = "2.1.0"
 bincode = "1.3.3"
 heck = "0.4.1"
 pyo3 = { version = "0.20.0", features = ["abi3-py37", "extension-module"], optional = true }
-wasmtime-wasi = "15.0.0"
-wasi-common = "15.0.0"
-wasmtime = { version = "15.0.0", features = [ "component-model" ] }
+wasmtime-wasi = "16.0.0"
+wasi-common = "16.0.0"
+wasmtime =  { version = "16.0.0", features = [ "component-model" ] }
 once_cell = "1.18.0"
 component-init = { git = "https://github.com/dicej/component-init" }
 async-trait = "0.1.74"
@@ -35,6 +36,8 @@ bytes = "1.5.0"
 pretty_env_logger = "0.5.0"
 cap-std = "2.0.0"
 im-rc = "15.1.0"
+serde = { version = "1.0.193", features = ["derive"] }
+toml = "0.8.8"
 
 [dev-dependencies]
 async-trait = "0.1.74"

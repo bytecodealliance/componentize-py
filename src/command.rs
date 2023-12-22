@@ -2,6 +2,7 @@ use {
     anyhow::{Context, Result},
     clap::Parser as _,
     std::{
+        env,
         ffi::OsString,
         fs,
         path::{Path, PathBuf},
@@ -24,8 +25,8 @@ pub struct Options {
 #[derive(clap::Args, Debug)]
 pub struct Common {
     /// File or directory containing WIT document(s)
-    #[arg(short = 'd', long, default_value = "wit")]
-    pub wit_path: PathBuf,
+    #[arg(short = 'd', long)]
+    pub wit_path: Option<PathBuf>,
 
     /// Name of world to target (or default world if `None`)
     #[arg(short = 'w', long)]
@@ -52,8 +53,10 @@ pub struct Componentize {
 
     /// Specify a directory containing the app and/or its dependencies.  May be specified more than once.
     ///
-    /// If `pipenv` is in `$PATH` and `pipenv --venv` produces a path containing a `site-packages` subdirectory,
-    /// that directory will be appended to these values as a convenience for `pipenv` users.
+    /// If a `VIRTUAL_ENV` environment variable is set, it will be interpreted as a directory name, and that
+    /// directory will be searched for a `site-packages` subdirectory, which will be appended to the path as a
+    /// convenience for `venv` users.  Alternatively, if `pipenv` is in `$PATH` and `pipenv --venv` produces a
+    /// non-empty result, it will be searched for a `site-packages` subdirectory, which will likewise be appended.
     #[arg(short = 'p', long, default_value = ".")]
     pub python_path: Vec<String>,
 
@@ -84,7 +87,9 @@ pub fn run<T: Into<OsString> + Clone, I: IntoIterator<Item = T>>(args: I) -> Res
 
 fn generate_bindings(common: Common, bindings: Bindings) -> Result<()> {
     crate::generate_bindings(
-        &common.wit_path,
+        &common
+            .wit_path
+            .unwrap_or_else(|| Path::new("wit").to_owned()),
         common.world.as_deref(),
         &bindings.output_dir,
         !bindings.no_typings,
@@ -104,7 +109,7 @@ fn componentize(common: Common, componentize: Componentize) -> Result<()> {
     }
 
     Runtime::new()?.block_on(crate::componentize(
-        &common.wit_path,
+        common.wit_path.as_deref(),
         common.world.as_deref(),
         &python_path.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
         &componentize.app_name,
@@ -120,7 +125,19 @@ fn componentize(common: Common, componentize: Componentize) -> Result<()> {
 }
 
 fn find_site_packages() -> Result<Option<PathBuf>> {
-    Ok(
+    Ok(if let Ok(env) = env::var("VIRTUAL_ENV") {
+        let dir = Path::new(&env).join("lib");
+
+        if let Some(site_packages) = find_dir("site-packages", &dir)? {
+            Some(site_packages)
+        } else {
+            eprintln!(
+                "warning: site-packages directory not found under {}",
+                dir.display()
+            );
+            None
+        }
+    } else {
         match process::Command::new("pipenv").arg("--venv").output() {
             Ok(output) => {
                 if output.status.success() {
@@ -144,8 +161,8 @@ fn find_site_packages() -> Result<Option<PathBuf>> {
                 // `pipenv` is not in `$PATH -- assume this app isn't using it
                 None
             }
-        },
-    )
+        }
+    })
 }
 
 fn find_dir(name: &str, path: &Path) -> Result<Option<PathBuf>> {

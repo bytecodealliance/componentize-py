@@ -9,3 +9,5 @@ examples/matrix-math/matrix_math
 examples/matrix-math/wasmtime-py
 examples/http/.spin
 examples/http/http.wasm
+examples/tcp/tcp.wasm
+examples/cli/cli.wasm

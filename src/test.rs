@@ -59,7 +59,7 @@ async fn make_component(
     }
 
     crate::componentize(
-        &tempdir.path().join("app.wit"),
+        Some(&tempdir.path().join("app.wit")),
         None,
         &[tempdir
             .path()
