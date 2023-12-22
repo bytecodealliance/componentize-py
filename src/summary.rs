@@ -530,9 +530,9 @@ impl<'a> Summary<'a> {
         Ok(())
     }
 
-    fn summarize_type(&self, id: TypeId) -> exports::Type {
+    fn summarize_type(&self, id: TypeId, world_module: &str) -> exports::Type {
         let ty = &self.resolve.types[id];
-        if let Some(package) = self.package(ty.owner) {
+        if let Some(package) = self.package(ty.owner, world_module) {
             let name = if let Some(name) = &ty.name {
                 name.to_upper_camel_case().escape()
             } else {
@@ -613,14 +613,14 @@ impl<'a> Summary<'a> {
         }
     }
 
-    pub fn collect_symbols(&self) -> Symbols {
+    pub fn collect_symbols(&self, world_module: &str) -> Symbols {
         let mut exports = Vec::new();
         for function in &self.functions {
             if let FunctionKind::Export = function.kind {
                 let scope = if let Some(interface) = &function.interface {
                     interface.name
                 } else {
-                    &self.resolve.worlds[self.world].name
+                    world_module
                 };
 
                 exports.push(match function.wit_kind {
@@ -660,17 +660,11 @@ impl<'a> Summary<'a> {
 
         let mut types = Vec::new();
         for ty in &self.types {
-            types.push(self.summarize_type(*ty));
+            types.push(self.summarize_type(*ty, world_module));
         }
 
         Symbols {
-            types_package: format!(
-                "{}.types",
-                &self.resolve.worlds[self.world]
-                    .name
-                    .to_snake_case()
-                    .escape()
-            ),
+            types_package: format!("{world_module}.types"),
             exports,
             types,
         }
@@ -819,7 +813,12 @@ impl<'a> Summary<'a> {
         }
     }
 
-    pub fn generate_code(&self, path: &Path, with_typings: bool) -> Result<()> {
+    pub fn generate_code(
+        &self,
+        path: &Path,
+        with_typings: bool,
+        stub_runtime_calls: bool,
+    ) -> Result<()> {
         #[derive(Default)]
         struct Definitions<'a> {
             types: Vec<String>,
@@ -1024,13 +1023,29 @@ class {camel}(Flag):
                             let docs = docstring(function.docs, 2);
 
                             if let wit_parser::FunctionKind::Constructor(_) = function.wit_kind {
-                                format!(
-                                    "
+                                if stub_runtime_calls {
+                                    format!(
+                                        "
+    def {snake}({params}):
+        {docs}raise NotImplementedError
+"
+                                    )
+                                } else {
+                                    format!(
+                                        "
     def {snake}({params}):
         {docs}tmp = componentize_py_runtime.call_import({index}, [{args}], {result_count})[0]
         (_, func, args, _) = tmp.finalizer.detach()
         self.handle = tmp.handle
         self.finalizer = weakref.finalize(self, func, args[0], args[1])
+"
+                                    )
+                                }
+                            } else if stub_runtime_calls {
+                                format!(
+                                    "{static_method}
+    def {snake}({params}){return_type}:
+        {docs}raise NotImplementedError
 "
                                 )
                             } else {
@@ -1250,13 +1265,22 @@ class {camel}(Protocol):
                         FunctionKind::Import => {
                             let docs = docstring(function.docs, 1);
 
-                            let code = format!(
-                                "
+                            let code = if stub_runtime_calls {
+                                format!(
+                                    "
+def {snake}({params}){return_type}:
+    {docs}raise NotImplementedError
+"
+                                )
+                            } else {
+                                format!(
+                                    "
 def {snake}({params}){return_type}:
     {docs}result = componentize_py_runtime.call_import({index}, [{args}], {result_count})
     {return_statement}
 "
-                            );
+                                )
+                            };
 
                             let (definitions, docs) = if let Some(interface) = &function.interface {
                                 (
@@ -1374,11 +1398,16 @@ Result = Union[Ok[T], Err[E]]
                     .join("\n");
                 let docs = docstring(code.docs, 0);
 
+                let imports = if stub_runtime_calls {
+                    imports
+                } else {
+                    format!("import componentize_py_runtime\n{imports}")
+                };
+
                 write!(
                     file,
                     "{docs}{python_imports}
 from ..types import Result, Ok, Err, Some
-import componentize_py_runtime
 {imports}
 {types}
 {functions}
@@ -1475,11 +1504,16 @@ from ..types import Result, Ok, Err, Some
                 .join("\n");
             let docs = docstring(world_exports.docs, 0);
 
+            let imports = if stub_runtime_calls {
+                imports
+            } else {
+                format!("import componentize_py_runtime\n{imports}")
+            };
+
             write!(
                 file,
                 "{docs}{python_imports}
 from .types import Result, Ok, Err, Some
-import componentize_py_runtime
 {imports}
 {function_imports}
 {type_exports}
@@ -1506,21 +1540,13 @@ class {camel}(Protocol):
         }
     }
 
-    fn package(&self, owner: TypeOwner) -> Option<String> {
+    fn package(&self, owner: TypeOwner, world_module: &str) -> Option<String> {
         match owner {
             TypeOwner::Interface(interface) => {
                 let (module, package) = self.interface_package(interface);
-                Some(format!(
-                    "{}.{module}.{package}",
-                    self.resolve.worlds[self.world]
-                        .name
-                        .to_snake_case()
-                        .escape(),
-                ))
+                Some(format!("{world_module}.{module}.{package}",))
             }
-            TypeOwner::World(world) => {
-                Some(self.resolve.worlds[world].name.to_snake_case().escape())
-            }
+            TypeOwner::World(_) => Some(world_module.to_owned()),
             TypeOwner::None => None,
         }
     }
