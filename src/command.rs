@@ -71,10 +71,6 @@ pub struct Bindings {
     ///
     /// This will be created if it does not already exist.
     pub output_dir: PathBuf,
-
-    /// Disable type annotations
-    #[arg(short = 'n', long)]
-    pub no_typings: bool,
 }
 
 pub fn run<T: Into<OsString> + Clone, I: IntoIterator<Item = T>>(args: I) -> Result<()> {
@@ -92,7 +88,6 @@ fn generate_bindings(common: Common, bindings: Bindings) -> Result<()> {
             .unwrap_or_else(|| Path::new("wit").to_owned()),
         common.world.as_deref(),
         &bindings.output_dir,
-        !bindings.no_typings,
     )
 }
 

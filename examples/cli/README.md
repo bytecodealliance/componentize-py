@@ -13,7 +13,7 @@ snapshot, which may differ from later revisions.
 ## Prerequisites
 
 * `Wasmtime` 16.0.0 (later versions may use a different, incompatible `wasi-cli` snapshot)
-* `componentize-py` 0.8.0
+* `componentize-py` 0.9.0
 
 Below, we use [Rust](https://rustup.rs/)'s `cargo` to install `Wasmtime`.  If
 you don't have `cargo`, you can download and install from
@@ -21,7 +21,7 @@ https://github.com/bytecodealliance/wasmtime/releases/tag/v16.0.0.
 
 ```
 cargo install --version 16.0.0 wasmtime-cli
-pip install componentize-py==0.8.0
+pip install componentize-py==0.9.0
 ```
 
 ## Running the demo
