@@ -167,17 +167,12 @@ impl Invoker for MyInvoker {
     }
 }
 
-pub fn generate_bindings(
-    wit_path: &Path,
-    world: Option<&str>,
-    output_dir: &Path,
-    with_typings: bool,
-) -> Result<()> {
+pub fn generate_bindings(wit_path: &Path, world: Option<&str>, output_dir: &Path) -> Result<()> {
     let (resolve, world) = parse_wit(wit_path, world)?;
     let summary = Summary::try_new(&resolve, world)?;
     let world_dir = output_dir.join(resolve.worlds[world].name.to_snake_case().escape());
     fs::create_dir_all(&world_dir)?;
-    summary.generate_code(&world_dir, with_typings, true)?;
+    summary.generate_code(&world_dir, true)?;
 
     Ok(())
 }
@@ -378,7 +373,7 @@ pub async fn componentize(
         .as_ref()
         .and_then(|(p, c)| c.bindings.as_deref().map(|f| (p, f)))
     {
-        summary.generate_code(world_dir.path(), false, false)?;
+        summary.generate_code(world_dir.path(), false)?;
 
         let paths = python_path
             .iter()
@@ -405,7 +400,7 @@ pub async fn componentize(
         let module = resolve.worlds[world].name.to_snake_case();
         let world_dir = world_dir.path().join(&module);
         fs::create_dir_all(&world_dir)?;
-        summary.generate_code(&world_dir, false, false)?;
+        summary.generate_code(&world_dir, false)?;
 
         (vec!["world".to_owned()], module)
     };
