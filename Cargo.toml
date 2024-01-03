@@ -1,6 +1,6 @@
 [package]
 name = "componentize-py"
-version = "0.9.0"
+version = "0.9.1"
 edition = "2021"
 exclude = ["cpython"]
 
@@ -17,9 +17,9 @@ zstd = "0.13.0"
 componentize-py-shared = { path = "shared" }
 wasmparser = "0.118.0"
 wasm-encoder = "0.38.1"
-# TODO: switch to release once https://github.com/bytecodealliance/wasm-tools/pull/1317 is released
-wit-parser = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "231fa81b" }
-wit-component = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "231fa81b" }
+# TODO: switch to release once https://github.com/bytecodealliance/wasm-tools/pull/1317 and https://github.com/bytecodealliance/wasm-tools/pull/1341 are released
+wit-parser = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "928a946c" }
+wit-component = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "928a946c" }
 indexmap = "2.1.0"
 bincode = "1.3.3"
 heck = "0.4.1"
