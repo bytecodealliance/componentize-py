@@ -369,7 +369,7 @@ dependencies = [
 
 [[package]]
 name = "componentize-py"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "async-trait",
