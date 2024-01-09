@@ -206,13 +206,18 @@ pub async fn componentize(
     let mut library_path = Vec::with_capacity(python_path.len());
     for path in python_path {
         let mut libraries = Vec::new();
-        search_directory(Path::new(path), &mut libraries, &mut raw_config)?;
+        search_directory(
+            Path::new(path),
+            Path::new(path),
+            &mut libraries,
+            &mut raw_config,
+        )?;
         library_path.push((*path, libraries));
     }
 
-    let config = if let Some((config_path, raw)) = raw_config {
+    let config = if let Some((config_root, config_path, raw)) = raw_config {
         let config = ComponentizePyConfig::try_from((config_path.deref(), raw))?;
-        Some((config_path, config))
+        Some((config_root, config_path, config))
     } else {
         None
     };
@@ -221,7 +226,7 @@ pub async fn componentize(
         path.to_owned()
     } else if let Some((config_path, wit_path)) = config
         .as_ref()
-        .and_then(|(p, c)| c.wit_directory.as_deref().map(|f| (p, f)))
+        .and_then(|(_, p, c)| c.wit_directory.as_deref().map(|f| (p, f)))
     {
         config_path.join(wit_path)
     } else {
@@ -369,9 +374,10 @@ pub async fn componentize(
 
     let world_dir = tempfile::tempdir()?;
 
-    let (world_dir_mounts, world_module) = if let Some((config_path, binding_path)) = config
-        .as_ref()
-        .and_then(|(p, c)| c.bindings.as_deref().map(|f| (p, f)))
+    let (world_dir_mounts, world_module) = if let Some((config_root, config_path, binding_path)) =
+        config
+            .as_ref()
+            .and_then(|(r, p, c)| c.bindings.as_deref().map(|f| (r, p, f)))
     {
         summary.generate_code(world_dir.path(), false)?;
 
@@ -379,12 +385,18 @@ pub async fn componentize(
             .iter()
             .enumerate()
             .map(|(index, dir)| {
-                Ok(config_path
-                    .canonicalize()?
-                    .join(binding_path)
-                    .strip_prefix(Path::new(dir).canonicalize()?)
-                    .ok()
-                    .map(|p| (index, p.to_str().unwrap().to_owned())))
+                let dir = Path::new(dir).canonicalize()?;
+                let config_root = config_root.canonicalize()?;
+                Ok(if config_root == dir {
+                    config_path
+                        .canonicalize()?
+                        .join(binding_path)
+                        .strip_prefix(dir)
+                        .ok()
+                        .map(|p| (index, p.to_str().unwrap().to_owned()))
+                } else {
+                    None
+                })
             })
             .filter_map(Result::transpose)
             .collect::<Result<Vec<_>>>()?;
@@ -590,22 +602,42 @@ fn add_wasi_and_stubs(
 }
 
 fn search_directory(
+    root: &Path,
     path: &Path,
     libraries: &mut Vec<PathBuf>,
-    config: &mut Option<(PathBuf, RawComponentizePyConfig)>,
+    config: &mut Option<(PathBuf, PathBuf, RawComponentizePyConfig)>,
 ) -> Result<()> {
     if path.is_dir() {
         for entry in fs::read_dir(path)? {
-            search_directory(&entry?.path(), libraries, config)?;
+            search_directory(root, &entry?.path(), libraries, config)?;
         }
     } else if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
         if name.ends_with(NATIVE_EXTENSION_SUFFIX) {
             libraries.push(path.to_owned());
         } else if name == "componentize-py.toml" {
-            if config.is_some() {
-                bail!("multiple componentize-py.toml files found, which is not yet supported");
+            let do_update = if let Some((existing_root, existing_path, _)) = config {
+                let path = path.canonicalize()?;
+                let existing_path = existing_path.join("componentize-py.toml").canonicalize()?;
+                if path != existing_path {
+                    bail!(
+                        "multiple componentize-py.toml files found, \
+                         which is not yet supported: {} and {}",
+                        existing_path.display(),
+                        path.display()
+                    );
+                }
+
+                // When one directory in `PYTHON_PATH` is a subdirectory of the other, we consider the subdirectory
+                // to be the true owner of the file.  This is important later, when we derive a package name by
+                // stripping the root directory from the file path.
+                root.canonicalize()? > existing_root.canonicalize()?
             } else {
+                true
+            };
+
+            if do_update {
                 *config = Some((
+                    root.to_owned(),
                     path.parent().unwrap().to_owned(),
                     toml::from_str::<RawComponentizePyConfig>(&fs::read_to_string(path)?)?,
                 ));
