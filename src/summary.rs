@@ -1214,9 +1214,6 @@ class {camel}(Flag):
                                 }
                             })
                             .map(method)
-                            // TODO: make resource classes context managers per
-                            // https://docs.python.org/3/reference/datamodel.html#context-managers and call this
-                            // `__exit__`:
                             .chain(iter::once({
                                 let newline = '\n';
                                 let indent = "        ";
