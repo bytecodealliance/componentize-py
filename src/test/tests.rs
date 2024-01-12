@@ -183,7 +183,9 @@ class Thing(resource_import_and_export.Thing):
 
     @staticmethod
     def baz(a: Self, b: Self) -> Self:
-        return Thing(HostThing.baz(a.value, b.value).foo() + 9)
+        with HostThing.baz(a.value, b.value) as bar:
+            value = bar.foo()
+        return Thing(value + 9)
 "#,
     ),
     (

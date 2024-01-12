@@ -1214,27 +1214,28 @@ class {camel}(Flag):
                                 }
                             })
                             .map(method)
-                            // TODO: make resource classes context managers per
-                            // https://docs.python.org/3/reference/datamodel.html#context-managers and call this
-                            // `__exit__`:
                             .chain(iter::once({
                                 let newline = '\n';
                                 let indent = "        ";
                                 let doc = "Release this resource.";
                                 let docs =
                                     format!(r#""""{newline}{indent}{doc}{newline}{indent}"""{newline}{indent}"#);
-
+                                let enter = r#"
+    def __enter__(self):
+        """Returns self"""
+        return self
+                                "#;
                                 if stub_runtime_calls {
                                     format!(
-                                        "
-    def drop(self):
+                                        "{enter}                                    
+    def __exit__(self, *args):
         {docs}raise NotImplementedError
 "
                                     )
                                 } else {
                                     format!(
-                                        "
-    def drop(self):
+                                        "{enter}
+    def __exit__(self, *args):
         {docs}(_, func, args, _) = self.finalizer.detach()
         self.handle = None
         func(args[0], args[1])
