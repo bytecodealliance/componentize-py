@@ -173,6 +173,7 @@ struct FunctionCode {
     static_method: &'static str,
     return_type: String,
     result_count: usize,
+    error: Option<String>,
 }
 
 pub struct Summary<'a> {
@@ -751,9 +752,9 @@ impl<'a> Summary<'a> {
 
         let result_types = function.results.types().collect::<Vec<_>>();
 
-        let (return_statement, return_type) =
+        let (return_statement, return_type, error) =
             if let wit_parser::FunctionKind::Constructor(_) = function.wit_kind {
-                ("return".to_owned(), "None".to_owned())
+                ("return".to_owned(), "None".to_owned(), None)
             } else {
                 let indent = if let wit_parser::FunctionKind::Freestanding = function.wit_kind {
                     ""
@@ -762,18 +763,29 @@ impl<'a> Summary<'a> {
                 };
 
                 match result_types.as_slice() {
-                    [] => ("return".to_owned(), "None".to_owned()),
+                    [] => ("return".to_owned(), "None".to_owned(), None),
                     [ty] => match special_return(*ty) {
-                        SpecialReturn::Result(result) => (
-                            format!(
-                                "if isinstance(result[0], Err):
+                        SpecialReturn::Result(result) => {
+                            let error = if let Some(ty) = result.err {
+                                Some(type_name(ty))
+                            } else {
+                                Some("None".into())
+                            };
+
+                            (
+                                format!(
+                                    "if isinstance(result[0], Err):
 {indent}        raise result[0]
 {indent}    else:
 {indent}        return result[0].value"
-                            ),
-                            result.ok.map(type_name).unwrap_or_else(|| "None".into()),
-                        ),
-                        SpecialReturn::None => ("return result[0]".to_owned(), type_name(*ty)),
+                                ),
+                                result.ok.map(type_name).unwrap_or_else(|| "None".into()),
+                                error,
+                            )
+                        }
+                        SpecialReturn::None => {
+                            ("return result[0]".to_owned(), type_name(*ty), None)
+                        }
                     },
                     _ => (
                         "return result".to_owned(),
@@ -785,6 +797,7 @@ impl<'a> Summary<'a> {
                                 .collect::<Vec<_>>()
                                 .join(", ")
                         ),
+                        None,
                     ),
                 }
             };
@@ -805,6 +818,7 @@ impl<'a> Summary<'a> {
             static_method,
             return_type: format!(" -> {return_type}"),
             result_count,
+            error,
         }
     }
 
@@ -949,7 +963,14 @@ impl<'a> Summary<'a> {
             },
         }
 
-        let docstring = |docs: Option<&str>, indent_level| {
+        let docstring = |docs: Option<&str>, indent_level, error: Option<&str>| {
+            let docs = match (docs, error.map(|e| format!("Raises: Err({e})"))) {
+                (Some(docs), Some(error_docs)) => Some(format!("{docs}\n\n{error_docs}")),
+                (Some(docs), None) => Some(docs.to_owned()),
+                (None, Some(error_docs)) => Some(error_docs),
+                (None, None) => None,
+            };
+
             if let Some(docs) = docs {
                 let newline = '\n';
                 let indent = (0..indent_level)
@@ -1000,7 +1021,7 @@ impl<'a> Summary<'a> {
                     fields = "pass".to_owned()
                 }
 
-                let docs = docstring(docs, 1);
+                let docs = docstring(docs, 1, None);
 
                 format!(
                     "
@@ -1078,7 +1099,7 @@ class {name}:
                         .collect::<Vec<_>>()
                         .join("\n    ");
 
-                    let docs = docstring(ty.docs.contents.as_deref(), 1);
+                    let docs = docstring(ty.docs.contents.as_deref(), 1, None);
 
                     Code::Shared(format!(
                         "
@@ -1102,7 +1123,7 @@ class {camel}(Enum):
                         flags
                     };
 
-                    let docs = docstring(ty.docs.contents.as_deref(), 1);
+                    let docs = docstring(ty.docs.contents.as_deref(), 1, None);
 
                     Code::Shared(format!(
                         "
@@ -1114,7 +1135,7 @@ class {camel}(Flag):
                 TypeDefKind::Resource => {
                     let camel = camel();
 
-                    let docs = docstring(ty.docs.contents.as_deref(), 1);
+                    let docs = docstring(ty.docs.contents.as_deref(), 1, None);
 
                     let empty = &ResourceInfo::default();
 
@@ -1134,9 +1155,10 @@ class {camel}(Flag):
                                 return_statement,
                                 static_method,
                                 result_count,
+                                error,
                             } = self.function_code(function, &mut names, &seen, Some(id));
 
-                            let docs = docstring(function.docs, 2);
+                            let docs = docstring(function.docs, 2, error.as_deref());
 
                             if let wit_parser::FunctionKind::Constructor(_) = function.wit_kind {
                                 if stub_runtime_calls {
@@ -1246,10 +1268,11 @@ class {camel}:
                                 params,
                                 return_type,
                                 static_method,
+                                error,
                                 ..
                             } = self.function_code(function, &mut names, &seen, Some(id));
 
-                            let docs = docstring(function.docs, 2);
+                            let docs = docstring(function.docs, 2, error.as_deref());
 
                             format!(
                                 "{static_method}
@@ -1393,12 +1416,13 @@ class {camel}(Protocol):
                         return_type,
                         return_statement,
                         result_count,
+                        error,
                         ..
                     } = self.function_code(function, &mut names, &seen, None);
 
                     match function.kind {
                         FunctionKind::Import => {
-                            let docs = docstring(function.docs, 1);
+                            let docs = docstring(function.docs, 1, error.as_deref());
 
                             let code = if stub_runtime_calls {
                                 format!(
@@ -1440,7 +1464,7 @@ def {snake}({params}){return_type}:
                                 format!("self, {params}")
                             };
 
-                            let docs = docstring(function.docs, 2);
+                            let docs = docstring(function.docs, 2, error.as_deref());
 
                             let code = format!(
                                 "
@@ -1531,7 +1555,7 @@ Result = Union[Ok[T], Err[E]]
                     .map(|&interface| import("..", interface))
                     .collect::<Vec<_>>()
                     .join("\n");
-                let docs = docstring(code.docs, 0);
+                let docs = docstring(code.docs, 0, None);
 
                 let imports = if stub_runtime_calls {
                     imports
@@ -1567,7 +1591,7 @@ from ..types import Result, Ok, Err, Some
                     .map(|interface| import("..", interface))
                     .collect::<Vec<_>>()
                     .join("\n");
-                let docs = docstring(code.docs, 0);
+                let docs = docstring(code.docs, 0, None);
 
                 write!(
                     file,
@@ -1637,7 +1661,7 @@ from ..types import Result, Ok, Err, Some
                 .map(|&interface| import(".", interface))
                 .collect::<Vec<_>>()
                 .join("\n");
-            let docs = docstring(world_exports.docs, 0);
+            let docs = docstring(world_exports.docs, 0, None);
 
             let imports = if stub_runtime_calls {
                 imports
