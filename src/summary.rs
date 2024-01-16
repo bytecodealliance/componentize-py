@@ -861,54 +861,58 @@ impl<'a> Summary<'a> {
             | Type::Float64
             | Type::String => (),
             Type::Id(id) => {
-                if !visited.contains(&id) {
-                    visited.insert(id);
+                let ty = &self.resolve.types[id];
+                match &ty.kind {
+                    TypeDefKind::Record(record) => {
+                        for field in &record.fields {
+                            self.sort(field.ty, sorted, visited);
+                        }
+                        sorted.insert(id);
+                    }
+                    TypeDefKind::Variant(variant) => {
+                        for case in &variant.cases {
+                            if let Some(ty) = case.ty {
+                                self.sort(ty, sorted, visited);
+                            }
+                        }
+                        sorted.insert(id);
+                    }
+                    TypeDefKind::Enum(_) | TypeDefKind::Flags(_) => {
+                        sorted.insert(id);
+                    }
+                    TypeDefKind::Handle(Handle::Borrow(resource) | Handle::Own(resource)) => {
+                        self.sort(Type::Id(*resource), sorted, visited);
+                        sorted.insert(id);
+                    }
+                    TypeDefKind::Option(some) => {
+                        self.sort(*some, sorted, visited);
+                        sorted.insert(id);
+                    }
+                    TypeDefKind::Result(result) => {
+                        if let Some(ty) = result.ok {
+                            self.sort(ty, sorted, visited);
+                        }
+                        if let Some(ty) = result.err {
+                            self.sort(ty, sorted, visited);
+                        }
+                        sorted.insert(id);
+                    }
+                    TypeDefKind::Tuple(tuple) => {
+                        for ty in &tuple.types {
+                            self.sort(*ty, sorted, visited);
+                        }
+                        sorted.insert(id);
+                    }
+                    TypeDefKind::List(ty) => {
+                        self.sort(*ty, sorted, visited);
+                    }
+                    TypeDefKind::Type(ty) => {
+                        self.sort(*ty, sorted, visited);
+                    }
+                    TypeDefKind::Resource => {
+                        if !visited.contains(&id) {
+                            visited.insert(id);
 
-                    let ty = &self.resolve.types[id];
-                    match &ty.kind {
-                        TypeDefKind::Record(record) => {
-                            for field in &record.fields {
-                                self.sort(field.ty, sorted, visited);
-                            }
-                            sorted.insert(id);
-                        }
-                        TypeDefKind::Variant(variant) => {
-                            for case in &variant.cases {
-                                if let Some(ty) = case.ty {
-                                    self.sort(ty, sorted, visited);
-                                }
-                            }
-                            sorted.insert(id);
-                        }
-                        TypeDefKind::Enum(_) | TypeDefKind::Flags(_) | TypeDefKind::Handle(_) => {
-                            sorted.insert(id);
-                        }
-                        TypeDefKind::Option(some) => {
-                            self.sort(*some, sorted, visited);
-                            sorted.insert(id);
-                        }
-                        TypeDefKind::Result(result) => {
-                            if let Some(ty) = result.ok {
-                                self.sort(ty, sorted, visited);
-                            }
-                            if let Some(ty) = result.err {
-                                self.sort(ty, sorted, visited);
-                            }
-                            sorted.insert(id);
-                        }
-                        TypeDefKind::Tuple(tuple) => {
-                            for ty in &tuple.types {
-                                self.sort(*ty, sorted, visited);
-                            }
-                            sorted.insert(id);
-                        }
-                        TypeDefKind::List(ty) => {
-                            self.sort(*ty, sorted, visited);
-                        }
-                        TypeDefKind::Type(ty) => {
-                            self.sort(*ty, sorted, visited);
-                        }
-                        TypeDefKind::Resource => {
                             let sort = |function: &MyFunction, sorted: &mut _, visited: &mut _| {
                                 for (_, ty) in function.params {
                                     self.sort(*ty, &mut *sorted, &mut *visited);
@@ -951,8 +955,8 @@ impl<'a> Summary<'a> {
 
                             sorted.insert(id);
                         }
-                        kind => todo!("{kind:?}"),
                     }
+                    kind => todo!("{kind:?}"),
                 }
             }
         }
