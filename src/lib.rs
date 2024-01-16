@@ -167,12 +167,19 @@ impl Invoker for MyInvoker {
     }
 }
 
-pub fn generate_bindings(wit_path: &Path, world: Option<&str>, output_dir: &Path) -> Result<()> {
+pub fn generate_bindings(
+    wit_path: &Path,
+    world: Option<&str>,
+    world_module: Option<&str>,
+    output_dir: &Path,
+) -> Result<()> {
     let (resolve, world) = parse_wit(wit_path, world)?;
     let summary = Summary::try_new(&resolve, world)?;
-    let world_dir = output_dir.join(resolve.worlds[world].name.to_snake_case().escape());
+    let world_name = resolve.worlds[world].name.to_snake_case().escape();
+    let world_module = world_module.unwrap_or(&world_name);
+    let world_dir = output_dir.join(world_module.replace('.', "/"));
     fs::create_dir_all(&world_dir)?;
-    summary.generate_code(&world_dir, true)?;
+    summary.generate_code(&world_dir, world_module, true)?;
 
     Ok(())
 }
@@ -379,8 +386,6 @@ pub async fn componentize(
             .as_ref()
             .and_then(|(r, p, c)| c.bindings.as_deref().map(|f| (r, p, f)))
     {
-        summary.generate_code(world_dir.path(), false)?;
-
         let paths = python_path
             .iter()
             .enumerate()
@@ -401,18 +406,22 @@ pub async fn componentize(
             .filter_map(Result::transpose)
             .collect::<Result<Vec<_>>>()?;
 
+        let module = paths.first().unwrap().1.replace('/', ".");
+
+        summary.generate_code(world_dir.path(), &module, false)?;
+
         (
             paths
                 .iter()
                 .map(|(index, p)| format!("{index}/{p}"))
                 .collect::<Vec<_>>(),
-            paths.first().unwrap().1.replace('/', "."),
+            module,
         )
     } else {
         let module = resolve.worlds[world].name.to_snake_case();
         let world_dir = world_dir.path().join(&module);
         fs::create_dir_all(&world_dir)?;
-        summary.generate_code(&world_dir, false)?;
+        summary.generate_code(&world_dir, &module, false)?;
 
         (vec!["world".to_owned()], module)
     };

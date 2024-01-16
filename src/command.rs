@@ -71,6 +71,12 @@ pub struct Bindings {
     ///
     /// This will be created if it does not already exist.
     pub output_dir: PathBuf,
+
+    /// Optional name of top-level module to use for bindings.
+    ///
+    /// If this is not specified, the module name will be derived from the world name.
+    #[arg(long)]
+    pub world_module: Option<String>,
 }
 
 pub fn run<T: Into<OsString> + Clone, I: IntoIterator<Item = T>>(args: I) -> Result<()> {
@@ -87,6 +93,7 @@ fn generate_bindings(common: Common, bindings: Bindings) -> Result<()> {
             .wit_path
             .unwrap_or_else(|| Path::new("wit").to_owned()),
         common.world.as_deref(),
+        bindings.world_module.as_deref(),
         &bindings.output_dir,
     )
 }

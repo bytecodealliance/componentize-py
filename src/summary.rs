@@ -1,7 +1,7 @@
 use {
     crate::{
         abi::{self, MAX_FLAT_PARAMS, MAX_FLAT_RESULTS},
-        bindgen::DISPATCHABLE_CORE_PARAM_COUNT,
+        bindgen::{self, DISPATCHABLE_CORE_PARAM_COUNT},
         exports::exports::{
             self, Case, Constructor, Function, FunctionExport, LocalResource, OwnedKind, OwnedType,
             RemoteResource, Resource, Static, Symbols,
@@ -700,6 +700,8 @@ impl<'a> Summary<'a> {
 
     fn function_code(
         &self,
+        direction: Direction,
+        world_module: &str,
         function: &MyFunction,
         names: &mut TypeNames,
         seen: &HashSet<TypeId>,
@@ -732,6 +734,27 @@ impl<'a> Summary<'a> {
         };
 
         let mut type_name = |ty| names.type_name(ty, seen, if self_ { resource } else { None });
+
+        let absolute_type_name = |ty| {
+            format!(
+                "{world_module}.{}.{}",
+                match direction {
+                    Direction::Import => "imports",
+                    Direction::Export => "exports",
+                },
+                TypeNames::new(self, TypeOwner::None).type_name(
+                    ty,
+                    &if let Type::Id(id) = ty {
+                        Some(bindgen::dealias(self.resolve, id))
+                    } else {
+                        None
+                    }
+                    .into_iter()
+                    .collect::<HashSet<_>>(),
+                    None
+                )
+            )
+        };
 
         let params = self_
             .then(|| "self".to_string())
@@ -767,7 +790,7 @@ impl<'a> Summary<'a> {
                     [ty] => match special_return(*ty) {
                         SpecialReturn::Result(result) => {
                             let error = if let Some(ty) = result.err {
-                                Some(type_name(ty))
+                                Some(absolute_type_name(ty))
                             } else {
                                 Some("None".into())
                             };
@@ -944,7 +967,12 @@ impl<'a> Summary<'a> {
         sorted
     }
 
-    pub fn generate_code(&self, path: &Path, stub_runtime_calls: bool) -> Result<()> {
+    pub fn generate_code(
+        &self,
+        path: &Path,
+        world_module: &str,
+        stub_runtime_calls: bool,
+    ) -> Result<()> {
         #[derive(Default)]
         struct Definitions<'a> {
             types: Vec<String>,
@@ -964,7 +992,10 @@ impl<'a> Summary<'a> {
         }
 
         let docstring = |docs: Option<&str>, indent_level, error: Option<&str>| {
-            let docs = match (docs, error.map(|e| format!("Raises: Err({e})"))) {
+            let docs = match (
+                docs,
+                error.map(|e| format!("Raises: `{world_module}.types.Err({e})`")),
+            ) {
                 (Some(docs), Some(error_docs)) => Some(format!("{docs}\n\n{error_docs}")),
                 (Some(docs), None) => Some(docs.to_owned()),
                 (None, Some(error_docs)) => Some(error_docs),
@@ -1070,20 +1101,14 @@ class {name}:
                         .collect::<Vec<_>>()
                         .join(", ");
 
-                    let docs = if let Some(docs) = &ty.docs.contents {
-                        docs.lines()
-                            .map(|line| format!("# {line}\n"))
-                            .collect::<Vec<_>>()
-                            .concat()
-                    } else {
-                        String::new()
-                    };
+                    let docs = docstring(ty.docs.contents.as_deref(), 0, None);
 
                     Code::Shared(format!(
                         "
 {classes}
 
-{docs}{camel} = Union[{cases}]
+{camel} = Union[{cases}]
+{docs}
 "
                     ))
                 }
@@ -1156,7 +1181,14 @@ class {camel}(Flag):
                                 static_method,
                                 result_count,
                                 error,
-                            } = self.function_code(function, &mut names, &seen, Some(id));
+                            } = self.function_code(
+                                Direction::Import,
+                                world_module,
+                                function,
+                                &mut names,
+                                &seen,
+                                Some(id),
+                            );
 
                             let docs = docstring(function.docs, 2, error.as_deref());
 
@@ -1271,7 +1303,14 @@ class {camel}:
                                 static_method,
                                 error,
                                 ..
-                            } = self.function_code(function, &mut names, &seen, Some(id));
+                            } = self.function_code(
+                                Direction::Export,
+                                world_module,
+                                function,
+                                &mut names,
+                                &seen,
+                                Some(id),
+                            );
 
                             let docs = docstring(function.docs, 2, error.as_deref());
 
@@ -1419,7 +1458,14 @@ class {camel}(Protocol):
                         result_count,
                         error,
                         ..
-                    } = self.function_code(function, &mut names, &seen, None);
+                    } = self.function_code(
+                        Direction::Import,
+                        world_module,
+                        function,
+                        &mut names,
+                        &seen,
+                        None,
+                    );
 
                     match function.kind {
                         FunctionKind::Import => {
