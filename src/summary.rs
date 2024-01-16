@@ -170,7 +170,7 @@ struct FunctionCode {
     params: String,
     args: String,
     return_statement: String,
-    static_method: &'static str,
+    class_method: &'static str,
     return_type: String,
     result_count: usize,
     error: Option<String>,
@@ -727,13 +727,13 @@ impl<'a> Summary<'a> {
         let snake = self.function_name(function);
 
         let (skip_count, self_) = match function.wit_kind {
-            wit_parser::FunctionKind::Freestanding => (0, false),
-            wit_parser::FunctionKind::Constructor(_) => (0, true),
-            wit_parser::FunctionKind::Method(_) => (1, true),
-            wit_parser::FunctionKind::Static(_) => (0, false),
+            wit_parser::FunctionKind::Freestanding => (0, None),
+            wit_parser::FunctionKind::Constructor(_) => (0, Some("self")),
+            wit_parser::FunctionKind::Method(_) => (1, Some("self")),
+            wit_parser::FunctionKind::Static(_) => (0, Some("cls")),
         };
 
-        let mut type_name = |ty| names.type_name(ty, seen, if self_ { resource } else { None });
+        let mut type_name = |ty| names.type_name(ty, seen, resource);
 
         let absolute_type_name = |ty| {
             format!(
@@ -757,7 +757,7 @@ impl<'a> Summary<'a> {
         };
 
         let params = self_
-            .then(|| "self".to_string())
+            .map(|s| s.to_string())
             .into_iter()
             .chain(function.params.iter().skip(skip_count).map(|(name, ty)| {
                 let snake = name.to_snake_case().escape();
@@ -827,8 +827,8 @@ impl<'a> Summary<'a> {
 
         let result_count = result_types.len();
 
-        let static_method = if let wit_parser::FunctionKind::Static(_) = function.wit_kind {
-            "\n    @staticmethod"
+        let class_method = if let wit_parser::FunctionKind::Static(_) = function.wit_kind {
+            "\n    @classmethod"
         } else {
             ""
         };
@@ -838,7 +838,7 @@ impl<'a> Summary<'a> {
             params,
             args,
             return_statement,
-            static_method,
+            class_method,
             return_type: format!(" -> {return_type}"),
             result_count,
             error,
@@ -1178,7 +1178,7 @@ class {camel}(Flag):
                                 args,
                                 return_type,
                                 return_statement,
-                                static_method,
+                                class_method,
                                 result_count,
                                 error,
                             } = self.function_code(
@@ -1213,14 +1213,14 @@ class {camel}(Flag):
                                 }
                             } else if stub_runtime_calls {
                                 format!(
-                                    "{static_method}
+                                    "{class_method}
     def {snake}({params}){return_type}:
         {docs}raise NotImplementedError
 "
                                 )
                             } else {
                                 format!(
-                                    "{static_method}
+                                    "{class_method}
     def {snake}({params}){return_type}:
         {docs}result = componentize_py_runtime.call_import({index}, [{args}], {result_count})
         {return_statement}
@@ -1300,7 +1300,7 @@ class {camel}:
                                 snake,
                                 params,
                                 return_type,
-                                static_method,
+                                class_method,
                                 error,
                                 ..
                             } = self.function_code(
@@ -1315,7 +1315,7 @@ class {camel}:
                             let docs = docstring(function.docs, 2, error.as_deref());
 
                             format!(
-                                "{static_method}
+                                "{class_method}
     @abstractmethod
     def {snake}({params}){return_type}:
         {docs}raise NotImplementedError
