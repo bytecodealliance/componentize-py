@@ -64,9 +64,6 @@ See the
 directories for more examples, including various ways to run the components you've
 created.
 
-For an example of running a sandboxed Python guest within a Python host, see
-[component-sandbox-demo](https://github.com/dicej/component-sandbox-demo).
-
 ## Known Limitations
 
 Currently, the application can only import dependencies during build time, which
