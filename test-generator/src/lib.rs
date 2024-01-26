@@ -166,7 +166,7 @@ fn wit_type_name(wit: &mut String, ty: &Type) -> String {
                 .enumerate()
                 .map(|(index, ty)| {
                     let ty = wit_type_name(wit, ty);
-                    format!("f{index}: {ty}")
+                    format!("field{index}: {ty}")
                 })
                 .collect::<Vec<_>>()
                 .join(",\n        ");
@@ -212,7 +212,7 @@ fn wit_type_name(wit: &mut String, ty: &Type) -> String {
         }
         Type::Flags { id, count } => {
             let flags = (0..*count)
-                .map(|index| format!("f{index}"))
+                .map(|index| format!("flag{index}"))
                 .collect::<Vec<_>>()
                 .join(",\n        ");
 
@@ -352,7 +352,11 @@ fn equality(a: &str, b: &str, ty: &Type) -> String {
                     .iter()
                     .enumerate()
                     .map(|(index, ty)| {
-                        equality(&format!("{a}.f{index}"), &format!("{b}.f{index}"), ty)
+                        equality(
+                            &format!("{a}.field{index}"),
+                            &format!("{b}.field{index}"),
+                            ty,
+                        )
                     })
                     .collect::<Vec<_>>()
                     .join(" && ")
@@ -437,7 +441,7 @@ fn strategy(ty: &Type, max_list_size: usize) -> String {
                     .collect::<Vec<_>>();
 
                 let params = (0..strategies.len())
-                    .map(|index| format!("f{index},"))
+                    .map(|index| format!("field{index},"))
                     .collect::<Vec<_>>()
                     .join(" ");
 
@@ -448,7 +452,7 @@ fn strategy(ty: &Type, max_list_size: usize) -> String {
                     .join(" ");
 
                 let inits = (0..fields.len())
-                    .map(|index| format!("f{index}"))
+                    .map(|index| format!("field{index}"))
                     .collect::<Vec<_>>()
                     .join(", ");
 
@@ -482,7 +486,7 @@ fn strategy(ty: &Type, max_list_size: usize) -> String {
 
             let flags = (0..*count)
                 .map(|index| {
-                    format!(" | if v[{index}] {{ {name}::F{index} }} else {{ {name}::empty() }}")
+                    format!(" | if v[{index}] {{ {name}::FLAG{index} }} else {{ {name}::empty() }}")
                 })
                 .collect::<Vec<_>>()
                 .concat();

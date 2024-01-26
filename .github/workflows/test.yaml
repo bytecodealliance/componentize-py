@@ -10,8 +10,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  WASI_SDK_VERSION: 20.43g3df3a466fbbe
-  WASI_SDK_RELEASE: wasi-sockets-alpha-1
+  WASI_SDK_VERSION: 20.26g68203b20b82e
+  WASI_SDK_RELEASE: wasi-sockets-alpha-2
 
 jobs:
   test:

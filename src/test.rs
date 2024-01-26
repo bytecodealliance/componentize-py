@@ -12,10 +12,10 @@ use {
     std::{env, fs, marker::PhantomData},
     tokio::runtime::Runtime,
     wasmtime::{
-        component::{Component, Instance, InstancePre, Linker},
+        component::{Component, Instance, InstancePre, Linker, ResourceTable},
         Config, Engine, Store,
     },
-    wasmtime_wasi::preview2::{Table, WasiCtxBuilder},
+    wasmtime_wasi::preview2::WasiCtxBuilder,
 };
 
 mod echoes;
@@ -133,7 +133,7 @@ impl<H: Host> Tester<H> {
         let runtime = Runtime::new()?;
 
         let mut store = runtime.block_on(async {
-            let table = Table::new();
+            let table = ResourceTable::new();
             let wasi = WasiCtxBuilder::new()
                 .inherit_stdout()
                 .inherit_stderr()
@@ -165,7 +165,7 @@ impl<H: Host> Tester<H> {
 
         Ok(runner.run(strategy, move |v| {
             let mut store = runtime.block_on(async {
-                let table = Table::new();
+                let table = ResourceTable::new();
                 let wasi = WasiCtxBuilder::new()
                     .inherit_stdout()
                     .inherit_stderr()

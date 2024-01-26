@@ -370,7 +370,6 @@ pub fn make_bindings(resolve: &Resolve, world: WorldId, summary: &Summary) -> Re
             world,
             wit_component::StringEncoding::UTF8,
             None,
-            Some(false),
         )?),
     });
 

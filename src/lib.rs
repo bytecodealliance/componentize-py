@@ -19,14 +19,14 @@ use {
     summary::{Escape, Summary},
     tar::Archive,
     wasmtime::{
-        component::{Component, Instance, Linker},
+        component::{Component, Instance, Linker, ResourceTable, ResourceType},
         Config, Engine, Store,
     },
     wasmtime_wasi::{
         preview2::{
             command as wasi_command,
             pipe::{MemoryInputPipe, MemoryOutputPipe},
-            DirPerms, FilePerms, Table, WasiCtx, WasiCtxBuilder, WasiView,
+            DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, WasiView,
         },
         Dir,
     },
@@ -55,7 +55,7 @@ wasmtime::component::bindgen!({
 
 pub struct Ctx {
     wasi: WasiCtx,
-    table: Table,
+    table: ResourceTable,
 }
 
 impl WasiView for Ctx {
@@ -65,10 +65,10 @@ impl WasiView for Ctx {
     fn ctx_mut(&mut self) -> &mut WasiCtx {
         &mut self.wasi
     }
-    fn table(&self) -> &Table {
+    fn table(&self) -> &ResourceTable {
         &self.table
     }
-    fn table_mut(&mut self) -> &mut Table {
+    fn table_mut(&mut self) -> &mut ResourceTable {
         &mut self.table
     }
 }
@@ -443,7 +443,7 @@ pub async fn componentize(
         .collect::<Vec<_>>()
         .join(":");
 
-    let table = Table::new();
+    let table = ResourceTable::new();
     let wasi = wasi
         .env(
             "PYTHONPATH",
@@ -581,12 +581,14 @@ fn add_wasi_and_stubs(
                                 Err(anyhow!("called trapping stub: {interface_name}#{name}"))
                             }
                         }),
-                        Stub::Resource(name) => instance.resource::<()>(name, {
-                            let name = name.clone();
-                            move |_, _| {
-                                Err(anyhow!("called trapping stub: {interface_name}#{name}"))
-                            }
-                        }),
+                        Stub::Resource(name) => instance
+                            .resource(name, ResourceType::host::<()>(), {
+                                let name = name.clone();
+                                move |_, _| {
+                                    Err(anyhow!("called trapping stub: {interface_name}#{name}"))
+                                }
+                            })
+                            .map(drop),
                     }?;
                 }
             }
@@ -598,10 +600,12 @@ fn add_wasi_and_stubs(
                         let name = name.clone();
                         move |_, _, _| Err(anyhow!("called trapping stub: {name}"))
                     }),
-                    Stub::Resource(name) => instance.resource::<()>(name, {
-                        let name = name.clone();
-                        move |_, _| Err(anyhow!("called trapping stub: {name}"))
-                    }),
+                    Stub::Resource(name) => instance
+                        .resource(name, ResourceType::host::<()>(), {
+                            let name = name.clone();
+                            move |_, _| Err(anyhow!("called trapping stub: {name}"))
+                        })
+                        .map(drop),
                 }?;
             }
         }
