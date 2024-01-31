@@ -4,16 +4,13 @@ This is an example of how to use [componentize-py] and [Wasmtime] to build and
 run a Python-based component targetting the [wasi-cli] `command` world and
 making an outbound TCP request using `wasi-sockets`.
 
-Note that, as of this writing, `wasi-cli` has not yet stabilized.  Here we use a
-snapshot, which may differ from later revisions.
-
 [componentize-py]: https://github.com/bytecodealliance/componentize-py
 [Wasmtime]: https://github.com/bytecodealliance/wasmtime
 [wasi-cli]: https://github.com/WebAssembly/wasi-cli
 
 ## Prerequisites
 
-* `Wasmtime` 17.0.0 (later versions may use a different, incompatible `wasi-cli` snapshot)
+* `Wasmtime` 17.0.0 or later
 * `componentize-py` 0.11.0
 
 Below, we use [Rust](https://rustup.rs/)'s `cargo` to install `Wasmtime`.  If

@@ -3,17 +3,13 @@
 This is an example of how to use [componentize-py] and [Wasmtime] to build and
 run a Python-based component targetting the [wasi-http] `proxy` world.
 
-Note that, as of this writing, neither `wasi-http` nor the portions of
-`wasi-cli` on which it is based have stabilized.  Here we use a snapshot of both,
-which may differ from later revisions.
-
 [componentize-py]: https://github.com/bytecodealliance/componentize-py
 [Wasmtime]: https://github.com/bytecodealliance/wasmtime
 [wasi-http]: https://github.com/WebAssembly/wasi-http
 
 ## Prerequisites
 
-* `Wasmtime` 17.0.0 (later versions may use a different, incompatible `wasi-http` snapshot)
+* `Wasmtime` 17.0.0 or later
 * `componentize-py` 0.11.0
 
 Below, we use [Rust](https://rustup.rs/)'s `cargo` to install `Wasmtime`.  If
