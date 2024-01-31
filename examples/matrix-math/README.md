@@ -10,7 +10,7 @@ within a guest component.
 
 ## Prerequisites
 
-* `wasmtime` 17.0.0 (later versions may use a different, incompatible `wasi-cli` snapshot)
+* `wasmtime` 17.0.0 or later
 * `componentize-py` 0.11.0
 * `NumPy`, built for WASI
 
