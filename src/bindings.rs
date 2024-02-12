@@ -185,13 +185,13 @@ pub fn make_bindings(resolve: &Resolve, world: WorldId, summary: &Summary) -> Re
                     .get_index_of(&(function.interface.as_ref().map(|i| i.name), function.name))
                     .unwrap()
                     .try_into()?,
-                // The next two `dispatch_index`es should be the lift and lower functions (see ordering in
+                // The next two `dispatch_index`es should be the from_canon and to_canon functions (see ordering in
                 // `Summary::visit_function`):
                 dispatch_index,
                 dispatch_index + 1,
             ),
-            FunctionKind::ExportLift => gen.compile_export_lift(),
-            FunctionKind::ExportLower => gen.compile_export_lower(),
+            FunctionKind::ExportFromCanon => gen.compile_export_from_canon(),
+            FunctionKind::ExportToCanon => gen.compile_export_to_canon(),
             FunctionKind::ExportPostReturn => gen.compile_export_post_return(),
             FunctionKind::ResourceNew => {
                 gen.compile_resource_new(import_index.try_into().unwrap());

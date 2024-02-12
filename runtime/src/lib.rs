@@ -381,26 +381,25 @@ impl Guest for MyExports {
 #[export_name = "componentize-py#Dispatch"]
 pub unsafe extern "C" fn componentize_py_dispatch(
     export: usize,
-    lift: u32,
-    lower: u32,
+    from_canon: u32,
+    to_canon: u32,
     param_count: u32,
     return_style: ReturnStyle,
-    params: *const c_void,
-    results: *mut c_void,
+    params_canon: *const c_void,
+    results_canon: *mut c_void,
 ) {
     Python::with_gil(|py| {
-        let mut params_lifted =
-            vec![MaybeUninit::<&PyAny>::uninit(); param_count.try_into().unwrap()];
+        let mut params_py = vec![MaybeUninit::<&PyAny>::uninit(); param_count.try_into().unwrap()];
 
         componentize_py_call_indirect(
             &py as *const _ as _,
-            params,
-            params_lifted.as_mut_ptr() as _,
-            lift,
+            params_canon,
+            params_py.as_mut_ptr() as _,
+            from_canon,
         );
 
         // todo: is this sound, or do we need to `.into_iter().map(MaybeUninit::assume_init).collect()` instead?
-        let params_lifted = mem::transmute::<Vec<MaybeUninit<&PyAny>>, Vec<&PyAny>>(params_lifted);
+        let params_py = mem::transmute::<Vec<MaybeUninit<&PyAny>>, Vec<&PyAny>>(params_py);
 
         static ONCE: Once = Once::new();
         ONCE.call_once(|| {
@@ -424,15 +423,15 @@ pub unsafe extern "C" fn componentize_py_dispatch(
         let export = &EXPORTS.get().unwrap()[export];
         let result = match export {
             Export::Freestanding { instance, name } => {
-                instance.call_method1(py, name.as_ref(py), PyTuple::new(py, params_lifted))
+                instance.call_method1(py, name.as_ref(py), PyTuple::new(py, params_py))
             }
-            Export::Constructor(class) => class.call1(py, PyTuple::new(py, params_lifted)),
-            Export::Method(name) => params_lifted[0]
-                .call_method1(name.as_ref(py), PyTuple::new(py, &params_lifted[1..]))
+            Export::Constructor(class) => class.call1(py, PyTuple::new(py, params_py)),
+            Export::Method(name) => params_py[0]
+                .call_method1(name.as_ref(py), PyTuple::new(py, &params_py[1..]))
                 .map(|r| r.into()),
             Export::Static { class, name } => class
                 .getattr(py, name.as_ref(py))
-                .and_then(|function| function.call1(py, PyTuple::new(py, params_lifted))),
+                .and_then(|function| function.call1(py, PyTuple::new(py, params_py))),
         };
 
         let result = match return_style {
@@ -468,8 +467,8 @@ pub unsafe extern "C" fn componentize_py_dispatch(
         componentize_py_call_indirect(
             &py as *const _ as _,
             result_array.as_ptr() as *const _ as _,
-            results,
-            lower,
+            results_canon,
+            to_canon,
         );
     });
 }
@@ -488,28 +487,28 @@ pub unsafe extern "C" fn componentize_py_free(ptr: *mut u8, size: usize, align: 
     alloc::dealloc(ptr, Layout::from_size_align(size, align).unwrap())
 }
 
-#[export_name = "componentize-py#LowerI32"]
-pub extern "C" fn componentize_py_lower_i32(_py: &Python, value: &PyAny) -> i32 {
+#[export_name = "componentize-py#ToCanonI32"]
+pub extern "C" fn componentize_py_to_canon_i32(_py: &Python, value: &PyAny) -> i32 {
     value.extract().unwrap()
 }
 
-#[export_name = "componentize-py#LowerI64"]
-pub extern "C" fn componentize_py_lower_i64(_py: &Python, value: &PyAny) -> i64 {
+#[export_name = "componentize-py#ToCanonI64"]
+pub extern "C" fn componentize_py_to_canon_i64(_py: &Python, value: &PyAny) -> i64 {
     value.extract().unwrap()
 }
 
-#[export_name = "componentize-py#LowerF32"]
-pub extern "C" fn componentize_py_lower_f32(_py: &Python, value: &PyAny) -> f32 {
+#[export_name = "componentize-py#ToCanonF32"]
+pub extern "C" fn componentize_py_to_canon_f32(_py: &Python, value: &PyAny) -> f32 {
     value.extract().unwrap()
 }
 
-#[export_name = "componentize-py#LowerF64"]
-pub extern "C" fn componentize_py_lower_f64(_py: &Python, value: &PyAny) -> f64 {
+#[export_name = "componentize-py#ToCanonF64"]
+pub extern "C" fn componentize_py_to_canon_f64(_py: &Python, value: &PyAny) -> f64 {
     value.extract().unwrap()
 }
 
-#[export_name = "componentize-py#LowerChar"]
-pub extern "C" fn componentize_py_lower_char(_py: &Python, value: &PyAny) -> u32 {
+#[export_name = "componentize-py#ToCanonChar"]
+pub extern "C" fn componentize_py_to_canon_char(_py: &Python, value: &PyAny) -> u32 {
     let value = value.extract::<String>().unwrap();
     assert!(value.chars().count() == 1);
     value.chars().next().unwrap() as u32
@@ -517,8 +516,8 @@ pub extern "C" fn componentize_py_lower_char(_py: &Python, value: &PyAny) -> u32
 
 /// # Safety
 /// TODO
-#[export_name = "componentize-py#LowerString"]
-pub unsafe extern "C" fn componentize_py_lower_string(
+#[export_name = "componentize-py#ToCanonString"]
+pub unsafe extern "C" fn componentize_py_to_canon_string(
     _py: &Python,
     value: &PyAny,
     destination: *mut (*const u8, usize),
@@ -663,28 +662,28 @@ pub extern "C" fn componentize_py_get_list_element<'a>(
     value.downcast::<PyList>().unwrap().get_item(index).unwrap()
 }
 
-#[export_name = "componentize-py#LiftI32"]
-pub extern "C" fn componentize_py_lift_i32<'a>(py: &'a Python<'a>, value: i32) -> &'a PyAny {
+#[export_name = "componentize-py#FromCanonI32"]
+pub extern "C" fn componentize_py_from_canon_i32<'a>(py: &'a Python<'a>, value: i32) -> &'a PyAny {
     value.to_object(*py).into_ref(*py).downcast().unwrap()
 }
 
-#[export_name = "componentize-py#LiftI64"]
-pub extern "C" fn componentize_py_lift_i64<'a>(py: &'a Python<'a>, value: i64) -> &'a PyAny {
+#[export_name = "componentize-py#FromCanonI64"]
+pub extern "C" fn componentize_py_from_canon_i64<'a>(py: &'a Python<'a>, value: i64) -> &'a PyAny {
     value.to_object(*py).into_ref(*py).downcast().unwrap()
 }
 
-#[export_name = "componentize-py#LiftF32"]
-pub extern "C" fn componentize_py_lift_f32<'a>(py: &'a Python<'a>, value: f32) -> &'a PyAny {
+#[export_name = "componentize-py#FromCanonF32"]
+pub extern "C" fn componentize_py_from_canon_f32<'a>(py: &'a Python<'a>, value: f32) -> &'a PyAny {
     value.to_object(*py).into_ref(*py).downcast().unwrap()
 }
 
-#[export_name = "componentize-py#LiftF64"]
-pub extern "C" fn componentize_py_lift_f64<'a>(py: &'a Python<'a>, value: f64) -> &'a PyAny {
+#[export_name = "componentize-py#FromCanonF64"]
+pub extern "C" fn componentize_py_from_canon_f64<'a>(py: &'a Python<'a>, value: f64) -> &'a PyAny {
     value.to_object(*py).into_ref(*py).downcast().unwrap()
 }
 
-#[export_name = "componentize-py#LiftChar"]
-pub extern "C" fn componentize_py_lift_char<'a>(py: &'a Python<'a>, value: u32) -> &'a PyAny {
+#[export_name = "componentize-py#FromCanonChar"]
+pub extern "C" fn componentize_py_from_canon_char<'a>(py: &'a Python<'a>, value: u32) -> &'a PyAny {
     char::from_u32(value)
         .unwrap()
         .to_string()
@@ -696,8 +695,8 @@ pub extern "C" fn componentize_py_lift_char<'a>(py: &'a Python<'a>, value: u32) 
 
 /// # Safety
 /// TODO
-#[export_name = "componentize-py#LiftString"]
-pub unsafe extern "C" fn componentize_py_lift_string<'a>(
+#[export_name = "componentize-py#FromCanonString"]
+pub unsafe extern "C" fn componentize_py_from_canon_string<'a>(
     py: &'a Python,
     data: *const u8,
     len: usize,
@@ -888,8 +887,8 @@ pub unsafe extern "C" fn componentize_py_make_bytes<'a>(
     .unwrap()
 }
 
-#[export_name = "componentize-py#LiftHandle"]
-pub extern "C" fn componentize_py_lift_handle<'a>(
+#[export_name = "componentize-py#FromCanonHandle"]
+pub extern "C" fn componentize_py_from_canon_handle<'a>(
     py: &'a Python<'a>,
     value: i32,
     borrow: i32,
@@ -983,8 +982,8 @@ pub extern "C" fn componentize_py_lift_handle<'a>(
     }
 }
 
-#[export_name = "componentize-py#LowerHandle"]
-pub extern "C" fn componentize_py_lower_handle(
+#[export_name = "componentize-py#ToCanonHandle"]
+pub extern "C" fn componentize_py_to_canon_handle(
     py: &Python,
     value: &PyAny,
     borrow: i32,

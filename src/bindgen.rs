@@ -38,31 +38,31 @@ pub static IMPORT_SIGNATURES: &[(&str, &[ValType], &[ValType])] = &[
     ),
     ("componentize-py#Free", &[ValType::I32; 3], &[]),
     (
-        "componentize-py#LowerI32",
+        "componentize-py#ToCanonI32",
         &[ValType::I32; 2],
         &[ValType::I32],
     ),
     (
-        "componentize-py#LowerI64",
+        "componentize-py#ToCanonI64",
         &[ValType::I32; 2],
         &[ValType::I64],
     ),
     (
-        "componentize-py#LowerF32",
+        "componentize-py#ToCanonF32",
         &[ValType::I32; 2],
         &[ValType::F32],
     ),
     (
-        "componentize-py#LowerF64",
+        "componentize-py#ToCanonF64",
         &[ValType::I32; 2],
         &[ValType::F64],
     ),
     (
-        "componentize-py#LowerChar",
+        "componentize-py#ToCanonChar",
         &[ValType::I32; 2],
         &[ValType::I32],
     ),
-    ("componentize-py#LowerString", &[ValType::I32; 3], &[]),
+    ("componentize-py#ToCanonString", &[ValType::I32; 3], &[]),
     (
         "componentize-py#GetField",
         &[ValType::I32; 4],
@@ -79,32 +79,32 @@ pub static IMPORT_SIGNATURES: &[(&str, &[ValType], &[ValType])] = &[
         &[ValType::I32],
     ),
     (
-        "componentize-py#LiftI32",
+        "componentize-py#FromCanonI32",
         &[ValType::I32; 2],
         &[ValType::I32],
     ),
     (
-        "componentize-py#LiftI64",
+        "componentize-py#FromCanonI64",
         &[ValType::I32, ValType::I64],
         &[ValType::I32],
     ),
     (
-        "componentize-py#LiftF32",
+        "componentize-py#FromCanonF32",
         &[ValType::I32, ValType::F32],
         &[ValType::I32],
     ),
     (
-        "componentize-py#LiftF64",
+        "componentize-py#FromCanonF64",
         &[ValType::I32, ValType::F64],
         &[ValType::I32],
     ),
     (
-        "componentize-py#LiftChar",
+        "componentize-py#FromCanonChar",
         &[ValType::I32; 2],
         &[ValType::I32],
     ),
     (
-        "componentize-py#LiftString",
+        "componentize-py#FromCanonString",
         &[ValType::I32; 3],
         &[ValType::I32],
     ),
@@ -119,12 +119,12 @@ pub static IMPORT_SIGNATURES: &[(&str, &[ValType], &[ValType])] = &[
         &[ValType::I32],
     ),
     (
-        "componentize-py#LiftHandle",
+        "componentize-py#FromCanonHandle",
         &[ValType::I32; 5],
         &[ValType::I32],
     ),
     (
-        "componentize-py#LowerHandle",
+        "componentize-py#ToCanonHandle",
         &[ValType::I32; 5],
         &[ValType::I32],
     ),
@@ -166,6 +166,7 @@ pub struct FunctionBindgen<'a> {
     resource_directions: Option<&'a im_rc::HashMap<TypeId, Direction>>,
 }
 
+#[allow(clippy::wrong_self_convention)]
 impl<'a> FunctionBindgen<'a> {
     pub fn new(summary: &'a Summary, function: &'a MyFunction, stack_pointer: u32) -> Self {
         Self {
@@ -208,7 +209,7 @@ impl<'a> FunctionBindgen<'a> {
                 .map(|ty| self.push_local(*ty))
                 .collect::<Vec<_>>();
 
-            let mut lift_index = 0;
+            let mut from_canon_index = 0;
             let mut load_offset = 0;
             for ty in self.params.types() {
                 let abi = abi::abi(self.resolve, ty);
@@ -222,17 +223,20 @@ impl<'a> FunctionBindgen<'a> {
                 )));
                 self.push(Ins::LocalSet(value));
 
-                self.lower(ty, context, value);
+                self.to_canon(ty, context, value);
 
-                for local in locals[lift_index..][..abi.flattened.len()].iter().rev() {
+                for local in locals[from_canon_index..][..abi.flattened.len()]
+                    .iter()
+                    .rev()
+                {
                     self.push(Ins::LocalSet(*local));
                 }
 
-                for local in &locals[lift_index..][..abi.flattened.len()] {
+                for local in &locals[from_canon_index..][..abi.flattened.len()] {
                     self.push(Ins::LocalGet(*local));
                 }
 
-                lift_index += abi.flattened.len();
+                from_canon_index += abi.flattened.len();
                 load_offset += u64::try_from(WORD_SIZE).unwrap();
 
                 self.pop_local(value, ValType::I32);
@@ -298,7 +302,7 @@ impl<'a> FunctionBindgen<'a> {
                 })
                 .collect::<Vec<_>>();
 
-            self.lift_record(self.results.types(), context, &locals, output);
+            self.from_canon_record(self.results.types(), context, &locals, output);
 
             for (local, ty) in locals.iter().zip(&self.results_abi.flattened.clone()).rev() {
                 self.pop_local(*local, *ty);
@@ -316,7 +320,7 @@ impl<'a> FunctionBindgen<'a> {
         }
 
         if let Some(locals) = locals {
-            self.free_lowered_record(self.params.types(), &locals);
+            self.free_canon_record(self.params.types(), &locals);
 
             for (local, ty) in locals.iter().zip(&self.params_abi.flattened.clone()).rev() {
                 self.pop_local(*local, *ty);
@@ -334,7 +338,7 @@ impl<'a> FunctionBindgen<'a> {
         }
     }
 
-    pub fn compile_export(&mut self, index: i32, lift: i32, lower: i32) {
+    pub fn compile_export(&mut self, index: i32, from_canon: i32, to_canon: i32) {
         let return_style = match self.results.types().collect::<Vec<_>>().as_slice() {
             [Type::Id(id)] if matches!(&self.resolve.types[*id].kind, TypeDefKind::Result(_)) => {
                 ReturnStyle::Result
@@ -343,8 +347,8 @@ impl<'a> FunctionBindgen<'a> {
         };
 
         self.push(Ins::I32Const(index));
-        self.push(Ins::I32Const(lift));
-        self.push(Ins::I32Const(lower));
+        self.push(Ins::I32Const(from_canon));
+        self.push(Ins::I32Const(to_canon));
         self.push(Ins::I32Const(
             self.params.types().count().try_into().unwrap(),
         ));
@@ -407,7 +411,7 @@ impl<'a> FunctionBindgen<'a> {
         }
     }
 
-    pub fn compile_export_lift(&mut self) {
+    pub fn compile_export_from_canon(&mut self) {
         // Arg 0: *const Python
         let context = 0;
         // Arg 1: *const MyParams
@@ -418,7 +422,7 @@ impl<'a> FunctionBindgen<'a> {
         self.load_record(self.params.types(), context, source, destination);
     }
 
-    pub fn compile_export_lower(&mut self) {
+    pub fn compile_export_to_canon(&mut self) {
         // Arg 0: *const Python
         let context = 0;
         // Arg 1: *const &PyAny
@@ -569,33 +573,41 @@ impl<'a> FunctionBindgen<'a> {
         }
     }
 
-    fn lower(&mut self, ty: Type, context: u32, value: u32) {
+    fn to_canon(&mut self, ty: Type, context: u32, value: u32) {
         match ty {
             Type::Bool | Type::U8 | Type::U16 | Type::U32 | Type::S8 | Type::S16 | Type::S32 => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value));
-                self.push(Ins::Call(*IMPORTS.get("componentize-py#LowerI32").unwrap()));
+                self.push(Ins::Call(
+                    *IMPORTS.get("componentize-py#ToCanonI32").unwrap(),
+                ));
             }
             Type::U64 | Type::S64 => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value));
-                self.push(Ins::Call(*IMPORTS.get("componentize-py#LowerI64").unwrap()));
+                self.push(Ins::Call(
+                    *IMPORTS.get("componentize-py#ToCanonI64").unwrap(),
+                ));
             }
             Type::Float32 => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value));
-                self.push(Ins::Call(*IMPORTS.get("componentize-py#LowerF32").unwrap()));
+                self.push(Ins::Call(
+                    *IMPORTS.get("componentize-py#ToCanonF32").unwrap(),
+                ));
             }
             Type::Float64 => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value));
-                self.push(Ins::Call(*IMPORTS.get("componentize-py#LowerF64").unwrap()));
+                self.push(Ins::Call(
+                    *IMPORTS.get("componentize-py#ToCanonF64").unwrap(),
+                ));
             }
             Type::Char => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value));
                 self.push(Ins::Call(
-                    *IMPORTS.get("componentize-py#LowerChar").unwrap(),
+                    *IMPORTS.get("componentize-py#ToCanonChar").unwrap(),
                 ));
             }
             Type::String => {
@@ -604,7 +616,7 @@ impl<'a> FunctionBindgen<'a> {
                 self.push_stack(WORD_SIZE * 2);
                 self.get_stack();
                 self.push(Ins::Call(
-                    *IMPORTS.get("componentize-py#LowerString").unwrap(),
+                    *IMPORTS.get("componentize-py#ToCanonString").unwrap(),
                 ));
                 self.get_stack();
                 self.push(Ins::I32Load(mem_arg(0, WORD_ALIGN.try_into().unwrap())));
@@ -617,10 +629,10 @@ impl<'a> FunctionBindgen<'a> {
             }
             Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
-                    self.lower_record(id, record.fields.iter().map(|f| f.ty), context, value);
+                    self.to_canon_record(id, record.fields.iter().map(|f| f.ty), context, value);
                 }
                 TypeDefKind::Variant(variant) => {
-                    self.lower_variant(
+                    self.to_canon_variant(
                         id,
                         &abi::abi(self.resolve, ty),
                         variant.cases.iter().map(|c| c.ty),
@@ -629,7 +641,7 @@ impl<'a> FunctionBindgen<'a> {
                     );
                 }
                 TypeDefKind::Enum(en) => {
-                    self.lower_variant(
+                    self.to_canon_variant(
                         id,
                         &abi::abi(self.resolve, ty),
                         en.cases.iter().map(|_| None),
@@ -638,7 +650,7 @@ impl<'a> FunctionBindgen<'a> {
                     );
                 }
                 TypeDefKind::Option(some) => {
-                    self.lower_variant(
+                    self.to_canon_variant(
                         self.get_option_type(*some),
                         &abi::abi(self.resolve, ty),
                         [None, Some(*some)],
@@ -647,7 +659,7 @@ impl<'a> FunctionBindgen<'a> {
                     );
                 }
                 TypeDefKind::Result(result) => {
-                    self.lower_variant(
+                    self.to_canon_variant(
                         self.result_type.unwrap(),
                         &abi::abi(self.resolve, ty),
                         [result.ok, result.err],
@@ -656,10 +668,10 @@ impl<'a> FunctionBindgen<'a> {
                     );
                 }
                 TypeDefKind::Flags(flags) => {
-                    self.lower_record(id, flags.types(), context, value);
+                    self.to_canon_record(id, flags.types(), context, value);
                 }
                 TypeDefKind::Tuple(tuple) => {
-                    self.lower_record(
+                    self.to_canon_record(
                         *self.tuple_types.get(&tuple.types.len()).unwrap(),
                         tuple.types.iter().copied(),
                         context,
@@ -750,10 +762,10 @@ impl<'a> FunctionBindgen<'a> {
                 TypeDefKind::Handle(handle) => {
                     self.marshal_handle(handle, context, value);
                     self.push(Ins::Call(
-                        *IMPORTS.get("componentize-py#LowerHandle").unwrap(),
+                        *IMPORTS.get("componentize-py#ToCanonHandle").unwrap(),
                     ));
                 }
-                TypeDefKind::Type(ty) => self.lower(*ty, context, value),
+                TypeDefKind::Type(ty) => self.to_canon(*ty, context, value),
                 kind => todo!("{kind:?}"),
             },
         }
@@ -786,7 +798,7 @@ impl<'a> FunctionBindgen<'a> {
         ));
     }
 
-    fn lower_record(
+    fn to_canon_record(
         &mut self,
         id: TypeId,
         types: impl IntoIterator<Item = Type>,
@@ -804,13 +816,13 @@ impl<'a> FunctionBindgen<'a> {
             self.push(Ins::Call(*IMPORTS.get("componentize-py#GetField").unwrap()));
             self.push(Ins::LocalSet(field_value));
 
-            self.lower(ty, context, field_value);
+            self.to_canon(ty, context, field_value);
 
             self.pop_local(field_value, ValType::I32);
         }
     }
 
-    fn lower_variant(
+    fn to_canon_variant(
         &mut self,
         id: TypeId,
         abi: &Abi,
@@ -818,7 +830,7 @@ impl<'a> FunctionBindgen<'a> {
         context: u32,
         value: u32,
     ) {
-        // TODO: instead of storing to and then loading from memory, lower directly to the primary stack (and/or
+        // TODO: instead of storing to and then loading from memory, write directly to the primary stack (and/or
         // locals)
 
         let destination = self.push_local(ValType::I32);
@@ -840,32 +852,32 @@ impl<'a> FunctionBindgen<'a> {
         match ty {
             Type::Bool | Type::U8 | Type::S8 => {
                 self.push(Ins::LocalGet(destination));
-                self.lower(ty, context, value);
+                self.to_canon(ty, context, value);
                 self.push(Ins::I32Store8(mem_arg(0, 0)));
             }
             Type::U16 | Type::S16 => {
                 self.push(Ins::LocalGet(destination));
-                self.lower(ty, context, value);
+                self.to_canon(ty, context, value);
                 self.push(Ins::I32Store16(mem_arg(0, 1)));
             }
             Type::U32 | Type::S32 => {
                 self.push(Ins::LocalGet(destination));
-                self.lower(ty, context, value);
+                self.to_canon(ty, context, value);
                 self.push(Ins::I32Store(mem_arg(0, 2)));
             }
             Type::U64 | Type::S64 => {
                 self.push(Ins::LocalGet(destination));
-                self.lower(ty, context, value);
+                self.to_canon(ty, context, value);
                 self.push(Ins::I64Store(mem_arg(0, 3)));
             }
             Type::Float32 => {
                 self.push(Ins::LocalGet(destination));
-                self.lower(ty, context, value);
+                self.to_canon(ty, context, value);
                 self.push(Ins::F32Store(mem_arg(0, 2)));
             }
             Type::Float64 => {
                 self.push(Ins::LocalGet(destination));
-                self.lower(ty, context, value);
+                self.to_canon(ty, context, value);
                 self.push(Ins::F64Store(mem_arg(0, 3)));
             }
             Type::Char => {
@@ -873,7 +885,7 @@ impl<'a> FunctionBindgen<'a> {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value));
                 self.push(Ins::Call(
-                    *IMPORTS.get("componentize-py#LowerChar").unwrap(),
+                    *IMPORTS.get("componentize-py#ToCanonChar").unwrap(),
                 ));
                 self.push(Ins::I32Store(mem_arg(0, 2)));
             }
@@ -882,7 +894,7 @@ impl<'a> FunctionBindgen<'a> {
                 self.push(Ins::LocalGet(value));
                 self.push(Ins::LocalGet(destination));
                 self.push(Ins::Call(
-                    *IMPORTS.get("componentize-py#LowerString").unwrap(),
+                    *IMPORTS.get("componentize-py#ToCanonString").unwrap(),
                 ));
             }
             Type::Id(id) => match &self.resolve.types[id].kind {
@@ -951,7 +963,7 @@ impl<'a> FunctionBindgen<'a> {
                     let length = self.push_local(ValType::I32);
 
                     self.push(Ins::LocalGet(destination));
-                    self.lower(ty, context, value);
+                    self.to_canon(ty, context, value);
                     self.push(Ins::LocalSet(length));
                     self.push(Ins::I32Store(mem_arg(0, WORD_ALIGN.try_into().unwrap())));
                     self.push(Ins::LocalGet(destination));
@@ -965,7 +977,7 @@ impl<'a> FunctionBindgen<'a> {
                 }
                 TypeDefKind::Handle(_) => {
                     self.push(Ins::LocalGet(destination));
-                    self.lower(ty, context, value);
+                    self.to_canon(ty, context, value);
                     self.push(Ins::I32Store(mem_arg(0, 2)));
                 }
                 TypeDefKind::Type(ty) => self.store(*ty, context, value, destination),
@@ -1076,7 +1088,9 @@ impl<'a> FunctionBindgen<'a> {
         self.push(Ins::I32Const(type_index.try_into().unwrap()));
         self.push(Ins::I32Const(DISCRIMINANT_FIELD_INDEX));
         self.push(Ins::Call(*IMPORTS.get("componentize-py#GetField").unwrap()));
-        self.push(Ins::Call(*IMPORTS.get("componentize-py#LowerI32").unwrap()));
+        self.push(Ins::Call(
+            *IMPORTS.get("componentize-py#ToCanonI32").unwrap(),
+        ));
         self.push(Ins::LocalSet(discriminant));
 
         self.push(Ins::LocalGet(destination));
@@ -1368,44 +1382,54 @@ impl<'a> FunctionBindgen<'a> {
         }
     }
 
-    fn lift(&mut self, ty: Type, context: u32, value: &[u32]) {
+    fn from_canon(&mut self, ty: Type, context: u32, value: &[u32]) {
         match ty {
             Type::Bool | Type::U8 | Type::U16 | Type::U32 | Type::S8 | Type::S16 | Type::S32 => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value[0]));
-                self.push(Ins::Call(*IMPORTS.get("componentize-py#LiftI32").unwrap()));
+                self.push(Ins::Call(
+                    *IMPORTS.get("componentize-py#FromCanonI32").unwrap(),
+                ));
             }
             Type::U64 | Type::S64 => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value[0]));
-                self.push(Ins::Call(*IMPORTS.get("componentize-py#LiftI64").unwrap()));
+                self.push(Ins::Call(
+                    *IMPORTS.get("componentize-py#FromCanonI64").unwrap(),
+                ));
             }
             Type::Float32 => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value[0]));
-                self.push(Ins::Call(*IMPORTS.get("componentize-py#LiftF32").unwrap()));
+                self.push(Ins::Call(
+                    *IMPORTS.get("componentize-py#FromCanonF32").unwrap(),
+                ));
             }
             Type::Float64 => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value[0]));
-                self.push(Ins::Call(*IMPORTS.get("componentize-py#LiftF64").unwrap()));
+                self.push(Ins::Call(
+                    *IMPORTS.get("componentize-py#FromCanonF64").unwrap(),
+                ));
             }
             Type::Char => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value[0]));
-                self.push(Ins::Call(*IMPORTS.get("componentize-py#LiftChar").unwrap()));
+                self.push(Ins::Call(
+                    *IMPORTS.get("componentize-py#FromCanonChar").unwrap(),
+                ));
             }
             Type::String => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value[0]));
                 self.push(Ins::LocalGet(value[1]));
                 self.push(Ins::Call(
-                    *IMPORTS.get("componentize-py#LiftString").unwrap(),
+                    *IMPORTS.get("componentize-py#FromCanonString").unwrap(),
                 ));
             }
             Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
-                    self.lift_record_onto_stack(
+                    self.from_canon_record_onto_stack(
                         id,
                         record.fields.iter().map(|f| f.ty),
                         context,
@@ -1413,7 +1437,7 @@ impl<'a> FunctionBindgen<'a> {
                     );
                 }
                 TypeDefKind::Variant(variant) => {
-                    self.lift_variant(
+                    self.from_canon_variant(
                         id,
                         &abi::abi(self.resolve, ty),
                         variant.cases.iter().map(|c| c.ty),
@@ -1422,7 +1446,7 @@ impl<'a> FunctionBindgen<'a> {
                     );
                 }
                 TypeDefKind::Enum(en) => {
-                    self.lift_variant(
+                    self.from_canon_variant(
                         id,
                         &abi::abi(self.resolve, ty),
                         en.cases.iter().map(|_| None),
@@ -1431,7 +1455,7 @@ impl<'a> FunctionBindgen<'a> {
                     );
                 }
                 TypeDefKind::Option(some) => {
-                    self.lift_variant(
+                    self.from_canon_variant(
                         self.get_option_type(*some),
                         &abi::abi(self.resolve, ty),
                         [None, Some(*some)],
@@ -1440,7 +1464,7 @@ impl<'a> FunctionBindgen<'a> {
                     );
                 }
                 TypeDefKind::Result(result) => {
-                    self.lift_variant(
+                    self.from_canon_variant(
                         self.result_type.unwrap(),
                         &abi::abi(self.resolve, ty),
                         [result.ok, result.err],
@@ -1449,7 +1473,7 @@ impl<'a> FunctionBindgen<'a> {
                     );
                 }
                 TypeDefKind::Flags(flags) => {
-                    self.lift_record_onto_stack(
+                    self.from_canon_record_onto_stack(
                         id,
                         flags.types().collect::<Vec<_>>().into_iter(),
                         context,
@@ -1457,7 +1481,7 @@ impl<'a> FunctionBindgen<'a> {
                     );
                 }
                 TypeDefKind::Tuple(tuple) => {
-                    self.lift_record_onto_stack(
+                    self.from_canon_record_onto_stack(
                         *self.tuple_types.get(&tuple.types.len()).unwrap(),
                         tuple.types.iter().copied(),
                         context,
@@ -1534,40 +1558,40 @@ impl<'a> FunctionBindgen<'a> {
                 TypeDefKind::Handle(handle) => {
                     self.marshal_handle(handle, context, value[0]);
                     self.push(Ins::Call(
-                        *IMPORTS.get("componentize-py#LiftHandle").unwrap(),
+                        *IMPORTS.get("componentize-py#FromCanonHandle").unwrap(),
                     ));
                 }
-                TypeDefKind::Type(ty) => self.lift(*ty, context, value),
+                TypeDefKind::Type(ty) => self.from_canon(*ty, context, value),
                 kind => todo!("{kind:?}"),
             },
         }
     }
 
-    fn lift_record(
+    fn from_canon_record(
         &mut self,
         types: impl IntoIterator<Item = Type>,
         context: u32,
         source: &[u32],
         destination: u32,
     ) {
-        let mut lift_index = 0;
+        let mut from_canon_index = 0;
         let mut store_offset = 0;
         for ty in types {
             let flat_count = abi::abi(self.resolve, ty).flattened.len();
 
             self.push(Ins::LocalGet(destination));
-            self.lift(ty, context, &source[lift_index..][..flat_count]);
+            self.from_canon(ty, context, &source[from_canon_index..][..flat_count]);
             self.push(Ins::I32Store(mem_arg(
                 store_offset,
                 WORD_ALIGN.try_into().unwrap(),
             )));
 
-            lift_index += flat_count;
+            from_canon_index += flat_count;
             store_offset += u64::try_from(WORD_SIZE).unwrap();
         }
     }
 
-    fn lift_record_onto_stack(
+    fn from_canon_record_onto_stack(
         &mut self,
         id: TypeId,
         types: impl ExactSizeIterator<Item = Type>,
@@ -1581,7 +1605,7 @@ impl<'a> FunctionBindgen<'a> {
         self.get_stack();
         self.push(Ins::LocalSet(destination));
 
-        self.lift_record(types, context, source, destination);
+        self.from_canon_record(types, context, source, destination);
 
         self.push(Ins::LocalGet(context));
         self.push(Ins::I32Const(
@@ -1595,7 +1619,7 @@ impl<'a> FunctionBindgen<'a> {
         self.pop_stack(len * WORD_SIZE);
     }
 
-    fn lift_variant(
+    fn from_canon_variant(
         &mut self,
         id: TypeId,
         abi: &Abi,
@@ -1617,7 +1641,9 @@ impl<'a> FunctionBindgen<'a> {
         self.get_stack();
         self.push(Ins::LocalGet(context));
         self.push(Ins::LocalGet(source[0]));
-        self.push(Ins::Call(*IMPORTS.get("componentize-py#LiftI32").unwrap()));
+        self.push(Ins::Call(
+            *IMPORTS.get("componentize-py#FromCanonI32").unwrap(),
+        ));
         self.push(Ins::I32Store(mem_arg(0, WORD_ALIGN.try_into().unwrap())));
 
         self.get_stack();
@@ -1631,7 +1657,7 @@ impl<'a> FunctionBindgen<'a> {
                 if let Some(ty) = ty {
                     let (source, locals) = this.convert_all(abi, ty, &source[1..]);
 
-                    this.lift(ty, context, &source);
+                    this.from_canon(ty, context, &source);
 
                     for (local, ty) in locals.into_iter().rev() {
                         this.pop_local(local, ty);
@@ -1659,7 +1685,7 @@ impl<'a> FunctionBindgen<'a> {
                 self.push(Ins::LocalGet(source));
                 self.push(Ins::I32Load8U(mem_arg(0, 0)));
                 self.push(Ins::LocalSet(value));
-                self.lift(ty, context, &[value]);
+                self.from_canon(ty, context, &[value]);
                 self.pop_local(value, ValType::I32);
             }
             Type::S8 => {
@@ -1667,7 +1693,7 @@ impl<'a> FunctionBindgen<'a> {
                 self.push(Ins::LocalGet(source));
                 self.push(Ins::I32Load8S(mem_arg(0, 0)));
                 self.push(Ins::LocalSet(value));
-                self.lift(ty, context, &[value]);
+                self.from_canon(ty, context, &[value]);
                 self.pop_local(value, ValType::I32);
             }
             Type::U16 => {
@@ -1675,7 +1701,7 @@ impl<'a> FunctionBindgen<'a> {
                 self.push(Ins::LocalGet(source));
                 self.push(Ins::I32Load16U(mem_arg(0, 1)));
                 self.push(Ins::LocalSet(value));
-                self.lift(ty, context, &[value]);
+                self.from_canon(ty, context, &[value]);
                 self.pop_local(value, ValType::I32);
             }
             Type::S16 => {
@@ -1683,7 +1709,7 @@ impl<'a> FunctionBindgen<'a> {
                 self.push(Ins::LocalGet(source));
                 self.push(Ins::I32Load16S(mem_arg(0, 1)));
                 self.push(Ins::LocalSet(value));
-                self.lift(ty, context, &[value]);
+                self.from_canon(ty, context, &[value]);
                 self.pop_local(value, ValType::I32);
             }
             Type::U32 | Type::S32 | Type::Char => {
@@ -1691,7 +1717,7 @@ impl<'a> FunctionBindgen<'a> {
                 self.push(Ins::LocalGet(source));
                 self.push(Ins::I32Load(mem_arg(0, 2)));
                 self.push(Ins::LocalSet(value));
-                self.lift(ty, context, &[value]);
+                self.from_canon(ty, context, &[value]);
                 self.pop_local(value, ValType::I32);
             }
             Type::U64 | Type::S64 => {
@@ -1699,7 +1725,7 @@ impl<'a> FunctionBindgen<'a> {
                 self.push(Ins::LocalGet(source));
                 self.push(Ins::I64Load(mem_arg(0, 3)));
                 self.push(Ins::LocalSet(value));
-                self.lift(ty, context, &[value]);
+                self.from_canon(ty, context, &[value]);
                 self.pop_local(value, ValType::I64);
             }
             Type::Float32 => {
@@ -1707,7 +1733,7 @@ impl<'a> FunctionBindgen<'a> {
                 self.push(Ins::LocalGet(source));
                 self.push(Ins::F32Load(mem_arg(0, 2)));
                 self.push(Ins::LocalSet(value));
-                self.lift(ty, context, &[value]);
+                self.from_canon(ty, context, &[value]);
                 self.pop_local(value, ValType::F32);
             }
             Type::Float64 => {
@@ -1715,7 +1741,7 @@ impl<'a> FunctionBindgen<'a> {
                 self.push(Ins::LocalGet(source));
                 self.push(Ins::F64Load(mem_arg(0, 3)));
                 self.push(Ins::LocalSet(value));
-                self.lift(ty, context, &[value]);
+                self.from_canon(ty, context, &[value]);
                 self.pop_local(value, ValType::F64);
             }
             Type::String => {
@@ -1728,7 +1754,7 @@ impl<'a> FunctionBindgen<'a> {
                     WORD_ALIGN.try_into().unwrap(),
                 )));
                 self.push(Ins::Call(
-                    *IMPORTS.get("componentize-py#LiftString").unwrap(),
+                    *IMPORTS.get("componentize-py#FromCanonString").unwrap(),
                 ));
             }
             Type::Id(id) => match &self.resolve.types[id].kind {
@@ -1807,7 +1833,7 @@ impl<'a> FunctionBindgen<'a> {
                     )));
                     self.push(Ins::LocalSet(length));
 
-                    self.lift(ty, context, &[body, length]);
+                    self.from_canon(ty, context, &[body, length]);
 
                     self.pop_local(length, ValType::I32);
                     self.pop_local(body, ValType::I32);
@@ -1817,7 +1843,7 @@ impl<'a> FunctionBindgen<'a> {
                     self.push(Ins::LocalGet(source));
                     self.push(Ins::I32Load(mem_arg(0, 2)));
                     self.push(Ins::LocalSet(value));
-                    self.lift(ty, context, &[value]);
+                    self.from_canon(ty, context, &[value]);
                     self.pop_local(value, ValType::I32);
                 }
                 TypeDefKind::Type(ty) => self.load(*ty, context, source),
@@ -1918,7 +1944,9 @@ impl<'a> FunctionBindgen<'a> {
             _ => unreachable!(),
         }
         self.push(Ins::LocalTee(discriminant));
-        self.push(Ins::Call(*IMPORTS.get("componentize-py#LiftI32").unwrap()));
+        self.push(Ins::Call(
+            *IMPORTS.get("componentize-py#FromCanonI32").unwrap(),
+        ));
         self.push(Ins::I32Store(mem_arg(0, WORD_ALIGN.try_into().unwrap())));
 
         self.get_stack();
@@ -2185,7 +2213,7 @@ impl<'a> FunctionBindgen<'a> {
         }
     }
 
-    fn free_lowered(&mut self, ty: Type, value: &[u32]) {
+    fn free_canon(&mut self, ty: Type, value: &[u32]) {
         match ty {
             Type::Bool
             | Type::U8
@@ -2209,41 +2237,41 @@ impl<'a> FunctionBindgen<'a> {
 
             Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => {
-                    self.free_lowered_record(record.fields.iter().map(|f| f.ty), value);
+                    self.free_canon_record(record.fields.iter().map(|f| f.ty), value);
                 }
                 TypeDefKind::Variant(variant) => {
-                    self.free_lowered_variant(
+                    self.free_canon_variant(
                         &abi::abi(self.resolve, ty),
                         variant.cases.iter().map(|c| c.ty),
                         value,
                     );
                 }
                 TypeDefKind::Enum(en) => {
-                    self.free_lowered_variant(
+                    self.free_canon_variant(
                         &abi::abi(self.resolve, ty),
                         en.cases.iter().map(|_| None),
                         value,
                     );
                 }
                 TypeDefKind::Option(some) => {
-                    self.free_lowered_variant(
+                    self.free_canon_variant(
                         &abi::abi(self.resolve, ty),
                         [None, Some(*some)],
                         value,
                     );
                 }
                 TypeDefKind::Result(result) => {
-                    self.free_lowered_variant(
+                    self.free_canon_variant(
                         &abi::abi(self.resolve, ty),
                         [result.ok, result.err],
                         value,
                     );
                 }
                 TypeDefKind::Flags(flags) => {
-                    self.free_lowered_record(flags.types(), value);
+                    self.free_canon_record(flags.types(), value);
                 }
                 TypeDefKind::Tuple(tuple) => {
-                    self.free_lowered_record(tuple.types.iter().copied(), value);
+                    self.free_canon_record(tuple.types.iter().copied(), value);
                 }
                 TypeDefKind::List(ty) => {
                     let pointer = value[0];
@@ -2298,24 +2326,24 @@ impl<'a> FunctionBindgen<'a> {
                     self.push(Ins::Call(*IMPORTS.get("componentize-py#Free").unwrap()));
                 }
                 TypeDefKind::Handle(_) => {}
-                TypeDefKind::Type(ty) => self.free_lowered(*ty, value),
+                TypeDefKind::Type(ty) => self.free_canon(*ty, value),
                 kind => todo!("{kind:?}"),
             },
         }
     }
 
-    fn free_lowered_record(&mut self, types: impl IntoIterator<Item = Type>, value: &[u32]) {
-        let mut lift_index = 0;
+    fn free_canon_record(&mut self, types: impl IntoIterator<Item = Type>, value: &[u32]) {
+        let mut from_canon_index = 0;
         for ty in types {
             let flat_count = abi::abi(self.resolve, ty).flattened.len();
 
-            self.free_lowered(ty, &value[lift_index..][..flat_count]);
+            self.free_canon(ty, &value[from_canon_index..][..flat_count]);
 
-            lift_index += flat_count;
+            from_canon_index += flat_count;
         }
     }
 
-    fn free_lowered_variant(
+    fn free_canon_variant(
         &mut self,
         abi: &Abi,
         types: impl IntoIterator<Item = Option<Type>>,
@@ -2334,7 +2362,7 @@ impl<'a> FunctionBindgen<'a> {
                 if let Some(ty) = ty {
                     let (value, locals) = this.convert_all(abi, ty, &value[1..]);
 
-                    this.free_lowered(ty, &value);
+                    this.free_canon(ty, &value);
 
                     for (local, ty) in locals.into_iter().rev() {
                         this.pop_local(local, ty);
