@@ -54,8 +54,8 @@ pub enum FunctionKind {
     ResourceDropLocal,
     ResourceDropRemote,
     Export,
-    ExportLift,
-    ExportLower,
+    ExportFromCanon,
+    ExportToCanon,
     ExportPostReturn,
 }
 
@@ -102,8 +102,8 @@ impl<'a> MyFunction<'a> {
                     FunctionKind::ResourceDropLocal => "-resource-drop-local",
                     FunctionKind::ResourceDropRemote => "-resource-drop-remote",
                     FunctionKind::Export => "-export",
-                    FunctionKind::ExportLift => "-lift",
-                    FunctionKind::ExportLower => "-lower",
+                    FunctionKind::ExportFromCanon => "-from-canon",
+                    FunctionKind::ExportToCanon => "-to-canon",
                     FunctionKind::ExportPostReturn => "-post-return",
                 }
             )
@@ -137,8 +137,8 @@ impl<'a> MyFunction<'a> {
             | FunctionKind::ResourceRep
             | FunctionKind::ResourceDropLocal
             | FunctionKind::ResourceDropRemote
-            | FunctionKind::ExportLift
-            | FunctionKind::ExportLower => (
+            | FunctionKind::ExportFromCanon
+            | FunctionKind::ExportToCanon => (
                 vec![ValType::I32; DISPATCHABLE_CORE_PARAM_COUNT],
                 Vec::new(),
             ),
@@ -153,8 +153,8 @@ impl<'a> MyFunction<'a> {
             | FunctionKind::ResourceRep
             | FunctionKind::ResourceDropLocal
             | FunctionKind::ResourceDropRemote
-            | FunctionKind::ExportLift
-            | FunctionKind::ExportLower => true,
+            | FunctionKind::ExportFromCanon
+            | FunctionKind::ExportToCanon => true,
             FunctionKind::Export | FunctionKind::ExportPostReturn => false,
         }
     }
@@ -422,8 +422,8 @@ impl<'a> Summary<'a> {
                 // NB: We rely on this order when compiling, so please don't change it:
                 // todo: make this less fragile
                 self.push_function(make(FunctionKind::Export));
-                self.push_function(make(FunctionKind::ExportLift));
-                self.push_function(make(FunctionKind::ExportLower));
+                self.push_function(make(FunctionKind::ExportFromCanon));
+                self.push_function(make(FunctionKind::ExportToCanon));
                 if abi::record_abi(self.resolve, results.types())
                     .flattened
                     .len()
