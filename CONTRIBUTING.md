@@ -14,13 +14,9 @@ channel](https://bytecodealliance.zulipchat.com/#narrow/stream/394175-SIG-Guest-
 
 ## Building from source
 
-For the time being, we use a temporary fork of WASI-SDK which enables both
-shared library support and dlopen/dlsym.  Once those features are upstreamed,
-we'll switch.  Specifically, the remaining patches are:
-
-- https://github.com/WebAssembly/wasi-libc/pull/429
-- https://github.com/WebAssembly/wasi-sdk/pull/338
-- Additional, yet-to-be created PRs to enable dlopen/dlsym
+For the time being, we use temporary forks of `wasi-sdk` and `wasi-libc` which
+enable support for `wasi-sockets`.  Once that support is upstreamed, we'll
+switch.
 
 ### Prerequisites
 
