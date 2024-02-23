@@ -57,6 +57,7 @@ pub struct Componentize {
     /// directory will be searched for a `site-packages` subdirectory, which will be appended to the path as a
     /// convenience for `venv` users.  Alternatively, if `pipenv` is in `$PATH` and `pipenv --venv` produces a
     /// non-empty result, it will be searched for a `site-packages` subdirectory, which will likewise be appended.
+    /// If the previous options fail, the `site` module in python will be used to get the `site-packages`
     #[arg(short = 'p', long, default_value = ".")]
     pub python_path: Vec<String>,
 
@@ -156,7 +157,18 @@ fn find_site_packages() -> Result<Option<PathBuf>> {
                     }
                 } else {
                     // `pipenv` is in `$PATH`, but this app does not appear to be using it
-                    None
+                    // Get site packages location using the `site` module in python
+                    match process::Command::new("python3")
+                        .args(["-c", "import site; print(site.getsitepackages()[0])"])
+                        .output()
+                    {
+                        Ok(output) => {
+                            let path =
+                                Path::new(str::from_utf8(&output.stdout)?.trim()).to_path_buf();
+                            Some(path)
+                        }
+                        Err(_) => None,
+                    }
                 }
             }
             Err(_) => {
