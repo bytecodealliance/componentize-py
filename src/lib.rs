@@ -632,18 +632,47 @@ fn search_directory(
                 let path = path.canonicalize()?;
                 let existing_path = existing_path.join("componentize-py.toml").canonicalize()?;
                 if path != existing_path {
-                    bail!(
-                        "multiple componentize-py.toml files found, \
-                         which is not yet supported: {} and {}",
-                        existing_path.display(),
-                        path.display()
-                    );
-                }
+                    // If we find a componentize-py.toml file under a Python module which will not be used because
+                    // we already found a version of that module in an earlier `PYTHON_PATH` directory, we'll
+                    // ignore the latest one.
+                    //
+                    // For example, if the module `foo_sdk` appears twice in `PYTHON_PATH`, and both versions have
+                    // a componentize-py.toml file, we'll ignore the second one just as Python will ignore the
+                    // second module.
+                    let superseded = if let (Ok(relative), Ok(existing_relative)) = (
+                        path.strip_prefix(root.canonicalize()?),
+                        existing_path.strip_prefix(existing_root.canonicalize()?),
+                    ) {
+                        matches!(
+                            (
+                                &relative.iter().collect::<Vec<_>>()[..],
+                                &existing_relative.iter().collect::<Vec<_>>()[..]
+                            ),
+                            (
+                                [first, _, ..],
+                                [existing_first, _, ..]
+                            ) if first == existing_first
+                        )
+                    } else {
+                        false
+                    };
 
-                // When one directory in `PYTHON_PATH` is a subdirectory of the other, we consider the subdirectory
-                // to be the true owner of the file.  This is important later, when we derive a package name by
-                // stripping the root directory from the file path.
-                root.canonicalize()? > existing_root.canonicalize()?
+                    if superseded {
+                        false
+                    } else {
+                        bail!(
+                            "multiple componentize-py.toml files found, \
+                             which is not yet supported: {} and {}",
+                            existing_path.display(),
+                            path.display()
+                        );
+                    }
+                } else {
+                    // When one directory in `PYTHON_PATH` is a subdirectory of the other, we consider the
+                    // subdirectory to be the true owner of the file.  This is important later, when we derive a
+                    // package name by stripping the root directory from the file path.
+                    root.canonicalize()? > existing_root.canonicalize()?
+                }
             } else {
                 true
             };
