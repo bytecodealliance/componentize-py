@@ -222,7 +222,7 @@ pub async fn componentize(
         library_path.push((*path, libraries));
     }
 
-    let config = if let Some((config_root, config_path, raw)) = raw_config {
+    let config = if let (None, Some((config_root, config_path, raw))) = (wit_path, raw_config) {
         let config = ComponentizePyConfig::try_from((config_path.deref(), raw))?;
         Some((config_root, config_path, config))
     } else {
