@@ -61,6 +61,17 @@ pub struct Componentize {
     #[arg(short = 'p', long, default_value = ".")]
     pub python_path: Vec<String>,
 
+    /// Specify which world to use with which Python module.  May be specified more than once.
+    ///
+    /// Some Python modules (e.g. SDK wrappers around WIT APIs) may contain `componentize-py.toml` files which
+    /// point to embedded WIT files, and those may define multiple WIT worlds.  In this case, it may be necessary
+    /// to specify which world on a module-by-module basis.
+    ///
+    /// Note that these must be specified in topological order (i.e. if a module containing WIT files depends on
+    /// other modules containing WIT files, it must be listed after all its dependencies).
+    #[arg(short = 'm', long, value_parser = parse_module_world)]
+    pub module_worlds: Vec<(String, String)>,
+
     /// Output file to which to write the resulting component
     #[arg(short = 'o', long, default_value = "index.wasm")]
     pub output: PathBuf,
@@ -78,6 +89,13 @@ pub struct Bindings {
     /// If this is not specified, the module name will be derived from the world name.
     #[arg(long)]
     pub world_module: Option<String>,
+}
+
+fn parse_module_world(s: &str) -> Result<(String, String), String> {
+    let (k, v) = s
+        .split_once('=')
+        .ok_or_else(|| format!("expected string of form `<key>=<value>`; got `{s}`"))?;
+    Ok((k.to_string(), v.to_string()))
 }
 
 pub fn run<T: Into<OsString> + Clone, I: IntoIterator<Item = T>>(args: I) -> Result<()> {
@@ -115,6 +133,11 @@ fn componentize(common: Common, componentize: Componentize) -> Result<()> {
         common.wit_path.as_deref(),
         common.world.as_deref(),
         &python_path.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        &componentize
+            .module_worlds
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect::<Vec<_>>(),
         &componentize.app_name,
         &componentize.output,
         None,
