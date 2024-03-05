@@ -10,16 +10,16 @@ making an outbound TCP request using `wasi-sockets`.
 
 ## Prerequisites
 
-* `Wasmtime` 17.0.0 or later
-* `componentize-py` 0.12.0rc1
+* `Wasmtime` 18.0.0 or later
+* `componentize-py` 0.12.0
 
 Below, we use [Rust](https://rustup.rs/)'s `cargo` to install `Wasmtime`.  If
 you don't have `cargo`, you can download and install from
-https://github.com/bytecodealliance/wasmtime/releases/tag/v17.0.0.
+https://github.com/bytecodealliance/wasmtime/releases/tag/v18.0.0.
 
 ```
-cargo install --version 17.0.0 wasmtime-cli
-pip install componentize-py==0.12.0rc1
+cargo install --version 18.0.0 wasmtime-cli
+pip install componentize-py==0.12.0
 ```
 
 ## Running the demo
@@ -35,7 +35,7 @@ Now, build and run the example, using the same port you gave to `netcat`.
 
 ```
 componentize-py -d ../../wit -w wasi:cli/command@0.2.0 componentize app -o tcp.wasm
-wasmtime run --wasm component-model --wasi inherit-network tcp.wasm 127.0.0.1:3456
+wasmtime run --wasi inherit-network tcp.wasm 127.0.0.1:3456
 ```
 
 The program will open a TCP connection, send a message, and wait to receive a

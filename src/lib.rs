@@ -214,6 +214,7 @@ pub async fn componentize(
     output_path: &Path,
     add_to_linker: Option<&dyn Fn(&mut Linker<Ctx>) -> Result<()>>,
 ) -> Result<()> {
+    // Untar the embedded copy of the Python standard library into a temporary directory
     let stdlib = tempfile::tempdir()?;
 
     Archive::new(Decoder::new(Cursor::new(include_bytes!(concat!(
@@ -222,6 +223,7 @@ pub async fn componentize(
     ))))?)
     .unpack(stdlib.path())?;
 
+    // Untar the embedded copy of helper utilties into a temporary directory
     let bundled = tempfile::tempdir()?;
 
     Archive::new(Decoder::new(Cursor::new(include_bytes!(concat!(
@@ -230,6 +232,9 @@ pub async fn componentize(
     ))))?)
     .unpack(bundled.path())?;
 
+    // Search `python_path` for native extension libraries and/or componentize-py.toml files.  Packages containing
+    // the latter may contain their own WIT files defining their own worlds (in addition to what the caller
+    // specified as paramters), which we'll try to match up with `module_worlds` in the next step.
     let mut raw_configs = Vec::new();
     let mut library_path = Vec::with_capacity(python_path.len());
     for path in python_path {
@@ -244,6 +249,12 @@ pub async fn componentize(
         library_path.push((*path, libraries));
     }
 
+    // Validate the paths parsed from any componentize-py.toml files discovered above and match them up with
+    // `module_worlds` entries.  Note that we use an `IndexMap` to preserve the order specified in `module_worlds`,
+    // which is required to be topologically sorted with respect to package dependencies.
+    //
+    // For any packages which contain componentize-py.toml files but no corresponding `module_worlds` entry, we use
+    // the `world` parameter as a default.
     let configs = {
         let mut configs = raw_configs
             .into_iter()
@@ -279,6 +290,9 @@ pub async fn componentize(
         ordered
     };
 
+    // Next, iterate over all the WIT directories, merging them into a single `Resolve`, and matching Python
+    // packages to `WorldId`s.
+
     let (mut resolve, mut main_world) = if let Some(path) = wit_path {
         let (resolve, world) = parse_wit(path, world)?;
         (Some(resolve), Some(world))
@@ -313,10 +327,18 @@ pub async fn componentize(
     let resolve = if let Some(resolve) = resolve {
         resolve
     } else {
-        let (my_resolve, world) = parse_wit(Path::new("wit"), world)?;
+        // If no WIT directory was provided as a parameter and none were referenced by Python packages, use ./wit
+        // by default.
+        let (my_resolve, world) = parse_wit(Path::new("wit"), world).context(
+            "no WIT files found; please specify the directory or file \
+             containing the WIT world you wish to target",
+        )?;
         main_world = Some(world);
         my_resolve
     };
+
+    // Extract relevant metadata from the `Resolve` into a `Summary` instance, which we'll use to generate Wasm-
+    // and Python-level bindings.
 
     let worlds = configs
         .values()
@@ -326,6 +348,7 @@ pub async fn componentize(
 
     let summary = Summary::try_new(&resolve, &worlds)?;
 
+    // Link all the libraries (including any native extensions) into a single component.
     let mut linker = wit_component::Linker::default()
         .validate(true)
         .library(
@@ -427,6 +450,10 @@ pub async fn componentize(
 
     let component = linker.encode()?;
 
+    // Pre-initialize the component by running it through `component_init::initialize`.  Currently, this is the
+    // application's first and only chance to load any standard or third-party modules since we do not yet include
+    // a virtual filesystem in the component to make those modules available at runtime.
+
     let stdout = MemoryOutputPipe::new(10000);
     let stderr = MemoryOutputPipe::new(10000);
 
@@ -452,6 +479,7 @@ pub async fn componentize(
             "bundled",
         );
 
+    // Generate guest mounts for each host directory in `python_path`.
     for (index, path) in python_path.iter().enumerate() {
         wasi.preopened_dir(
             Dir::open_ambient_dir(path, cap_std::ambient_authority())
@@ -461,6 +489,9 @@ pub async fn componentize(
             &index.to_string(),
         );
     }
+
+    // For each Python package with a `componentize-py.toml` file that specifies where generated bindings for that
+    // package should be placed, generate the bindings and place them as indicated.
 
     let mut world_dir_mounts = Vec::new();
     let mut locations = Locations::default();
@@ -518,6 +549,7 @@ pub async fn componentize(
         ));
     }
 
+    // If the caller specified a world and we haven't already generated bindings for it above, do so now.
     if let (Some(world), false) = (main_world, saw_main_world) {
         let module = resolve.worlds[world].name.to_snake_case();
         let world_dir = tempfile::tempdir()?;
@@ -539,7 +571,11 @@ pub async fn componentize(
         }
     }
 
+    // Generate a `Symbols` object containing metadata to be passed to the pre-init function.  The runtime library
+    // will use this to look up types and functions that will later be referenced by the generated Wasm code.
     let symbols = summary.collect_symbols(&locations);
+
+    // Finally, pre-initialize the component writing the result to `output_path`.
 
     let python_path = (0..python_path.len())
         .map(|index| format!("/{index}"))

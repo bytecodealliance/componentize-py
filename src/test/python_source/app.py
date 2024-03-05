@@ -9,6 +9,10 @@ from tests.imports import simple_import_and_export
 from tests.exports import resource_alias2
 from tests.types import Result, Ok
 from typing import Tuple, List, Optional
+from foo_sdk.wit import exports as foo_exports
+from foo_sdk.wit.imports.foo_interface import test as foo_test
+from bar_sdk.wit import exports as bar_exports
+from bar_sdk.wit.imports.foo_interface import test as bar_test
 
 class SimpleExport(exports.SimpleExport):
     def foo(self, v: int) -> int:
@@ -122,3 +126,11 @@ class Tests(tests.Tests):
 
     def add(self, a: imports.resource_floats.Float, b: imports.resource_floats.Float) -> imports.resource_floats.Float:
        return imports.resource_floats.Float(a.get() + b.get() + 5)
+   
+class FooInterface(foo_exports.FooInterface):
+    def test(self, s: str) -> str:
+        return foo_test(f"{s} FooInterface.test")
+
+class BarInterface(bar_exports.BarInterface):
+    def test(self, s: str) -> str:
+        return bar_test(f"{s} BarInterface.test")

@@ -10,8 +10,8 @@ within a guest component.
 
 ## Prerequisites
 
-* `wasmtime` 17.0.0 or later
-* `componentize-py` 0.12.0rc1
+* `wasmtime` 18.0.0 or later
+* `componentize-py` 0.12.0
 * `NumPy`, built for WASI
 
 Note that we use an unofficial build of NumPy since the upstream project does
@@ -19,11 +19,11 @@ not yet publish WASI builds.
 
 Below, we use [Rust](https://rustup.rs/)'s `cargo` to install `Wasmtime`.  If
 you don't have `cargo`, you can download and install from
-https://github.com/bytecodealliance/wasmtime/releases/tag/v17.0.0.
+https://github.com/bytecodealliance/wasmtime/releases/tag/v18.0.0.
 
 ```
-cargo install --version 17.0.0 wasmtime-cli
-pip install componentize-py==0.12.0rc1
+cargo install --version 18.0.0 wasmtime-cli
+pip install componentize-py==0.12.0
 curl -OL https://github.com/dicej/wasi-wheels/releases/download/v0.0.1/numpy-wasi.tar.gz
 tar xf numpy-wasi.tar.gz
 ```
@@ -32,7 +32,7 @@ tar xf numpy-wasi.tar.gz
 
 ```
 componentize-py -d ../../wit -w matrix-math componentize app -o matrix-math.wasm
-wasmtime run --wasm component-model matrix-math.wasm '[[1, 2], [4, 5], [6, 7]]' '[[1, 2, 3], [4, 5, 6]]'
+wasmtime run matrix-math.wasm '[[1, 2], [4, 5], [6, 7]]' '[[1, 2, 3], [4, 5, 6]]'
 ```
 
 The second command above should print the following:

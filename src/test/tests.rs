@@ -29,6 +29,27 @@ wasmtime::component::bindgen!({
     },
 });
 
+mod foo_sdk {
+    wasmtime::component::bindgen!({
+        path: "src/test/foo_sdk/wit",
+        world: "foo-world",
+        async: {
+            only_imports: [],
+        },
+    });
+}
+
+mod bar_sdk {
+    wasmtime::component::bindgen!({
+        path: "src/test/bar_sdk/wit",
+        world: "bar-world",
+        async: true,
+        with: {
+            "foo:sdk/foo-interface": super::foo_sdk::foo::sdk::foo_interface,
+        },
+    });
+}
+
 pub struct ThingU32(u32);
 pub struct ThingList(Vec<u8>);
 pub struct ThingString(String);
@@ -64,6 +85,7 @@ impl super::Host for Host {
     fn add_to_linker(linker: &mut Linker<Ctx>) -> Result<()> {
         command::add_to_linker(linker)?;
         Tests::add_to_linker(linker, |ctx| ctx)?;
+        foo_sdk::FooWorld::add_to_linker(linker, |ctx| ctx)?;
         Ok(())
     }
 
@@ -75,8 +97,52 @@ impl super::Host for Host {
     }
 }
 
-static TESTER: Lazy<Tester<Host>> =
-    Lazy::new(|| Tester::<Host>::new(include_str!("wit/tests.wit"), GUEST_CODE, *SEED).unwrap());
+struct FooHost;
+
+#[async_trait]
+impl super::Host for FooHost {
+    type World = foo_sdk::FooWorld;
+
+    fn add_to_linker(_linker: &mut Linker<Ctx>) -> Result<()> {
+        unreachable!()
+    }
+
+    async fn instantiate_pre(
+        store: &mut Store<Ctx>,
+        pre: &InstancePre<Ctx>,
+    ) -> Result<(Self::World, Instance)> {
+        Ok(foo_sdk::FooWorld::instantiate_pre(store, pre).await?)
+    }
+}
+
+struct BarHost;
+
+#[async_trait]
+impl super::Host for BarHost {
+    type World = bar_sdk::BarWorld;
+
+    fn add_to_linker(_linker: &mut Linker<Ctx>) -> Result<()> {
+        unreachable!()
+    }
+
+    async fn instantiate_pre(
+        store: &mut Store<Ctx>,
+        pre: &InstancePre<Ctx>,
+    ) -> Result<(Self::World, Instance)> {
+        Ok(bar_sdk::BarWorld::instantiate_pre(store, pre).await?)
+    }
+}
+
+static TESTER: Lazy<Tester<Host>> = Lazy::new(|| {
+    Tester::<Host>::new(
+        include_str!("wit/tests.wit"),
+        GUEST_CODE,
+        &["src/test"],
+        &[("foo_sdk", "foo-world"), ("bar_sdk", "bar-world")],
+        *SEED,
+    )
+    .unwrap()
+});
 
 #[test]
 fn simple_export() -> Result<()> {
@@ -686,6 +752,41 @@ fn resource_borrow_in_record() -> Result<()> {
                 ],
                 things_to_strings(&mut *store, &thing, things).await?
             );
+
+            Ok(())
+        })
+    })
+}
+
+#[test]
+fn multiworld() -> Result<()> {
+    impl foo_sdk::foo::sdk::foo_interface::Host for Ctx {
+        fn test(&mut self, s: String) -> Result<String> {
+            Ok(format!("{s} HostFoo::test"))
+        }
+    }
+
+    TESTER.test_with::<FooHost>(|world, store, runtime| {
+        runtime.block_on(async {
+            let result = world
+                .foo_sdk_foo_interface()
+                .call_test(store, "Howdy")
+                .await?;
+
+            assert_eq!("Howdy FooInterface.test HostFoo::test", result);
+
+            Ok(())
+        })
+    })?;
+
+    TESTER.test_with::<BarHost>(|world, store, runtime| {
+        runtime.block_on(async {
+            let result = world
+                .bar_sdk_bar_interface()
+                .call_test(store, "Howdy")
+                .await?;
+
+            assert_eq!("Howdy BarInterface.test HostFoo::test", result);
 
             Ok(())
         })

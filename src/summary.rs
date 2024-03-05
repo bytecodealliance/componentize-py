@@ -1463,21 +1463,10 @@ class {camel}(Protocol):
                 };
 
                 let aliases = if let (Some(code), false) = (code.as_ref(), names.is_empty()) {
-                    let aliases = iter::once(format!(
-                        "import {}",
-                        if let Some((start, _)) = world_module.split_once('.') {
-                            start
-                        } else {
-                            world_module
-                        }
-                    ))
-                    .chain(
-                        names
-                            .iter()
-                            .map(|name| format!("{name} = {world_module}.{name}")),
-                    )
-                    .collect::<Vec<_>>()
-                    .join("\n");
+                    let aliases = iter::once(world_module_import(world_module, "peer"))
+                        .chain(names.iter().map(|name| format!("{name} = peer.{name}")))
+                        .collect::<Vec<_>>()
+                        .join("\n");
 
                     Some(match code {
                         Code::Shared(_) => Code::Shared(aliases),
@@ -1711,21 +1700,13 @@ import weakref
         {
             let mut file = File::create(path.join("types.py"))?;
             if let Some(module) = locations.types_module.as_ref() {
-                writeln!(
-                    file,
-                    "import {}",
-                    if let Some((start, _)) = module.split_once('.') {
-                        start
-                    } else {
-                        module
-                    }
-                )?;
+                writeln!(file, "{}", world_module_import(module, "peer"))?;
                 write!(
                     file,
-                    "Some = {module}.Some
-Ok = {module}.types.Ok
-Err = {module}.types.Err
-Result = {module}.types.Result
+                    "Some = peer.types.Some
+Ok = peer.types.Ok
+Err = peer.types.Err
+Result = peer.types.Result
 "
                 )?;
             } else {
@@ -2160,5 +2141,13 @@ fn matches_resource(function: &MyFunction, resource: TypeId, direction: Directio
             }
         }
         _ => false,
+    }
+}
+
+fn world_module_import(name: &str, alias: &str) -> String {
+    if let Some((front, rear)) = name.rsplit_once('.') {
+        format!("from {front} import {rear} as {alias}")
+    } else {
+        format!("import {name} as {alias}")
     }
 }

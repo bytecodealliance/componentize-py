@@ -310,8 +310,9 @@ class Echoes(exports.Echoes):
 "#,
 )];
 
-static TESTER: Lazy<Tester<Host>> =
-    Lazy::new(|| Tester::<Host>::new(include_str!("wit/echoes.wit"), GUEST_CODE, *SEED).unwrap());
+static TESTER: Lazy<Tester<Host>> = Lazy::new(|| {
+    Tester::<Host>::new(include_str!("wit/echoes.wit"), GUEST_CODE, &[], &[], *SEED).unwrap()
+});
 
 #[test]
 fn nothing() -> Result<()> {

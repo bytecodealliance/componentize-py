@@ -1,0 +1,10 @@
+package foo:sdk;
+
+interface foo-interface {
+  test: func(s: string) -> string;
+}
+
+world foo-world {
+  import foo-interface;
+  export foo-interface;
+}
