@@ -9,7 +9,7 @@ use {
         prelude::Strategy,
         test_runner::{self, TestRng, TestRunner},
     },
-    std::{env, fs, marker::PhantomData},
+    std::{env, fs, iter, marker::PhantomData},
     tokio::runtime::Runtime,
     wasmtime::{
         component::{Component, Instance, InstancePre, Linker, ResourceTable},
@@ -47,6 +47,8 @@ static ENGINE: Lazy<Engine> = Lazy::new(|| {
 async fn make_component(
     wit: &str,
     guest_code: &[(&str, &str)],
+    python_path: &[&str],
+    module_worlds: &[(&str, &str)],
     add_to_linker: Option<&dyn Fn(&mut Linker<Ctx>) -> Result<()>>,
 ) -> Result<Vec<u8>> {
     let tempdir = tempfile::tempdir()?;
@@ -61,11 +63,14 @@ async fn make_component(
     crate::componentize(
         Some(&tempdir.path().join("app.wit")),
         None,
-        &[tempdir
-            .path()
-            .to_str()
-            .ok_or_else(|| anyhow!("unable to parse temporary directory path as UTF-8"))?],
-        &[],
+        &python_path
+            .iter()
+            .copied()
+            .chain(iter::once(tempdir.path().to_str().ok_or_else(|| {
+                anyhow!("unable to parse temporary directory path as UTF-8")
+            })?))
+            .collect::<Vec<_>>(),
+        module_worlds,
         "app",
         &tempdir.path().join("app.wasm"),
         add_to_linker,
@@ -112,12 +117,23 @@ struct Tester<H> {
 }
 
 impl<H: Host> Tester<H> {
-    fn new(wit: &str, guest_code: &[(&str, &str)], seed: [u8; 32]) -> Result<Self> {
+    fn new(
+        wit: &str,
+        guest_code: &[(&str, &str)],
+        python_path: &[&str],
+        module_worlds: &[(&str, &str)],
+        seed: [u8; 32],
+    ) -> Result<Self> {
         // TODO: create two versions of the component -- one with and one without an `add_to_linker` -- and run
         // each test on each component in the `test` method (but probably not in the `proptest` method, since that
         // would slow it down a lot).  This will help exercise the stub mechanism when pre-initializing.
-        let component =
-            &Runtime::new()?.block_on(make_component(wit, guest_code, Some(&H::add_to_linker)))?;
+        let component = &Runtime::new()?.block_on(make_component(
+            wit,
+            guest_code,
+            python_path,
+            module_worlds,
+            Some(&H::add_to_linker),
+        ))?;
         let mut linker = Linker::<Ctx>::new(&ENGINE);
         H::add_to_linker(&mut linker)?;
         Ok(Self {
@@ -130,6 +146,13 @@ impl<H: Host> Tester<H> {
     fn test(
         &self,
         test: impl Fn(&H::World, &mut Store<Ctx>, &Runtime) -> Result<()>,
+    ) -> Result<()> {
+        self.test_with::<H>(test)
+    }
+
+    fn test_with<H1: Host>(
+        &self,
+        test: impl Fn(&H1::World, &mut Store<Ctx>, &Runtime) -> Result<()>,
     ) -> Result<()> {
         let runtime = Runtime::new()?;
 
@@ -144,7 +167,7 @@ impl<H: Host> Tester<H> {
         });
 
         let (world, _) = runtime
-            .block_on(H::instantiate_pre(&mut store, &self.pre))
+            .block_on(H1::instantiate_pre(&mut store, &self.pre))
             .unwrap();
 
         test(&world, &mut store, &runtime)

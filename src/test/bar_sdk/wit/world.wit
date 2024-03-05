@@ -1,0 +1,10 @@
+package bar:sdk;
+
+interface bar-interface {
+  test: func(s: string) -> string;
+}
+
+world bar-world {
+  import foo:sdk/foo-interface;
+  export bar-interface;
+}

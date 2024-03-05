@@ -9,15 +9,15 @@ run a Python-based component targetting the [wasi-cli] `command` world.
 
 ## Prerequisites
 
-* `Wasmtime` 17.0.0 or later
+* `Wasmtime` 18.0.0 or later
 * `componentize-py` 0.12.0rc1
 
 Below, we use [Rust](https://rustup.rs/)'s `cargo` to install `Wasmtime`.  If
 you don't have `cargo`, you can download and install from
-https://github.com/bytecodealliance/wasmtime/releases/tag/v17.0.0.
+https://github.com/bytecodealliance/wasmtime/releases/tag/v18.0.0.
 
 ```
-cargo install --version 17.0.0 wasmtime-cli
+cargo install --version 18.0.0 wasmtime-cli
 pip install componentize-py==0.12.0rc1
 ```
 
@@ -25,7 +25,7 @@ pip install componentize-py==0.12.0rc1
 
 ```
 componentize-py -d ../../wit -w wasi:cli/command@0.2.0 componentize app -o cli.wasm
-wasmtime run --wasm component-model cli.wasm
+wasmtime run cli.wasm
 ```
 
 The `wasmtime run` command above should print "Hello, world!".
