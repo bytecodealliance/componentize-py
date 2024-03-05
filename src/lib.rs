@@ -7,16 +7,18 @@ use {
     component_init::Invoker,
     futures::future::FutureExt,
     heck::ToSnakeCase,
+    indexmap::{IndexMap, IndexSet},
     serde::Deserialize,
     std::{
-        collections::HashMap,
+        collections::{HashMap, HashSet},
         env, fs,
         io::Cursor,
+        iter,
         ops::Deref,
         path::{Path, PathBuf},
         str,
     },
-    summary::{Escape, Summary},
+    summary::{Escape, Locations, Summary},
     tar::Archive,
     wasmtime::{
         component::{Component, Instance, Linker, ResourceTable, ResourceType},
@@ -79,6 +81,7 @@ struct RawComponentizePyConfig {
     wit_directory: Option<String>,
 }
 
+#[derive(Debug)]
 struct ComponentizePyConfig {
     bindings: Option<PathBuf>,
     wit_directory: Option<PathBuf>,
@@ -102,6 +105,14 @@ impl TryFrom<(&Path, RawComponentizePyConfig)> for ComponentizePyConfig {
             wit_directory: raw.wit_directory.map(convert).transpose()?,
         })
     }
+}
+
+#[derive(Debug)]
+struct ConfigContext<T> {
+    module: String,
+    root: PathBuf,
+    path: PathBuf,
+    config: T,
 }
 
 struct MyInvoker {
@@ -173,13 +184,22 @@ pub fn generate_bindings(
     world_module: Option<&str>,
     output_dir: &Path,
 ) -> Result<()> {
+    // TODO: Split out and reuse the code responsible for finding and using componentize-py.toml files in the
+    // `componentize` function below, since that can affect the bindings we should be generating.
+
     let (resolve, world) = parse_wit(wit_path, world)?;
-    let summary = Summary::try_new(&resolve, world)?;
+    let summary = Summary::try_new(&resolve, &iter::once(world).collect())?;
     let world_name = resolve.worlds[world].name.to_snake_case().escape();
     let world_module = world_module.unwrap_or(&world_name);
     let world_dir = output_dir.join(world_module.replace('.', "/"));
     fs::create_dir_all(&world_dir)?;
-    summary.generate_code(&world_dir, world_module, true)?;
+    summary.generate_code(
+        &world_dir,
+        world,
+        world_module,
+        &mut Locations::default(),
+        true,
+    )?;
 
     Ok(())
 }
@@ -189,6 +209,7 @@ pub async fn componentize(
     wit_path: Option<&Path>,
     world: Option<&str>,
     python_path: &[&str],
+    module_worlds: &[(&str, &str)],
     app_name: &str,
     output_path: &Path,
     add_to_linker: Option<&dyn Fn(&mut Linker<Ctx>) -> Result<()>>,
@@ -209,7 +230,7 @@ pub async fn componentize(
     ))))?)
     .unpack(bundled.path())?;
 
-    let mut raw_config = None;
+    let mut raw_configs = Vec::new();
     let mut library_path = Vec::with_capacity(python_path.len());
     for path in python_path {
         let mut libraries = Vec::new();
@@ -217,31 +238,93 @@ pub async fn componentize(
             Path::new(path),
             Path::new(path),
             &mut libraries,
-            &mut raw_config,
+            &mut raw_configs,
+            &mut HashSet::new(),
         )?;
         library_path.push((*path, libraries));
     }
 
-    let config = if let (None, Some((config_root, config_path, raw))) = (wit_path, raw_config) {
-        let config = ComponentizePyConfig::try_from((config_path.deref(), raw))?;
-        Some((config_root, config_path, config))
-    } else {
-        None
+    let configs = {
+        let mut configs = raw_configs
+            .into_iter()
+            .map(|raw_config| {
+                let config =
+                    ComponentizePyConfig::try_from((raw_config.path.deref(), raw_config.config))?;
+
+                Ok((
+                    raw_config.module.clone(),
+                    ConfigContext {
+                        module: raw_config.module,
+                        root: raw_config.root,
+                        path: raw_config.path,
+                        config,
+                    },
+                ))
+            })
+            .collect::<Result<HashMap<_, _>>>()?;
+
+        let mut ordered = IndexMap::new();
+        for (module, world) in module_worlds {
+            if let Some(config) = configs.remove(*module) {
+                ordered.insert((*module).to_owned(), (config, Some(*world)));
+            } else {
+                bail!("no `componentize-py.toml` file found for module `{module}`");
+            }
+        }
+
+        for (module, config) in configs {
+            ordered.insert(module, (config, world));
+        }
+
+        ordered
     };
 
-    let wit_path = if let Some(path) = wit_path {
-        path.to_owned()
-    } else if let Some((config_path, wit_path)) = config
-        .as_ref()
-        .and_then(|(_, p, c)| c.wit_directory.as_deref().map(|f| (p, f)))
-    {
-        config_path.join(wit_path)
+    let (mut resolve, mut main_world) = if let Some(path) = wit_path {
+        let (resolve, world) = parse_wit(path, world)?;
+        (Some(resolve), Some(world))
     } else {
-        Path::new("wit").to_owned()
+        (None, None)
     };
 
-    let (resolve, world) = parse_wit(&wit_path, world)?;
-    let summary = Summary::try_new(&resolve, world)?;
+    let configs = configs
+        .iter()
+        .map(|(module, (config, world))| {
+            Ok((module, match (world, config.config.wit_directory.as_deref()) {
+                (_, Some(wit_path)) => {
+                    let (my_resolve, mut world) = parse_wit(&config.path.join(wit_path), *world)?;
+
+                    if let Some(resolve) = &mut resolve {
+                        let remap = resolve.merge(my_resolve)?;
+                        world = remap.worlds[world.index()];
+                    } else {
+                        resolve = Some(my_resolve);
+                    }
+
+                    (config, Some(world))
+                }
+                (None, None) => (config, None),
+                (Some(_), None) => {
+                    bail!("no `wit-directory` specified in `componentize-py.toml` for module `{module}`");
+                }
+            }))
+        })
+        .collect::<Result<IndexMap<_, _>>>()?;
+
+    let resolve = if let Some(resolve) = resolve {
+        resolve
+    } else {
+        let (my_resolve, world) = parse_wit(Path::new("wit"), world)?;
+        main_world = Some(world);
+        my_resolve
+    };
+
+    let worlds = configs
+        .values()
+        .filter_map(|(_, world)| *world)
+        .chain(main_world)
+        .collect::<IndexSet<_>>();
+
+    let summary = Summary::try_new(&resolve, &worlds)?;
 
     let mut linker = wit_component::Linker::default()
         .validate(true)
@@ -319,7 +402,7 @@ pub async fn componentize(
         )?
         .library(
             "libcomponentize_py_bindings.so",
-            &bindings::make_bindings(&resolve, world, &summary)?,
+            &bindings::make_bindings(&resolve, &worlds, &summary)?,
             false,
         )?
         .adapter(
@@ -379,22 +462,30 @@ pub async fn componentize(
         );
     }
 
-    let world_dir = tempfile::tempdir()?;
+    let mut world_dir_mounts = Vec::new();
+    let mut locations = Locations::default();
+    let mut saw_main_world = false;
 
-    let (world_dir_mounts, world_module) = if let Some((config_root, config_path, binding_path)) =
-        config
-            .as_ref()
-            .and_then(|(r, p, c)| c.bindings.as_deref().map(|f| (r, p, f)))
+    for (config, world, binding_path) in configs
+        .values()
+        .filter_map(|(config, world)| Some((config, world, config.config.bindings.as_deref()?)))
     {
+        if *world == main_world {
+            saw_main_world = true;
+        }
+
+        let Some(world) = *world else {
+            bail!("please specify a world for module `{}`", config.module);
+        };
+
         let paths = python_path
             .iter()
             .enumerate()
             .map(|(index, dir)| {
                 let dir = Path::new(dir).canonicalize()?;
-                let config_root = config_root.canonicalize()?;
-                Ok(if config_root == dir {
-                    config_path
-                        .canonicalize()?
+                Ok(if config.root == dir {
+                    config
+                        .path
                         .join(binding_path)
                         .strip_prefix(dir)
                         .ok()
@@ -406,37 +497,49 @@ pub async fn componentize(
             .filter_map(Result::transpose)
             .collect::<Result<Vec<_>>>()?;
 
-        let module = paths.first().unwrap().1.replace('/', ".");
+        let binding_module = paths.first().unwrap().1.replace('/', ".");
 
-        summary.generate_code(world_dir.path(), &module, false)?;
+        let world_dir = tempfile::tempdir()?;
 
-        (
+        summary.generate_code(
+            world_dir.path(),
+            world,
+            &binding_module,
+            &mut locations,
+            false,
+        )?;
+
+        world_dir_mounts.push((
             paths
                 .iter()
                 .map(|(index, p)| format!("{index}/{p}"))
-                .collect::<Vec<_>>(),
-            module,
-        )
-    } else {
-        let module = resolve.worlds[world].name.to_snake_case();
-        let world_dir = world_dir.path().join(&module);
-        fs::create_dir_all(&world_dir)?;
-        summary.generate_code(&world_dir, &module, false)?;
-
-        (vec!["world".to_owned()], module)
-    };
-
-    for mount in world_dir_mounts {
-        wasi.preopened_dir(
-            Dir::open_ambient_dir(world_dir.path(), cap_std::ambient_authority())
-                .with_context(|| format!("unable to open {}", world_dir.path().display()))?,
-            DirPerms::all(),
-            FilePerms::all(),
-            &mount,
-        );
+                .collect(),
+            world_dir,
+        ));
     }
 
-    let symbols = summary.collect_symbols(&world_module);
+    if let (Some(world), false) = (main_world, saw_main_world) {
+        let module = resolve.worlds[world].name.to_snake_case();
+        let world_dir = tempfile::tempdir()?;
+        let module_path = world_dir.path().join(&module);
+        fs::create_dir_all(&module_path)?;
+        summary.generate_code(&module_path, world, &module, &mut locations, false)?;
+        world_dir_mounts.push((vec!["world".to_owned()], world_dir));
+    };
+
+    for (mounts, world_dir) in world_dir_mounts.iter() {
+        for mount in mounts {
+            wasi.preopened_dir(
+                Dir::open_ambient_dir(world_dir.path(), cap_std::ambient_authority())
+                    .with_context(|| format!("unable to open {}", world_dir.path().display()))?,
+                DirPerms::all(),
+                FilePerms::all(),
+                mount,
+            );
+        }
+    }
+
+    let symbols = summary.collect_symbols(&locations);
 
     let python_path = (0..python_path.len())
         .map(|index| format!("/{index}"))
@@ -472,7 +575,7 @@ pub async fn componentize(
         async move {
             let component = &Component::new(&engine, instrumented)?;
             if !added_to_linker {
-                add_wasi_and_stubs(&resolve, world, component, &mut linker)?;
+                add_wasi_and_stubs(&resolve, &worlds, component, &mut linker)?;
             }
 
             let (init, instance) = Init::instantiate_async(&mut store, component, &linker).await?;
@@ -514,7 +617,7 @@ fn parse_wit(path: &Path, world: Option<&str>) -> Result<(Resolve, WorldId)> {
 
 fn add_wasi_and_stubs(
     resolve: &Resolve,
-    world: WorldId,
+    worlds: &IndexSet<WorldId>,
     component: &Component,
     linker: &mut Linker<Ctx>,
 ) -> Result<()> {
@@ -526,44 +629,46 @@ fn add_wasi_and_stubs(
     }
 
     let mut stubs = HashMap::<_, Vec<_>>::new();
-    for (key, item) in &resolve.worlds[world].imports {
-        match item {
-            WorldItem::Interface(interface) => {
-                let interface_name = match key {
-                    WorldKey::Name(name) => name.clone(),
-                    WorldKey::Interface(interface) => resolve.id_of(*interface).unwrap(),
-                };
+    for &world in worlds {
+        for (key, item) in &resolve.worlds[world].imports {
+            match item {
+                WorldItem::Interface(interface) => {
+                    let interface_name = match key {
+                        WorldKey::Name(name) => name.clone(),
+                        WorldKey::Interface(interface) => resolve.id_of(*interface).unwrap(),
+                    };
 
-                let interface = &resolve.interfaces[*interface];
-                for function_name in interface.functions.keys() {
-                    stubs
-                        .entry(Some(interface_name.clone()))
-                        .or_default()
-                        .push(Stub::Function(function_name));
-                }
-
-                for (type_name, id) in interface.types.iter() {
-                    if let TypeDefKind::Resource = &resolve.types[*id].kind {
+                    let interface = &resolve.interfaces[*interface];
+                    for function_name in interface.functions.keys() {
                         stubs
                             .entry(Some(interface_name.clone()))
                             .or_default()
-                            .push(Stub::Resource(type_name));
+                            .push(Stub::Function(function_name));
+                    }
+
+                    for (type_name, id) in interface.types.iter() {
+                        if let TypeDefKind::Resource = &resolve.types[*id].kind {
+                            stubs
+                                .entry(Some(interface_name.clone()))
+                                .or_default()
+                                .push(Stub::Resource(type_name));
+                        }
                     }
                 }
-            }
-            WorldItem::Function(function) => {
-                stubs
-                    .entry(None)
-                    .or_default()
-                    .push(Stub::Function(&function.name));
-            }
-            WorldItem::Type(id) => {
-                let ty = &resolve.types[*id];
-                if let TypeDefKind::Resource = &ty.kind {
+                WorldItem::Function(function) => {
                     stubs
                         .entry(None)
                         .or_default()
-                        .push(Stub::Resource(ty.name.as_ref().unwrap()));
+                        .push(Stub::Function(&function.name));
+                }
+                WorldItem::Type(id) => {
+                    let ty = &resolve.types[*id];
+                    if let TypeDefKind::Resource = &ty.kind {
+                        stubs
+                            .entry(None)
+                            .or_default()
+                            .push(Stub::Resource(ty.name.as_ref().unwrap()));
+                    }
                 }
             }
         }
@@ -618,20 +723,37 @@ fn search_directory(
     root: &Path,
     path: &Path,
     libraries: &mut Vec<PathBuf>,
-    config: &mut Option<(PathBuf, PathBuf, RawComponentizePyConfig)>,
+    configs: &mut Vec<ConfigContext<RawComponentizePyConfig>>,
+    modules_seen: &mut HashSet<String>,
 ) -> Result<()> {
     if path.is_dir() {
         for entry in fs::read_dir(path)? {
-            search_directory(root, &entry?.path(), libraries, config)?;
+            search_directory(root, &entry?.path(), libraries, configs, modules_seen)?;
         }
     } else if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
         if name.ends_with(NATIVE_EXTENSION_SUFFIX) {
             libraries.push(path.to_owned());
         } else if name == "componentize-py.toml" {
-            let do_update = if let Some((existing_root, existing_path, _)) = config {
-                let path = path.canonicalize()?;
-                let existing_path = existing_path.join("componentize-py.toml").canonicalize()?;
-                if path != existing_path {
+            let root = root.canonicalize()?;
+            let path = path.canonicalize()?;
+
+            let module = module_name(&root, &path)
+                .ok_or_else(|| anyhow!("unable to determine module name for {}", path.display()))?;
+
+            let mut push = true;
+            for existing in &mut *configs {
+                if path == existing.path.join("componentize-py.toml") {
+                    // When one directory in `PYTHON_PATH` is a subdirectory of the other, we consider the
+                    // subdirectory to be the true owner of the file.  This is important later, when we derive a
+                    // package name by stripping the root directory from the file path.
+                    if root > existing.root {
+                        existing.module = module.clone();
+                        existing.root = root.to_owned();
+                        existing.path = path.parent().unwrap().to_owned();
+                    }
+                    push = false;
+                    break;
+                } else {
                     // If we find a componentize-py.toml file under a Python module which will not be used because
                     // we already found a version of that module in an earlier `PYTHON_PATH` directory, we'll
                     // ignore the latest one.
@@ -639,53 +761,38 @@ fn search_directory(
                     // For example, if the module `foo_sdk` appears twice in `PYTHON_PATH`, and both versions have
                     // a componentize-py.toml file, we'll ignore the second one just as Python will ignore the
                     // second module.
-                    let superseded = if let (Ok(relative), Ok(existing_relative)) = (
-                        path.strip_prefix(root.canonicalize()?),
-                        existing_path.strip_prefix(existing_root.canonicalize()?),
-                    ) {
-                        matches!(
-                            (
-                                &relative.iter().collect::<Vec<_>>()[..],
-                                &existing_relative.iter().collect::<Vec<_>>()[..]
-                            ),
-                            (
-                                [first, _, ..],
-                                [existing_first, _, ..]
-                            ) if first == existing_first
-                        )
-                    } else {
-                        false
-                    };
 
-                    if superseded {
-                        false
-                    } else {
-                        bail!(
-                            "multiple componentize-py.toml files found, \
-                             which is not yet supported: {} and {}",
-                            existing_path.display(),
-                            path.display()
-                        );
+                    if modules_seen.contains(&module) {
+                        bail!("multiple `componentize-py.toml` files found in module `{module}`");
                     }
-                } else {
-                    // When one directory in `PYTHON_PATH` is a subdirectory of the other, we consider the
-                    // subdirectory to be the true owner of the file.  This is important later, when we derive a
-                    // package name by stripping the root directory from the file path.
-                    root.canonicalize()? > existing_root.canonicalize()?
-                }
-            } else {
-                true
-            };
 
-            if do_update {
-                *config = Some((
-                    root.to_owned(),
-                    path.parent().unwrap().to_owned(),
-                    toml::from_str::<RawComponentizePyConfig>(&fs::read_to_string(path)?)?,
-                ));
+                    modules_seen.insert(module.clone());
+
+                    if module == existing.module {
+                        push = false;
+                        break;
+                    }
+                }
+            }
+
+            if push {
+                configs.push(ConfigContext {
+                    module,
+                    root: root.to_owned(),
+                    path: path.parent().unwrap().to_owned(),
+                    config: toml::from_str::<RawComponentizePyConfig>(&fs::read_to_string(path)?)?,
+                });
             }
         }
     }
 
     Ok(())
+}
+
+fn module_name(root: &Path, path: &Path) -> Option<String> {
+    if let [first, _, ..] = &path.strip_prefix(root).ok()?.iter().collect::<Vec<_>>()[..] {
+        first.to_str().map(|s| s.to_owned())
+    } else {
+        None
+    }
 }

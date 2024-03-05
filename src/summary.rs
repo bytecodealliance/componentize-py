@@ -85,6 +85,14 @@ pub struct MyFunction<'a> {
 }
 
 impl<'a> MyFunction<'a> {
+    fn key(&self) -> WorldKey {
+        if let Some(interface) = self.interface.as_ref() {
+            WorldKey::Interface(interface.id)
+        } else {
+            WorldKey::Name(self.name.into())
+        }
+    }
+
     pub fn internal_name(&self, resolve: &Resolve) -> String {
         if let Some(interface) = &self.interface {
             format!(
@@ -176,9 +184,29 @@ struct FunctionCode {
     error: Option<String>,
 }
 
+#[derive(Clone)]
+enum Code {
+    Shared(String),
+    Separate {
+        import: Option<String>,
+        export: Option<String>,
+    },
+}
+
+struct TypeLocation {
+    module: String,
+    aliases: Option<Code>,
+}
+
+#[derive(Default)]
+pub struct Locations {
+    types: HashMap<TypeId, TypeLocation>,
+    keys: HashMap<WorldKey, String>,
+    types_module: Option<String>,
+}
+
 pub struct Summary<'a> {
     pub resolve: &'a Resolve,
-    pub world: WorldId,
     pub functions: Vec<MyFunction<'a>>,
     pub types: IndexSet<TypeId>,
     pub imported_interfaces: HashMap<InterfaceId, InterfaceInfo<'a>>,
@@ -191,13 +219,14 @@ pub struct Summary<'a> {
     resource_directions: im_rc::HashMap<TypeId, Direction>,
     resource_info: HashMap<TypeId, ResourceInfo>,
     dispatch_count: usize,
+    world_types: HashMap<WorldId, HashSet<TypeId>>,
+    world_keys: HashMap<WorldId, HashSet<(Direction, WorldKey)>>,
 }
 
 impl<'a> Summary<'a> {
-    pub fn try_new(resolve: &'a Resolve, world: WorldId) -> Result<Self> {
+    pub fn try_new(resolve: &'a Resolve, worlds: &IndexSet<WorldId>) -> Result<Self> {
         let mut me = Self {
             resolve,
-            world,
             functions: Vec::new(),
             types: IndexSet::new(),
             exported_interfaces: HashMap::new(),
@@ -210,10 +239,26 @@ impl<'a> Summary<'a> {
             resource_directions: im_rc::HashMap::new(),
             resource_info: HashMap::new(),
             dispatch_count: 0,
+            world_types: HashMap::new(),
+            world_keys: HashMap::new(),
         };
 
-        me.visit_functions(&resolve.worlds[world].imports, Direction::Import)?;
-        me.visit_functions(&resolve.worlds[world].exports, Direction::Export)?;
+        let mut import_keys_seen = HashSet::new();
+        let mut export_keys_seen = HashSet::new();
+        for &world in worlds {
+            me.visit_functions(
+                &resolve.worlds[world].imports,
+                Direction::Import,
+                world,
+                &mut import_keys_seen,
+            )?;
+            me.visit_functions(
+                &resolve.worlds[world].exports,
+                Direction::Export,
+                world,
+                &mut export_keys_seen,
+            )?;
+        }
 
         me.types = me.types_sorted();
 
@@ -227,7 +272,7 @@ impl<'a> Summary<'a> {
         self.functions.push(function);
     }
 
-    fn visit_type(&mut self, ty: Type) {
+    fn visit_type(&mut self, ty: Type, world: WorldId) {
         match ty {
             Type::Bool
             | Type::U8
@@ -243,18 +288,20 @@ impl<'a> Summary<'a> {
             | Type::Float64
             | Type::String => (),
             Type::Id(id) => {
+                self.world_types.entry(world).or_default().insert(id);
+
                 let ty = &self.resolve.types[id];
                 match &ty.kind {
                     TypeDefKind::Record(record) => {
                         for field in &record.fields {
-                            self.visit_type(field.ty);
+                            self.visit_type(field.ty, world);
                         }
                         self.types.insert(id);
                     }
                     TypeDefKind::Variant(variant) => {
                         for case in &variant.cases {
                             if let Some(ty) = case.ty {
-                                self.visit_type(ty);
+                                self.visit_type(ty, world);
                             }
                         }
                         self.types.insert(id);
@@ -270,7 +317,7 @@ impl<'a> Summary<'a> {
                         } else if self.option_type.is_none() {
                             self.option_type = Some(id);
                         }
-                        self.visit_type(*some);
+                        self.visit_type(*some, world);
                         self.types.insert(id);
                     }
                     TypeDefKind::Result(result) => {
@@ -278,10 +325,10 @@ impl<'a> Summary<'a> {
                             self.result_type = Some(id);
                         }
                         if let Some(ty) = result.ok {
-                            self.visit_type(ty);
+                            self.visit_type(ty, world);
                         }
                         if let Some(ty) = result.err {
-                            self.visit_type(ty);
+                            self.visit_type(ty, world);
                         }
                         self.types.insert(id);
                     }
@@ -290,18 +337,18 @@ impl<'a> Summary<'a> {
                             entry.insert(id);
                         }
                         for ty in &tuple.types {
-                            self.visit_type(*ty);
+                            self.visit_type(*ty, world);
                         }
                         self.types.insert(id);
                     }
                     TypeDefKind::List(ty) => {
-                        self.visit_type(*ty);
+                        self.visit_type(*ty, world);
                     }
                     TypeDefKind::Type(ty) => {
                         // When visiting a type alias, we must use the state already stored for any `use`d
                         // resources rather than overwrite it.
                         let resource_state = self.resource_state.take();
-                        self.visit_type(*ty);
+                        self.visit_type(*ty, world);
                         self.resource_state = resource_state;
                     }
                     TypeDefKind::Resource => {
@@ -395,13 +442,14 @@ impl<'a> Summary<'a> {
         results: &'a Results,
         direction: Direction,
         wit_kind: wit_parser::FunctionKind,
+        world: WorldId,
     ) {
         for ty in params.types() {
-            self.visit_type(ty);
+            self.visit_type(ty, world);
         }
 
         for ty in results.types() {
-            self.visit_type(ty);
+            self.visit_type(ty, world);
         }
 
         let make = |kind| MyFunction {
@@ -443,8 +491,21 @@ impl<'a> Summary<'a> {
         &mut self,
         items: &'a IndexMap<WorldKey, WorldItem>,
         direction: Direction,
+        world: WorldId,
+        keys_seen: &mut HashSet<WorldKey>,
     ) -> Result<()> {
         for (key, item) in items {
+            self.world_keys
+                .entry(world)
+                .or_default()
+                .insert((direction, key.clone()));
+
+            if keys_seen.contains(key) {
+                continue;
+            } else {
+                keys_seen.insert(key.clone());
+            }
+
             match item {
                 WorldItem::Interface(id) => {
                     let (package, item_name) = match key {
@@ -488,7 +549,7 @@ impl<'a> Summary<'a> {
                         }),
                     });
                     for id in interface.types.values() {
-                        self.visit_type(Type::Id(*id));
+                        self.visit_type(Type::Id(*id), world);
                     }
                     self.resource_state = None;
 
@@ -511,6 +572,7 @@ impl<'a> Summary<'a> {
                             &func.results,
                             direction,
                             func.kind.clone(),
+                            world,
                         );
                     }
                 }
@@ -524,10 +586,11 @@ impl<'a> Summary<'a> {
                         &func.results,
                         direction,
                         func.kind.clone(),
+                        world,
                     );
                 }
 
-                WorldItem::Type(ty) => self.visit_type(Type::Id(*ty)),
+                WorldItem::Type(ty) => self.visit_type(Type::Id(*ty), world),
             }
         }
         Ok(())
@@ -616,14 +679,14 @@ impl<'a> Summary<'a> {
         }
     }
 
-    pub fn collect_symbols(&self, world_module: &str) -> Symbols {
+    pub fn collect_symbols(&self, locations: &Locations) -> Symbols {
         let mut exports = Vec::new();
         for function in &self.functions {
             if let FunctionKind::Export = function.kind {
                 let scope = if let Some(interface) = &function.interface {
                     interface.name
                 } else {
-                    world_module
+                    locations.keys.get(&function.key()).unwrap()
                 };
 
                 exports.push(match function.wit_kind {
@@ -663,11 +726,11 @@ impl<'a> Summary<'a> {
 
         let mut types = Vec::new();
         for ty in &self.types {
-            types.push(self.summarize_type(*ty, world_module));
+            types.push(self.summarize_type(*ty, &locations.types.get(ty).unwrap().module));
         }
 
         Symbols {
-            types_package: format!("{world_module}.types"),
+            types_package: format!("{}.types", locations.types_module.as_ref().unwrap()),
             exports,
             types,
         }
@@ -974,7 +1037,9 @@ impl<'a> Summary<'a> {
     pub fn generate_code(
         &self,
         path: &Path,
+        world: WorldId,
         world_module: &str,
+        locations: &mut Locations,
         stub_runtime_calls: bool,
     ) -> Result<()> {
         #[derive(Default)]
@@ -984,15 +1049,7 @@ impl<'a> Summary<'a> {
             type_imports: HashSet<InterfaceId>,
             function_imports: HashSet<InterfaceId>,
             docs: Option<&'a str>,
-        }
-
-        enum Code {
-            None,
-            Shared(String),
-            Separate {
-                import: Option<String>,
-                export: Option<String>,
-            },
+            alias_module: Option<String>,
         }
 
         let docstring = |docs: Option<&str>, indent_level, error: Option<&str>| {
@@ -1029,6 +1086,15 @@ impl<'a> Summary<'a> {
         let mut world_exports = Definitions::default();
         let mut seen = HashSet::new();
         for (index, id) in self.types.iter().copied().enumerate() {
+            if !self
+                .world_types
+                .get(&world)
+                .map(|types| types.contains(&id))
+                .unwrap_or(false)
+            {
+                continue;
+            }
+
             let ty = &self.resolve.types[id];
             let mut names = TypeNames::new(self, ty.owner);
 
@@ -1067,173 +1133,200 @@ class {name}:
                 )
             };
 
-            let code = match &ty.kind {
-                TypeDefKind::Record(record) => Code::Shared(make_class(
-                    &mut names,
-                    camel(),
-                    ty.docs.contents.as_deref(),
-                    record
-                        .fields
-                        .iter()
-                        .map(|field| (field.name.to_snake_case().escape(), field.ty))
-                        .collect::<Vec<_>>(),
-                )),
-                TypeDefKind::Variant(variant) => {
-                    let camel = camel();
-                    let classes = variant
-                        .cases
-                        .iter()
-                        .map(|case| {
-                            make_class(
-                                &mut names,
-                                format!("{camel}{}", case.name.to_upper_camel_case().escape()),
-                                None,
-                                if let Some(ty) = case.ty {
-                                    vec![("value".into(), ty)]
-                                } else {
-                                    Vec::new()
-                                },
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n");
+            let code = if let Some(location) = locations.types.get(&id) {
+                location.aliases.clone()
+            } else {
+                let (code, names) = match &ty.kind {
+                    TypeDefKind::Record(record) => (
+                        Some(Code::Shared(make_class(
+                            &mut names,
+                            camel(),
+                            ty.docs.contents.as_deref(),
+                            record
+                                .fields
+                                .iter()
+                                .map(|field| (field.name.to_snake_case().escape(), field.ty))
+                                .collect::<Vec<_>>(),
+                        ))),
+                        vec![camel()],
+                    ),
+                    TypeDefKind::Variant(variant) => {
+                        let camel = camel();
+                        let classes = variant
+                            .cases
+                            .iter()
+                            .map(|case| {
+                                make_class(
+                                    &mut names,
+                                    format!("{camel}{}", case.name.to_upper_camel_case().escape()),
+                                    None,
+                                    if let Some(ty) = case.ty {
+                                        vec![("value".into(), ty)]
+                                    } else {
+                                        Vec::new()
+                                    },
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
 
-                    let cases = variant
-                        .cases
-                        .iter()
-                        .map(|case| format!("{camel}{}", case.name.to_upper_camel_case().escape()))
-                        .collect::<Vec<_>>()
-                        .join(", ");
+                        let cases = variant
+                            .cases
+                            .iter()
+                            .map(|case| {
+                                format!("{camel}{}", case.name.to_upper_camel_case().escape())
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", ");
 
-                    let docs = docstring(ty.docs.contents.as_deref(), 0, None);
+                        let docs = docstring(ty.docs.contents.as_deref(), 0, None);
 
-                    Code::Shared(format!(
-                        "
+                        (
+                            Some(Code::Shared(format!(
+                                "
 {classes}
 
 {camel} = Union[{cases}]
 {docs}
 "
-                    ))
-                }
-                TypeDefKind::Enum(en) => {
-                    let camel = camel();
-                    let cases = en
-                        .cases
-                        .iter()
-                        .enumerate()
-                        .map(|(index, case)| {
-                            format!("{} = {index}", case.name.to_shouty_snake_case())
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n    ");
+                            ))),
+                            variant
+                                .cases
+                                .iter()
+                                .map(|case| {
+                                    format!("{camel}{}", case.name.to_upper_camel_case().escape())
+                                })
+                                .collect::<Vec<_>>()
+                                .into_iter()
+                                .chain(iter::once(camel))
+                                .collect(),
+                        )
+                    }
+                    TypeDefKind::Enum(en) => {
+                        let camel = camel();
+                        let cases = en
+                            .cases
+                            .iter()
+                            .enumerate()
+                            .map(|(index, case)| {
+                                format!("{} = {index}", case.name.to_shouty_snake_case())
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n    ");
 
-                    let docs = docstring(ty.docs.contents.as_deref(), 1, None);
+                        let docs = docstring(ty.docs.contents.as_deref(), 1, None);
 
-                    Code::Shared(format!(
-                        "
+                        (
+                            Some(Code::Shared(format!(
+                                "
 class {camel}(Enum):
     {docs}{cases}
 "
-                    ))
-                }
-                TypeDefKind::Flags(flags) => {
-                    let camel = camel();
-                    let flags = flags
-                        .flags
-                        .iter()
-                        .map(|flag| format!("{} = auto()", flag.name.to_shouty_snake_case()))
-                        .collect::<Vec<_>>()
-                        .join("\n    ");
+                            ))),
+                            vec![camel],
+                        )
+                    }
+                    TypeDefKind::Flags(flags) => {
+                        let camel = camel();
+                        let flags = flags
+                            .flags
+                            .iter()
+                            .map(|flag| format!("{} = auto()", flag.name.to_shouty_snake_case()))
+                            .collect::<Vec<_>>()
+                            .join("\n    ");
 
-                    let flags = if flags.is_empty() {
-                        "pass".to_owned()
-                    } else {
-                        flags
-                    };
+                        let flags = if flags.is_empty() {
+                            "pass".to_owned()
+                        } else {
+                            flags
+                        };
 
-                    let docs = docstring(ty.docs.contents.as_deref(), 1, None);
+                        let docs = docstring(ty.docs.contents.as_deref(), 1, None);
 
-                    Code::Shared(format!(
-                        "
+                        (
+                            Some(Code::Shared(format!(
+                                "
 class {camel}(Flag):
     {docs}{flags}
 "
-                    ))
-                }
-                TypeDefKind::Resource => {
-                    let camel = camel();
+                            ))),
+                            vec![camel],
+                        )
+                    }
+                    TypeDefKind::Resource => {
+                        let camel = camel();
 
-                    let docs = docstring(ty.docs.contents.as_deref(), 1, None);
+                        let docs = docstring(ty.docs.contents.as_deref(), 1, None);
 
-                    let empty = &ResourceInfo::default();
+                        let empty = &ResourceInfo::default();
 
-                    let import = if self
-                        .resource_info
-                        .get(&id)
-                        .unwrap_or(empty)
-                        .remote_dispatch_index
-                        .is_some()
-                    {
-                        let method = |(index, function)| {
-                            let FunctionCode {
-                                snake,
-                                params,
-                                args,
-                                return_type,
-                                return_statement,
-                                class_method,
-                                result_count,
-                                error,
-                            } = self.function_code(
-                                Direction::Import,
-                                world_module,
-                                function,
-                                &mut names,
-                                &seen,
-                                Some(id),
-                            );
+                        let import = if self
+                            .resource_info
+                            .get(&id)
+                            .unwrap_or(empty)
+                            .remote_dispatch_index
+                            .is_some()
+                        {
+                            let method = |(index, function)| {
+                                let FunctionCode {
+                                    snake,
+                                    params,
+                                    args,
+                                    return_type,
+                                    return_statement,
+                                    class_method,
+                                    result_count,
+                                    error,
+                                } = self.function_code(
+                                    Direction::Import,
+                                    world_module,
+                                    function,
+                                    &mut names,
+                                    &seen,
+                                    Some(id),
+                                );
 
-                            let docs = docstring(function.docs, 2, error.as_deref());
+                                let docs = docstring(function.docs, 2, error.as_deref());
 
-                            if let wit_parser::FunctionKind::Constructor(_) = function.wit_kind {
-                                if stub_runtime_calls {
-                                    format!(
-                                        "
+                                if let wit_parser::FunctionKind::Constructor(_) = function.wit_kind
+                                {
+                                    if stub_runtime_calls {
+                                        format!(
+                                            "
     def {snake}({params}):
         {docs}raise NotImplementedError
 "
-                                    )
-                                } else {
-                                    format!(
-                                        "
+                                        )
+                                    } else {
+                                        format!(
+                                            "
     def {snake}({params}):
         {docs}tmp = componentize_py_runtime.call_import({index}, [{args}], {result_count})[0]
         (_, func, args, _) = tmp.finalizer.detach()
         self.handle = tmp.handle
         self.finalizer = weakref.finalize(self, func, args[0], args[1])
 "
-                                    )
-                                }
-                            } else if stub_runtime_calls {
-                                format!(
-                                    "{class_method}
+                                        )
+                                    }
+                                } else if stub_runtime_calls {
+                                    format!(
+                                        "{class_method}
     def {snake}({params}){return_type}:
         {docs}raise NotImplementedError
 "
-                                )
-                            } else {
-                                format!(
-                                    "{class_method}
+                                    )
+                                } else {
+                                    format!(
+                                        "{class_method}
     def {snake}({params}){return_type}:
         {docs}result = componentize_py_runtime.call_import({index}, [{args}], {result_count})
         {return_statement}
 "
-                                )
-                            }
-                        };
+                                    )
+                                }
+                            };
 
-                        let methods = self
+                            let methods = self
                             .functions
                             .iter()
                             .filter_map({
@@ -1282,152 +1375,183 @@ class {camel}(Flag):
                             .collect::<Vec<_>>()
                             .concat();
 
-                        Some(format!(
-                            "
+                            Some(format!(
+                                "
 class {camel}:
     {docs}{methods}
 "
-                        ))
-                    } else {
-                        None
-                    };
+                            ))
+                        } else {
+                            None
+                        };
 
-                    let export = if self
-                        .resource_info
-                        .get(&id)
-                        .unwrap_or(empty)
-                        .local_dispatch_index
-                        .is_some()
-                    {
-                        let method = |function| {
-                            let FunctionCode {
-                                snake,
-                                params,
-                                return_type,
-                                class_method,
-                                error,
-                                ..
-                            } = self.function_code(
-                                Direction::Export,
-                                world_module,
-                                function,
-                                &mut names,
-                                &seen,
-                                Some(id),
-                            );
+                        let export = if self
+                            .resource_info
+                            .get(&id)
+                            .unwrap_or(empty)
+                            .local_dispatch_index
+                            .is_some()
+                        {
+                            let method = |function| {
+                                let FunctionCode {
+                                    snake,
+                                    params,
+                                    return_type,
+                                    class_method,
+                                    error,
+                                    ..
+                                } = self.function_code(
+                                    Direction::Export,
+                                    world_module,
+                                    function,
+                                    &mut names,
+                                    &seen,
+                                    Some(id),
+                                );
 
-                            let docs = docstring(function.docs, 2, error.as_deref());
+                                let docs = docstring(function.docs, 2, error.as_deref());
 
-                            format!(
-                                "{class_method}
+                                format!(
+                                    "{class_method}
     @abstractmethod
     def {snake}({params}){return_type}:
         {docs}raise NotImplementedError
 "
-                            )
-                        };
+                                )
+                            };
 
-                        let methods = self
-                            .functions
-                            .iter()
-                            .filter(|function| matches_resource(function, id, Direction::Export))
-                            .map(method)
-                            .collect::<Vec<_>>()
-                            .concat();
+                            let methods = self
+                                .functions
+                                .iter()
+                                .filter(|function| {
+                                    matches_resource(function, id, Direction::Export)
+                                })
+                                .map(method)
+                                .collect::<Vec<_>>()
+                                .concat();
 
-                        Some(format!(
-                            "
+                            Some(format!(
+                                "
 class {camel}(Protocol):
     {docs}{methods}
 "
-                        ))
-                    } else {
-                        None
-                    };
+                            ))
+                        } else {
+                            None
+                        };
 
-                    Code::Separate { import, export }
-                }
-                TypeDefKind::Tuple(_)
-                | TypeDefKind::List(_)
-                | TypeDefKind::Option(_)
-                | TypeDefKind::Result(_)
-                | TypeDefKind::Handle(_) => Code::None,
-                kind => todo!("{kind:?}"),
-            };
-
-            let code = match code {
-                Code::Shared(code) if self.has_imported_and_exported_resource(Type::Id(id)) => {
-                    Code::Separate {
-                        import: Some(code.clone()),
-                        export: Some(code),
+                        (Some(Code::Separate { import, export }), vec![camel])
                     }
-                }
-                code => code,
-            };
+                    TypeDefKind::Tuple(_)
+                    | TypeDefKind::List(_)
+                    | TypeDefKind::Option(_)
+                    | TypeDefKind::Result(_)
+                    | TypeDefKind::Handle(_) => (None, Vec::new()),
+                    kind => todo!("{kind:?}"),
+                };
 
-            match code {
-                Code::None => {}
-                Code::Shared(_) | Code::Separate { .. } => {
-                    let tuples = match ty.owner {
-                        TypeOwner::Interface(interface) => match code {
-                            Code::None => unreachable!(),
-                            Code::Shared(code) => vec![(
-                                code,
-                                if let Some(info) = self.imported_interfaces.get(&interface) {
-                                    (interface_imports.entry(info.name).or_default(), info.docs)
-                                } else if let Some(info) = self.exported_interfaces.get(&interface)
-                                {
-                                    (interface_exports.entry(info.name).or_default(), info.docs)
-                                } else {
-                                    unreachable!()
-                                },
-                            )],
-                            Code::Separate { import, export } => import
-                                .map(|code| {
-                                    let info = self.imported_interfaces.get(&interface).unwrap();
-                                    (
-                                        code,
-                                        (
-                                            interface_imports.entry(info.name).or_default(),
-                                            info.docs,
-                                        ),
-                                    )
-                                })
-                                .into_iter()
-                                .chain(export.map(|code| {
-                                    let info = self.exported_interfaces.get(&interface).unwrap();
-                                    (
-                                        code,
-                                        (
-                                            interface_exports.entry(info.name).or_default(),
-                                            info.docs,
-                                        ),
-                                    )
-                                }))
-                                .collect(),
-                        },
+                let code = match code {
+                    Some(Code::Shared(code))
+                        if self.has_imported_and_exported_resource(Type::Id(id)) =>
+                    {
+                        Some(Code::Separate {
+                            import: Some(code.clone()),
+                            export: Some(code),
+                        })
+                    }
+                    code => code,
+                };
 
-                        TypeOwner::World(_) => {
-                            let docs = self.resolve.worlds[self.world].docs.contents.as_deref();
-                            match code {
-                                Code::None => unreachable!(),
-                                Code::Shared(code) => vec![(code, (&mut world_exports, docs))],
-                                Code::Separate { import, export } => import
-                                    .map(|code| (code, (&mut world_imports, docs)))
-                                    .into_iter()
-                                    .chain(export.map(|code| (code, (&mut world_exports, docs))))
-                                    .collect(),
-                            }
+                let aliases = if let (Some(code), false) = (code.as_ref(), names.is_empty()) {
+                    let aliases = iter::once(format!(
+                        "import {}",
+                        if let Some((start, _)) = world_module.split_once('.') {
+                            start
+                        } else {
+                            world_module
                         }
+                    ))
+                    .chain(
+                        names
+                            .iter()
+                            .map(|name| format!("{name} = {world_module}.{name}")),
+                    )
+                    .collect::<Vec<_>>()
+                    .join("\n");
 
-                        TypeOwner::None => unreachable!(),
-                    };
+                    Some(match code {
+                        Code::Shared(_) => Code::Shared(aliases),
+                        Code::Separate { import, export } => Code::Separate {
+                            import: import.as_ref().map(|_| aliases.clone()),
+                            export: export.as_ref().map(|_| aliases.clone()),
+                        },
+                    })
+                } else {
+                    None
+                };
 
-                    for (code, (definitions, docs)) in tuples {
-                        definitions.types.push(code);
-                        definitions.type_imports.extend(names.imports.clone());
-                        definitions.docs = docs;
+                locations.types.insert(
+                    id,
+                    TypeLocation {
+                        module: world_module.to_owned(),
+                        aliases,
+                    },
+                );
+
+                code
+            };
+
+            if let Some(code) = code {
+                let tuples = match ty.owner {
+                    TypeOwner::Interface(interface) => match code {
+                        Code::Shared(code) => vec![(
+                            code,
+                            if let Some(info) = self.imported_interfaces.get(&interface) {
+                                (interface_imports.entry(info.name).or_default(), info.docs)
+                            } else if let Some(info) = self.exported_interfaces.get(&interface) {
+                                (interface_exports.entry(info.name).or_default(), info.docs)
+                            } else {
+                                unreachable!()
+                            },
+                        )],
+                        Code::Separate { import, export } => import
+                            .map(|code| {
+                                let info = self.imported_interfaces.get(&interface).unwrap();
+                                (
+                                    code,
+                                    (interface_imports.entry(info.name).or_default(), info.docs),
+                                )
+                            })
+                            .into_iter()
+                            .chain(export.map(|code| {
+                                let info = self.exported_interfaces.get(&interface).unwrap();
+                                (
+                                    code,
+                                    (interface_exports.entry(info.name).or_default(), info.docs),
+                                )
+                            }))
+                            .collect(),
+                    },
+
+                    TypeOwner::World(_) => {
+                        let docs = self.resolve.worlds[world].docs.contents.as_deref();
+                        match code {
+                            Code::Shared(code) => vec![(code, (&mut world_exports, docs))],
+                            Code::Separate { import, export } => import
+                                .map(|code| (code, (&mut world_imports, docs)))
+                                .into_iter()
+                                .chain(export.map(|code| (code, (&mut world_exports, docs))))
+                                .collect(),
+                        }
                     }
+
+                    TypeOwner::None => unreachable!(),
+                };
+
+                for (code, (definitions, docs)) in tuples {
+                    definitions.types.push(code);
+                    definitions.type_imports.extend(names.imports.clone());
+                    definitions.docs = docs;
                 }
             }
 
@@ -1436,11 +1560,26 @@ class {camel}(Protocol):
 
         let mut index = 0;
         for function in &self.functions {
+            let key = function.key();
+            let direction = if let FunctionKind::Import = &function.kind {
+                Direction::Import
+            } else {
+                Direction::Export
+            };
+
             #[allow(clippy::single_match)]
-            match (&function.kind, &function.wit_kind) {
+            match (
+                &function.kind,
+                &function.wit_kind,
+                self.world_keys
+                    .get(&world)
+                    .map(|keys| keys.contains(&(direction, key.clone())))
+                    .unwrap_or(false),
+            ) {
                 (
                     FunctionKind::Import | FunctionKind::Export,
                     wit_parser::FunctionKind::Freestanding,
+                    true,
                 ) => {
                     let mut names = TypeNames::new(
                         self,
@@ -1449,7 +1588,7 @@ class {camel}(Protocol):
                         } else if let Some(interface) = &function.interface {
                             TypeOwner::Interface(interface.id)
                         } else {
-                            TypeOwner::World(self.world)
+                            TypeOwner::World(world)
                         },
                     );
 
@@ -1500,7 +1639,7 @@ def {snake}({params}){return_type}:
                             } else {
                                 (
                                     &mut world_imports,
-                                    self.resolve.worlds[self.world].docs.contents.as_deref(),
+                                    self.resolve.worlds[world].docs.contents.as_deref(),
                                 )
                             };
 
@@ -1509,22 +1648,6 @@ def {snake}({params}){return_type}:
                             definitions.docs = docs;
                         }
                         FunctionKind::Export => {
-                            let params = if params.is_empty() {
-                                "self".to_owned()
-                            } else {
-                                format!("self, {params}")
-                            };
-
-                            let docs = docstring(function.docs, 2, error.as_deref());
-
-                            let code = format!(
-                                "
-    @abstractmethod
-    def {snake}({params}){return_type}:
-        {docs}raise NotImplementedError
-"
-                            );
-
                             let (definitions, docs) = if let Some(interface) = &function.interface {
                                 (
                                     interface_exports.entry(interface.name).or_default(),
@@ -1533,13 +1656,38 @@ def {snake}({params}){return_type}:
                             } else {
                                 (
                                     &mut world_exports,
-                                    self.resolve.worlds[self.world].docs.contents.as_deref(),
+                                    self.resolve.worlds[world].docs.contents.as_deref(),
                                 )
                             };
 
-                            definitions.functions.push(code);
-                            definitions.function_imports.extend(names.imports);
-                            definitions.docs = docs;
+                            let module = locations
+                                .keys
+                                .entry(key)
+                                .or_insert_with(|| world_module.to_owned());
+
+                            if module == world_module {
+                                let params = if params.is_empty() {
+                                    "self".to_owned()
+                                } else {
+                                    format!("self, {params}")
+                                };
+
+                                let function_docs = docstring(function.docs, 2, error.as_deref());
+
+                                let code = format!(
+                                    "
+    @abstractmethod
+    def {snake}({params}){return_type}:
+        {function_docs}raise NotImplementedError
+"
+                                );
+
+                                definitions.functions.push(code);
+                                definitions.function_imports.extend(names.imports);
+                                definitions.docs = docs;
+                            } else {
+                                definitions.alias_module = Some(module.clone());
+                            }
                         }
                         _ => unreachable!(),
                     }
@@ -1553,7 +1701,7 @@ def {snake}({params}){return_type}:
         }
 
         let python_imports =
-            "from typing import TypeVar, Generic, Union, Optional, Union, Protocol, Tuple, List, Any, Self
+            "from typing import TypeVar, Generic, Union, Optional, Protocol, Tuple, List, Any, Self
 from enum import Flag, Enum, auto
 from dataclasses import dataclass
 from abc import abstractmethod
@@ -1562,9 +1710,30 @@ import weakref
 
         {
             let mut file = File::create(path.join("types.py"))?;
-            write!(
-                file,
-                "{python_imports}
+            if let Some(module) = locations.types_module.as_ref() {
+                writeln!(
+                    file,
+                    "import {}",
+                    if let Some((start, _)) = module.split_once('.') {
+                        start
+                    } else {
+                        module
+                    }
+                )?;
+                write!(
+                    file,
+                    "Some = {module}.Some
+Ok = {module}.types.Ok
+Err = {module}.types.Err
+Result = {module}.types.Result
+"
+                )?;
+            } else {
+                locations.types_module = Some(world_module.to_owned());
+
+                write!(
+                    file,
+                    "{python_imports}
 
 S = TypeVar('S')
 @dataclass
@@ -1582,8 +1751,9 @@ class Err(Generic[E], Exception):
     value: E
 
 Result = Union[Ok[T], Err[E]]
-            "
-            )?;
+"
+                )?;
+            }
         }
 
         let import = |prefix, interface| {
@@ -1654,20 +1824,34 @@ from ..types import Result, Ok, Err, Some
                 )?;
 
                 let camel = name.to_upper_camel_case().escape();
-                let methods = if code.functions.is_empty() {
-                    "    pass".to_owned()
-                } else {
-                    code.functions.concat()
-                };
 
-                protocol_imports.extend(code.function_imports);
-                write!(
-                    &mut protocols,
-                    "
+                if let Some(alias_module) = code.alias_module {
+                    writeln!(
+                        &mut protocols,
+                        "import {}",
+                        if let Some((start, _)) = alias_module.split_once('.') {
+                            start
+                        } else {
+                            &alias_module
+                        }
+                    )?;
+                    writeln!(&mut protocols, "{camel} = {alias_module}.{camel}")?;
+                } else {
+                    let methods = if code.functions.is_empty() {
+                        "    pass".to_owned()
+                    } else {
+                        code.functions.concat()
+                    };
+
+                    protocol_imports.extend(code.function_imports);
+                    write!(
+                        &mut protocols,
+                        "
 class {camel}(Protocol):
 {methods}
 "
-                )?;
+                    )?;
+                }
             }
 
             let mut init = File::create(dir.join("__init__.py"))?;
@@ -1691,15 +1875,26 @@ from ..types import Result, Ok, Err, Some
             let mut file = File::create(path.join("__init__.py"))?;
             let function_imports = world_imports.functions.concat();
             let type_exports = world_exports.types.concat();
-            let camel = self.resolve.worlds[self.world]
+            let camel = self.resolve.worlds[world]
                 .name
                 .to_upper_camel_case()
                 .escape();
-            let methods = if world_exports.functions.is_empty() {
-                "    pass".to_owned()
+
+            let protocol = if let Some(alias_module) = world_exports.alias_module {
+                format!("{camel} = {alias_module}.{camel}")
             } else {
-                world_exports.functions.concat()
+                let methods = if world_exports.functions.is_empty() {
+                    "    pass".to_owned()
+                } else {
+                    world_exports.functions.concat()
+                };
+
+                format!(
+                    "class {camel}(Protocol):
+{methods}"
+                )
             };
+
             let imports = world_imports
                 .function_imports
                 .union(
@@ -1712,6 +1907,7 @@ from ..types import Result, Ok, Err, Some
                 .map(|&interface| import(".", interface))
                 .collect::<Vec<_>>()
                 .join("\n");
+
             let docs = docstring(world_exports.docs, 0, None);
 
             let imports = if stub_runtime_calls {
@@ -1727,8 +1923,7 @@ from .types import Result, Ok, Err, Some
 {imports}
 {function_imports}
 {type_exports}
-class {camel}(Protocol):
-{methods}
+{protocol}
 "
             )?;
         }
@@ -1754,7 +1949,7 @@ class {camel}(Protocol):
         match owner {
             TypeOwner::Interface(interface) => {
                 let (module, package) = self.interface_package(interface);
-                Some(format!("{world_module}.{module}.{package}",))
+                Some(format!("{world_module}.{module}.{package}"))
             }
             TypeOwner::World(_) => Some(world_module.to_owned()),
             TypeOwner::None => None,

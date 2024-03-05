@@ -28,7 +28,11 @@ struct MemInfo {
     table_alignment: u32,
 }
 
-pub fn make_bindings(resolve: &Resolve, world: WorldId, summary: &Summary) -> Result<Vec<u8>> {
+pub fn make_bindings(
+    resolve: &Resolve,
+    worlds: &IndexSet<WorldId>,
+    summary: &Summary,
+) -> Result<Vec<u8>> {
     // TODO: deduplicate types
     let mut types = TypeSection::new();
     let mut imports = ImportSection::new();
@@ -363,21 +367,21 @@ pub fn make_bindings(resolve: &Resolve, world: WorldId, summary: &Summary) -> Re
         name: Cow::Borrowed("name"),
         data: Cow::Borrowed(&names_data),
     });
-    result.section(&CustomSection {
-        name: Cow::Owned(format!("component-type:{}", resolve.worlds[world].name)),
-        data: Cow::Owned(metadata::encode(
-            resolve,
-            world,
-            wit_component::StringEncoding::UTF8,
-            None,
-        )?),
-    });
+    for &world in worlds {
+        result.section(&CustomSection {
+            name: Cow::Owned(format!("component-type:{}", resolve.worlds[world].name)),
+            data: Cow::Owned(metadata::encode(
+                resolve,
+                world,
+                wit_component::StringEncoding::UTF8,
+                None,
+            )?),
+        });
+    }
 
     let result = result.finish();
 
     wasmparser::validate(&result)?;
-
-    std::fs::write("/tmp/bindings.so", &result)?;
 
     Ok(result)
 }

@@ -6,11 +6,12 @@ use {
 
 #[pyo3::pyfunction]
 #[pyo3(name = "componentize")]
-#[pyo3(signature = (wit_path, world, python_path, app_name, output_path))]
+#[pyo3(signature = (wit_path, world, python_path, module_worlds, app_name, output_path))]
 fn python_componentize(
     wit_path: Option<PathBuf>,
     world: Option<&str>,
     python_path: Vec<&str>,
+    module_worlds: Vec<(&str, &str)>,
     app_name: &str,
     output_path: PathBuf,
 ) -> PyResult<()> {
@@ -19,6 +20,7 @@ fn python_componentize(
             wit_path.as_deref(),
             world,
             &python_path,
+            &module_worlds,
             app_name,
             &output_path,
             None,
