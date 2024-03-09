@@ -74,6 +74,7 @@ async fn make_component(
         "app",
         &tempdir.path().join("app.wasm"),
         add_to_linker,
+        None,
     )
     .await?;
 

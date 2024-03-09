@@ -35,6 +35,13 @@ pub struct Common {
     /// Disable non-error output
     #[arg(short = 'q', long)]
     pub quiet: bool,
+
+    /// Optional `isyswasfa` suffix.
+    ///
+    /// If this is specified, the generated component will use [isyswasfa](https://github.com/dicej/isyswasfa) to
+    /// polyfill composable concurrency.
+    #[arg(long)]
+    pub isyswasfa: Option<String>,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -114,6 +121,7 @@ fn generate_bindings(common: Common, bindings: Bindings) -> Result<()> {
         common.world.as_deref(),
         bindings.world_module.as_deref(),
         &bindings.output_dir,
+        common.isyswasfa.as_deref(),
     )
 }
 
@@ -141,6 +149,7 @@ fn componentize(common: Common, componentize: Componentize) -> Result<()> {
         &componentize.app_name,
         &componentize.output,
         None,
+        common.isyswasfa.as_deref(),
     ))?;
 
     if !common.quiet {

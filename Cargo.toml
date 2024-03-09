@@ -37,6 +37,7 @@ cap-std = "2.0.0"
 im-rc = "15.1.0"
 serde = { version = "1.0.193", features = ["derive"] }
 toml = "0.8.8"
+isyswasfa-transform = { path = "../transform" }
 
 [dev-dependencies]
 async-trait = "0.1.74"

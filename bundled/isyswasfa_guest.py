@@ -1,0 +1,367 @@
+import asyncio
+import socket
+import subprocess
+from dataclasses import dataclass
+from typing import Any, Union
+
+from proxy.types import Err
+from proxy.imports import isyswasfa
+from proxy.imports.isyswasfa import (
+    PollInput, PollInput_Ready, PollInputReady, PollInput_Listening, PollOutput, PollOutput_Listen,
+    PollOutputListen, PollOutput_Pending, PollOutputPending, PollOutput_Ready, PollOutputReady, Ready, Pending
+)
+
+class Loop(asyncio.AbstractEventLoop):
+    def __init__(self):
+        self.running = False
+        self.handles = []
+        self.exception = None
+
+    def poll_all(self):
+        handles = self.handles
+        self.handles = []
+        for handle in handles:
+            if not handle._cancelled:
+                handle._run()
+                
+        if self.exception is not None:
+            raise self.exception
+    
+    def get_debug(self):
+        return False
+
+    def is_running(self):
+        return self.running
+
+    def is_closed(self):
+        return not self.running
+
+    def stop(self):
+        self.running = False
+
+    def close(self):
+        self.running = False
+
+    def shutdown_asyncgens(self):
+        pass
+
+    def call_exception_handler(self, context):
+        self.exception = context.get('exception', None)
+
+    def call_soon(self, callback, *args, context=None):
+        handle = asyncio.Handle(callback, args, self, context)
+        self.handles.append(handle)
+        return handle
+
+    def create_task(self, coroutine):
+        return asyncio.Task(coroutine, loop=self)
+
+    def create_future(self):
+        return asyncio.Future(loop=self)
+
+    # The remaining methods should be irrelevant for our purposes and thus unimplemented
+
+    def run_until_complete(self, future):
+        raise NotImplementedError
+
+    def run_forever(self):
+        raise NotImplementedError
+
+    async def shutdown_default_executor(self):
+        raise NotImplementedError
+
+    def _timer_handle_cancelled(self, handle):
+        raise NotImplementedError
+
+    def call_later(self, delay, callback, *args, context=None):
+        raise NotImplementedError
+
+    def call_at(self, when, callback, *args, context=None):
+        raise NotImplementedError
+
+    def time(self):
+        raise NotImplementedError
+
+    def call_soon_threadsafe(self, callback, *args, context=None):
+        raise NotImplementedError
+
+    def run_in_executor(self, executor, func, *args):
+        raise NotImplementedError
+
+    def set_default_executor(self, executor):
+        raise NotImplementedError
+
+    async def getaddrinfo(self, host, port, *,
+                          family=0, type=0, proto=0, flags=0):
+        raise NotImplementedError
+
+    async def getnameinfo(self, sockaddr, flags=0):
+        raise NotImplementedError
+
+    async def create_connection(
+            self, protocol_factory, host=None, port=None,
+            *, ssl=None, family=0, proto=0,
+            flags=0, sock=None, local_addr=None,
+            server_hostname=None,
+            ssl_handshake_timeout=None,
+            ssl_shutdown_timeout=None,
+            happy_eyeballs_delay=None, interleave=None):
+        raise NotImplementedError
+
+    async def create_server(
+            self, protocol_factory, host=None, port=None,
+            *, family=socket.AF_UNSPEC,
+            flags=socket.AI_PASSIVE, sock=None, backlog=100,
+            ssl=None, reuse_address=None, reuse_port=None,
+            ssl_handshake_timeout=None,
+            ssl_shutdown_timeout=None,
+            start_serving=True):
+        raise NotImplementedError
+
+    async def sendfile(self, transport, file, offset=0, count=None,
+                       *, fallback=True):
+        raise NotImplementedError
+
+    async def start_tls(self, transport, protocol, sslcontext, *,
+                        server_side=False,
+                        server_hostname=None,
+                        ssl_handshake_timeout=None,
+                        ssl_shutdown_timeout=None):
+        raise NotImplementedError
+
+    async def create_unix_connection(
+            self, protocol_factory, path=None, *,
+            ssl=None, sock=None,
+            server_hostname=None,
+            ssl_handshake_timeout=None,
+            ssl_shutdown_timeout=None):
+        raise NotImplementedError
+
+    async def create_unix_server(
+            self, protocol_factory, path=None, *,
+            sock=None, backlog=100, ssl=None,
+            ssl_handshake_timeout=None,
+            ssl_shutdown_timeout=None,
+            start_serving=True):
+        raise NotImplementedError
+
+    async def connect_accepted_socket(
+            self, protocol_factory, sock,
+            *, ssl=None,
+            ssl_handshake_timeout=None,
+            ssl_shutdown_timeout=None):
+        raise NotImplementedError
+
+    async def create_datagram_endpoint(self, protocol_factory,
+                                       local_addr=None, remote_addr=None, *,
+                                       family=0, proto=0, flags=0,
+                                       reuse_address=None, reuse_port=None,
+                                       allow_broadcast=None, sock=None):
+        raise NotImplementedError
+
+    async def connect_read_pipe(self, protocol_factory, pipe):
+        raise NotImplementedError
+
+    async def connect_write_pipe(self, protocol_factory, pipe):
+        raise NotImplementedError
+
+    async def subprocess_shell(self, protocol_factory, cmd, *,
+                               stdin=subprocess.PIPE,
+                               stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE,
+                               **kwargs):
+        raise NotImplementedError
+
+    async def subprocess_exec(self, protocol_factory, *args,
+                              stdin=subprocess.PIPE,
+                              stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE,
+                              **kwargs):
+        raise NotImplementedError
+
+    def add_reader(self, fd, callback, *args):
+        raise NotImplementedError
+
+    def remove_reader(self, fd):
+        raise NotImplementedError
+
+    def add_writer(self, fd, callback, *args):
+        raise NotImplementedError
+
+    def remove_writer(self, fd):
+        raise NotImplementedError
+
+    async def sock_recv(self, sock, nbytes):
+        raise NotImplementedError
+
+    async def sock_recv_into(self, sock, buf):
+        raise NotImplementedError
+
+    async def sock_recvfrom(self, sock, bufsize):
+        raise NotImplementedError
+
+    async def sock_recvfrom_into(self, sock, buf, nbytes=0):
+        raise NotImplementedError
+
+    async def sock_sendall(self, sock, data):
+        raise NotImplementedError
+
+    async def sock_sendto(self, sock, data, address):
+        raise NotImplementedError
+
+    async def sock_connect(self, sock, address):
+        raise NotImplementedError
+
+    async def sock_accept(self, sock):
+        raise NotImplementedError
+
+    async def sock_sendfile(self, sock, file, offset=0, count=None,
+                            *, fallback=None):
+        raise NotImplementedError
+
+    def add_signal_handler(self, sig, callback, *args):
+        raise NotImplementedError
+
+    def remove_signal_handler(self, sig):
+        raise NotImplementedError
+
+    def set_task_factory(self, factory):
+        raise NotImplementedError
+
+    def get_task_factory(self):
+        raise NotImplementedError
+
+    def get_exception_handler(self):
+        raise NotImplementedError
+
+    def set_exception_handler(self, handler):
+        raise NotImplementedError
+
+    def default_exception_handler(self, context):
+        raise NotImplementedError
+
+    def set_debug(self, enabled):
+        raise NotImplementedError
+
+@dataclass
+class _FutureStatePending:
+    ready: Ready
+    future: Any
+
+@dataclass
+class _FutureStateReady:
+    result: Any
+
+_FutureState = Union[_FutureStatePending, _FutureStateReady]
+
+@dataclass
+class _ListenState:
+    future: Any
+    future_state: int
+      
+@dataclass
+class _PendingState:
+    pending: Pending
+    future: Any
+
+_loop = Loop()
+asyncio.set_event_loop(_loop)
+_loop.running = True
+asyncio.events._set_running_loop(_loop)
+
+_pending: list[_PendingState] = []
+_poll_output: list[PollOutput] = []
+_listen_states: dict[int, _ListenState] = {}
+_next_listen_state: int = 0
+_future_states: dict[int, _FutureState] = {}
+_next_future_state: int = 0
+_pollables: set[int] = set()
+
+def _poll_future(future: Any):
+    raise NotImplementedError
+
+def _push_listens(future_state: int):
+    global _pending
+    pending = _pending
+    _pending = []
+    for p in pending:
+        # todo: wrap around at 2^32 and then skip any used slots        
+        listen_state = _next_listen_state
+        _next_listen_state += 1
+        _listen_states[listen_state] = _ListenState(p.future, future_state)
+        
+        _poll_output.append(PollOutput_Listen(PollOutputListen(listen_state, p.pending)))
+
+def first_poll(coroutine: Any) -> Any:
+    future = asyncio.ensure_future(coroutine, loop=_loop)
+    _loop.poll_all()
+
+    if future.done():
+        _pending.clear()
+        return future.result()
+    else:
+        pending, cancel, ready = isyswasfa.make_task()
+
+        # todo: wrap around at 2^32 and then skip any used slots
+        future_state = _next_future_state
+        _next_future_state += 1
+        _future_states[future_state] = _FutureStatePending(ready, future)
+        
+        _push_listens(future_state)
+        _poll_output.append(PollOutput_Pending(PollOutputPending(future_state, cancel)))
+        
+        raise Err(pending)
+
+def get_ready(ready: Ready) -> Any:
+    with ready as ready:
+        value = _future_states.pop(ready.state())
+        assert isinstance(value, _FutureStateReady)
+        return value.result
+
+async def await_ready(pending: Pending) -> Ready:
+    future = _loop.create_future()
+    _pending.append(_PendingState(pending, future))
+    return await future
+
+def poll(input: list[PollInput]) -> list[PollOutput]:
+    for i in input:
+        if isinstance(i, PollInput_Ready):
+            value = i.value
+            listen_state = _listen_states.pop(value.state)
+
+            if listen_state.future is not None:
+                listen_state.future.set_result(value.ready)
+                listen_state.future = None
+
+            _pollables.add(listen_state.future_state)
+        elif isinstance(i, PollInput_Listening):
+            # TODO: store or use `i.value.cancel`
+            i.value.cancel.__exit__()
+            pass
+        else:
+            raise NotImplementedError("todo: handle cancellation")
+                
+    while True:
+        global _pollables
+        pollables = _pollables
+        _pollables = set()
+
+        if pollables:
+            for future_state in pollables:
+                state = _future_states[future_state]
+                assert isinstance(state, _FutureStatePending)
+                _loop.poll_all()
+                
+                if state.future.done():
+                    _pending.clear()
+
+                    _future_states[future_state] = _FutureStateReady(state.future.result())
+
+                    _poll_output.append(PollOutput_Ready(PollOutputReady(future_state, state.ready)))
+                else:
+                    _push_listens(future_state)
+        else:
+            global _poll_output
+            poll_output = _poll_output
+            _poll_output = []
+            return poll_output
