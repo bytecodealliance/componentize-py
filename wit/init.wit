@@ -4,6 +4,12 @@ world init {
     import wasi:cli/environment@0.2.0;
 
     export exports: interface {
+        record bundled {
+            module: string,
+            protocol: string,
+            name: string
+        }
+
         record function {
             protocol: string,
             name: string
@@ -21,7 +27,8 @@ world init {
         }
 
         variant function-export {
-            freestanding(%function),
+            bundled(bundled),
+            freestanding(function),
             %constructor(%constructor),
             %method(string),
             %static(%static)

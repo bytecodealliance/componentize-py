@@ -4,8 +4,8 @@ use {
     anyhow::{Error, Result},
     componentize_py_shared::ReturnStyle,
     exports::exports::{
-        self as exp, Constructor, Function, FunctionExport, Guest, LocalResource, OwnedKind,
-        OwnedType, RemoteResource, Resource, Static, Symbols,
+        self as exp, Bundled, Constructor, Function, FunctionExport, Guest, LocalResource,
+        OwnedKind, OwnedType, RemoteResource, Resource, Static, Symbols,
     },
     num_bigint::BigUint,
     once_cell::sync::OnceCell,
@@ -190,6 +190,18 @@ fn do_init(app_name: String, symbols: Symbols) -> Result<()> {
                     .iter()
                     .map(|export| {
                         Ok(match export {
+                            FunctionExport::Bundled(Bundled {
+                                module,
+                                protocol,
+                                name,
+                            }) => Export::Freestanding {
+                                name: PyString::intern(py, name).into(),
+                                instance: py
+                                    .import(module.as_str())?
+                                    .getattr(protocol.as_str())?
+                                    .call0()?
+                                    .into(),
+                            },
                             FunctionExport::Freestanding(Function { protocol, name }) => {
                                 Export::Freestanding {
                                     name: PyString::intern(py, name).into(),

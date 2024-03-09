@@ -1,156 +1,41 @@
-"""Defines a custom `asyncio` event loop backed by `wasi:io/poll#poll`.
-
-This also includes helper classes and functions for working with `wasi:http`.
-
-As of WASI Preview 2, there is not yet a standard for first-class, composable
-asynchronous functions and streams.  We expect that little or none of this
-boilerplate will be needed once those features arrive in Preview 3.
-"""
-
 import asyncio
 import socket
 import subprocess
+from dataclasses import dataclass
+from typing import Any, Union, Optional
+from contextvars import ContextVar, Context
 
-from proxy.types import Ok, Err
-from proxy.imports import types, streams, poll, outgoing_handler
-from proxy.imports.types import IncomingBody, OutgoingBody, OutgoingRequest, IncomingResponse
-from proxy.imports.streams import StreamErrorClosed, InputStream
-from proxy.imports.poll import Pollable
-from typing import Optional, cast
+from proxy.types import Result, Ok, Err
+from proxy.imports import isyswasfa
+from proxy.imports.isyswasfa import (
+    PollInput, PollInput_Ready, PollInputReady, PollInput_Listening, PollOutput, PollOutput_Listen,
+    PollOutputListen, PollOutput_Pending, PollOutputPending, PollOutput_Ready, PollOutputReady, Ready, Pending,
+    Cancel
+)
 
-# Maximum number of bytes to read at a time
-READ_SIZE: int = 16 * 1024
+_future_state: ContextVar[int] = ContextVar("_future_state")
 
-async def send(request: OutgoingRequest) -> IncomingResponse:
-    """Send the specified request and wait asynchronously for the response."""
-    
-    future = outgoing_handler.handle(request, None)
-
-    while True:
-        response = future.get()
-        if response is None:
-            await register(cast(PollLoop, asyncio.get_event_loop()), future.subscribe())
-        else:
-            if isinstance(response, Ok):
-                if isinstance(response.value, Ok):
-                    return response.value.value
-                else:
-                    raise response.value
-            else:
-                raise response
-
-class Stream:
-    """Reader abstraction over `wasi:http/types#incoming-body`."""
-    def __init__(self, body: IncomingBody):
-        self.body: Optional[IncomingBody] = body
-        self.stream: Optional[InputStream] = body.stream()
-
-    async def next(self) -> Optional[bytes]:
-        """Wait for the next chunk of data to arrive on the stream.
-
-        This will return `None` when the end of the stream has been reached.
-        """
-        while True:
-            try:
-                if self.stream is None:
-                    return None
-                else:
-                    buffer = self.stream.read(READ_SIZE)
-                    if len(buffer) == 0:
-                        await register(cast(PollLoop, asyncio.get_event_loop()), self.stream.subscribe())
-                    else:
-                        return buffer
-            except Err as e:
-                if isinstance(e.value, StreamErrorClosed):
-                    if self.stream is not None:
-                        self.stream.__exit__()
-                        self.stream = None
-                    if self.body is not None:
-                        IncomingBody.finish(self.body)
-                        self.body = None
-                else:
-                    raise e
-
-class Sink:
-    """Writer abstraction over `wasi:http/types#outgoing-body`."""
-    def __init__(self, body: OutgoingBody):
-        self.body = body
-        self.stream = body.write()
-
-    async def send(self, chunk: bytes):
-        """Write the specified bytes to the sink.
-
-        This may need to yield according to the backpressure requirements of the sink.
-        """
-        offset = 0
-        flushing = False
-        while True:
-            count = self.stream.check_write()
-            if count == 0:
-                await register(cast(PollLoop, asyncio.get_event_loop()), self.stream.subscribe())
-            elif offset == len(chunk):
-                if flushing:
-                    return
-                else:
-                    self.stream.flush()
-                    flushing = True
-            else:
-                count = min(count, len(chunk) - offset)
-                self.stream.write(chunk[offset:offset+count])
-                offset += count
-
-    def close(self):
-        """Close the stream, indicating no further data will be written."""
-
-        self.stream.__exit__()
-        self.stream = None
-        OutgoingBody.finish(self.body, None)
-        self.body = None
-        
-class PollLoop(asyncio.AbstractEventLoop):
-    """Custom `asyncio` event loop backed by `wasi:io/poll#poll`."""
-    
+class _Loop(asyncio.AbstractEventLoop):
     def __init__(self):
-        self.wakers = []
-        self.running = False
-        self.handles = []
-        self.exception = None
+        self.running: bool = False
+        self.handles: dict[int, list[asyncio.Handle]] = {}
+        self.exception: Optional[Any] = None
 
-    def get_debug(self):
-        return False
-
-    def run_until_complete(self, future):
-        future = asyncio.ensure_future(future, loop=self)
-
-        self.running = True
-        asyncio.events._set_running_loop(self)
-        while self.running and not future.done():
-            handle = self.handles[0]
-            self.handles = self.handles[1:]
-            if not handle._cancelled:
-                handle._run()
+    def poll(self, future_state: int):
+        while True:
+            handles = self.handles.pop(future_state, [])
+            for handle in handles:
+                if not handle._cancelled:
+                    handle._run()
                 
-            if self.wakers:
-                [pollables, wakers] = list(map(list, zip(*self.wakers)))
-                
-                new_wakers = []
-                ready = [False] * len(pollables)
-                for index in poll.poll(pollables):
-                    ready[index] = True
-                
-                for (ready, pollable), waker in zip(zip(ready, pollables), wakers):
-                    if ready:
-                        pollable.__exit__()
-                        waker.set_result(None)
-                    else:
-                        new_wakers.append((pollable, waker))
-
-                self.wakers = new_wakers
-
             if self.exception is not None:
                 raise self.exception
-            
-        return future.result()
+
+            if len(handles) == 0:
+                return
+    
+    def get_debug(self):
+        return False
 
     def is_running(self):
         return self.running
@@ -171,17 +56,26 @@ class PollLoop(asyncio.AbstractEventLoop):
         self.exception = context.get('exception', None)
 
     def call_soon(self, callback, *args, context=None):
+        global _pollables
+
+        future_state = context[_future_state]
         handle = asyncio.Handle(callback, args, self, context)
-        self.handles.append(handle)
+        if self.handles.get(future_state) is None:
+            self.handles[future_state] = []
+        self.handles[future_state].append(handle)
+        _pollables.add(future_state)
         return handle
 
-    def create_task(self, coroutine):
-        return asyncio.Task(coroutine, loop=self)
+    def create_task(self, coroutine, context=None):
+        return asyncio.Task(coroutine, loop=self, context=context) # type: ignore
 
     def create_future(self):
         return asyncio.Future(loop=self)
 
     # The remaining methods should be irrelevant for our purposes and thus unimplemented
+
+    def run_until_complete(self, future):
+        raise NotImplementedError
 
     def run_forever(self):
         raise NotImplementedError
@@ -362,7 +256,175 @@ class PollLoop(asyncio.AbstractEventLoop):
     def set_debug(self, enabled):
         raise NotImplementedError
 
-async def register(loop: PollLoop, pollable: Pollable):
-    waker = loop.create_future()
-    loop.wakers.append((pollable, waker))
-    await waker
+@dataclass
+class _FutureStatePending:
+    ready: Ready
+    future: Any
+
+@dataclass
+class _FutureStateReady:
+    result: Any
+
+_FutureState = Union[_FutureStatePending, _FutureStateReady]
+
+@dataclass
+class _ListenState:
+    future: Any
+    future_state: int
+    cancel: Optional[Cancel]
+      
+@dataclass
+class _PendingState:
+    pending: Pending
+    future: Any
+
+_loop = _Loop()
+asyncio.set_event_loop(_loop)
+_loop.running = True
+asyncio.events._set_running_loop(_loop)
+
+_pending: list[_PendingState] = []
+_poll_output: list[PollOutput] = []
+_listen_states: dict[int, _ListenState] = {}
+_next_listen_state: int = 0
+_future_states: dict[int, _FutureState] = {}
+_next_future_state: int = 0
+_pollables: set[int] = set()
+
+def _set_future_state(future_state: int):
+    _future_state.set(future_state)
+
+def _poll_future(future: Any):
+    raise NotImplementedError
+
+def _push_listens(future_state: int):
+    global _pending
+    global _poll_output
+    global _next_listen_state
+    global _listen_states
+    
+    pending = _pending
+    _pending = []
+    for p in pending:
+        # todo: wrap around at 2^32 and then skip any used slots        
+        listen_state = _next_listen_state
+        _next_listen_state += 1
+        _listen_states[listen_state] = _ListenState(p.future, future_state, None)
+        
+        _poll_output.append(PollOutput_Listen(PollOutputListen(listen_state, p.pending)))
+
+def first_poll(coroutine: Any) -> Result[Any, Any]:
+    return _first_poll(coroutine, True)
+    
+def _first_poll(coroutine: Any, poll: bool) -> Result[Any, Any]:
+    global _loop
+    global _pending
+    global _next_future_state
+    global _future_states
+    global _poll_output
+    
+    # todo: wrap around at 2^32 and then skip any used slots
+    future_state = _next_future_state
+    _next_future_state += 1
+    _future_states[future_state] = _FutureStateReady(None)
+
+    context = Context()
+    context.run(_set_future_state, future_state)
+    future = asyncio.create_task(coroutine, context=context)
+    
+    if poll:
+        _loop.poll(future_state)
+
+    if future.done():
+        _pending.clear()
+        _future_states.pop(future_state)
+        _pollables.remove(future_state)
+        try:
+            return Ok(future.result())
+        except Err as e:
+            return e
+    else:
+        pending, cancel, ready = isyswasfa.make_task()
+
+        _future_states[future_state] = _FutureStatePending(ready, future)
+        
+        _push_listens(future_state)
+        _poll_output.append(PollOutput_Pending(PollOutputPending(future_state, cancel)))
+        
+        raise Err(pending)
+
+def get_ready(ready: Ready) -> Any:
+    global _future_states
+    
+    with ready as ready:
+        value = _future_states.pop(ready.state())
+        assert isinstance(value, _FutureStateReady)
+        return value.result
+    
+async def await_ready(pending: Pending) -> Ready:
+    global _loop
+    global _pending
+
+    future = _loop.create_future()
+    _pending.append(_PendingState(pending, future))
+    return await future
+
+def poll(input: list[PollInput]) -> list[PollOutput]:
+    global _loop
+    global _pending
+    global _pollables
+    global _poll_output
+    global _listen_states
+    global _future_states
+
+    for i in input:
+        if isinstance(i, PollInput_Ready):
+            value = i.value
+            listen_state = _listen_states.pop(value.state)
+
+            if listen_state.future is not None:
+                listen_state.future.set_result(value.ready)
+                listen_state.future = None
+
+            if listen_state.cancel is not None:
+                listen_state.cancel.__exit__()
+        elif isinstance(i, PollInput_Listening):
+            _listen_states[i.value.state].cancel = i.value.cancel
+        else:
+            raise NotImplementedError("todo: handle cancellation")
+                
+    while True:
+        pollables = _pollables
+        _pollables = set()
+
+        if pollables:
+            for future_state in pollables:
+                state = _future_states[future_state]
+                if isinstance(state, _FutureStatePending):
+                    _loop.poll(future_state)
+                
+                    if state.future.done():
+                        _pending.clear()
+
+                        _future_states[future_state] = _FutureStateReady(state.future.result())
+
+                        _poll_output.append(PollOutput_Ready(PollOutputReady(future_state, state.ready)))
+                    else:
+                        _push_listens(future_state)
+        else:
+            poll_output = _poll_output
+            _poll_output = []
+            return poll_output
+
+def spawn(coroutine: Any):
+    global _pending
+    
+    pending = _pending
+    _pending = []
+    
+    try:
+        _first_poll(coroutine, False)
+    except Err as e:
+        e.value.__exit__()
+        
+    _pending = pending

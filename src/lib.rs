@@ -61,16 +61,10 @@ pub struct Ctx {
 }
 
 impl WasiView for Ctx {
-    fn ctx(&self) -> &WasiCtx {
-        &self.wasi
-    }
-    fn ctx_mut(&mut self) -> &mut WasiCtx {
+    fn ctx(&mut self) -> &mut WasiCtx {
         &mut self.wasi
     }
-    fn table(&self) -> &ResourceTable {
-        &self.table
-    }
-    fn table_mut(&mut self) -> &mut ResourceTable {
+    fn table(&mut self) -> &mut ResourceTable {
         &mut self.table
     }
 }
@@ -183,11 +177,15 @@ pub fn generate_bindings(
     world: Option<&str>,
     world_module: Option<&str>,
     output_dir: &Path,
+    isyswasfa: Option<&str>,
 ) -> Result<()> {
     // TODO: Split out and reuse the code responsible for finding and using componentize-py.toml files in the
     // `componentize` function below, since that can affect the bindings we should be generating.
 
-    let (resolve, world) = parse_wit(wit_path, world)?;
+    let (mut resolve, world) = parse_wit(wit_path, world)?;
+    if let Some(suffix) = isyswasfa {
+        isyswasfa_transform::transform(&mut resolve, world, Some(suffix));
+    }
     let summary = Summary::try_new(&resolve, &iter::once(world).collect())?;
     let world_name = resolve.worlds[world].name.to_snake_case().escape();
     let world_module = world_module.unwrap_or(&world_name);
@@ -199,12 +197,13 @@ pub fn generate_bindings(
         world_module,
         &mut Locations::default(),
         true,
+        isyswasfa,
     )?;
 
     Ok(())
 }
 
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub async fn componentize(
     wit_path: Option<&Path>,
     world: Option<&str>,
@@ -213,6 +212,7 @@ pub async fn componentize(
     app_name: &str,
     output_path: &Path,
     add_to_linker: Option<&dyn Fn(&mut Linker<Ctx>) -> Result<()>>,
+    isyswasfa: Option<&str>,
 ) -> Result<()> {
     // Untar the embedded copy of the Python standard library into a temporary directory
     let stdlib = tempfile::tempdir()?;
@@ -223,7 +223,7 @@ pub async fn componentize(
     ))))?)
     .unpack(stdlib.path())?;
 
-    // Untar the embedded copy of helper utilties into a temporary directory
+    // Untar the embedded copy of helper utilities into a temporary directory
     let bundled = tempfile::tempdir()?;
 
     Archive::new(Decoder::new(Cursor::new(include_bytes!(concat!(
@@ -324,7 +324,7 @@ pub async fn componentize(
         })
         .collect::<Result<IndexMap<_, _>>>()?;
 
-    let resolve = if let Some(resolve) = resolve {
+    let mut resolve = if let Some(resolve) = resolve {
         resolve
     } else {
         // If no WIT directory was provided as a parameter and none were referenced by Python packages, use ./wit
@@ -345,6 +345,14 @@ pub async fn componentize(
         .filter_map(|(_, world)| *world)
         .chain(main_world)
         .collect::<IndexSet<_>>();
+
+    if let Some(suffix) = isyswasfa {
+        let mut suffix = Some(suffix);
+        for &world in &worlds {
+            isyswasfa_transform::transform(&mut resolve, world, suffix);
+            suffix = None;
+        }
+    }
 
     let summary = Summary::try_new(&resolve, &worlds)?;
 
@@ -538,6 +546,7 @@ pub async fn componentize(
             &binding_module,
             &mut locations,
             false,
+            isyswasfa,
         )?;
 
         world_dir_mounts.push((
@@ -555,8 +564,35 @@ pub async fn componentize(
         let world_dir = tempfile::tempdir()?;
         let module_path = world_dir.path().join(&module);
         fs::create_dir_all(&module_path)?;
-        summary.generate_code(&module_path, world, &module, &mut locations, false)?;
+        summary.generate_code(
+            &module_path,
+            world,
+            &module,
+            &mut locations,
+            false,
+            isyswasfa,
+        )?;
         world_dir_mounts.push((vec!["world".to_owned()], world_dir));
+
+        // The helper utilities are hard-coded to assume the world module is named `proxy`.  Here we replace that
+        // with the actual world name.
+        fn replace(path: &Path, pattern: &str, replacement: &str) -> Result<()> {
+            if path.is_dir() {
+                for entry in fs::read_dir(path)? {
+                    replace(&entry?.path(), pattern, replacement)?;
+                }
+            } else {
+                fs::write(
+                    path,
+                    fs::read_to_string(path)?
+                        .replace(pattern, replacement)
+                        .as_bytes(),
+                )?;
+            }
+
+            Ok(())
+        }
+        replace(bundled.path(), "proxy", &module)?;
     };
 
     for (mounts, world_dir) in world_dir_mounts.iter() {
@@ -573,9 +609,9 @@ pub async fn componentize(
 
     // Generate a `Symbols` object containing metadata to be passed to the pre-init function.  The runtime library
     // will use this to look up types and functions that will later be referenced by the generated Wasm code.
-    let symbols = summary.collect_symbols(&locations);
+    let symbols = summary.collect_symbols(&locations, isyswasfa);
 
-    // Finally, pre-initialize the component writing the result to `output_path`.
+    // Finally, pre-initialize the component, writing the result to `output_path`.
 
     let python_path = (0..python_path.len())
         .map(|index| format!("/{index}"))
@@ -586,7 +622,7 @@ pub async fn componentize(
     let wasi = wasi
         .env(
             "PYTHONPATH",
-            format!("/python:/bundled:/world:{python_path}"),
+            format!("/python:/world:{python_path}:/bundled"),
         )
         .build();
 
