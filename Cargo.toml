@@ -23,9 +23,9 @@ indexmap = "2.1.0"
 bincode = "1.3.3"
 heck = "0.4.1"
 pyo3 = { version = "0.20.0", features = ["abi3-py37", "extension-module"], optional = true }
-wasmtime-wasi = "17.0.0"
-wasi-common = "17.0.0"
-wasmtime = "17.0.0"
+wasmtime = { path = "../wasmtime/crates/wasmtime", features = ["component-model"] }
+wasmtime-wasi = { path = "../wasmtime/crates/wasi" }
+wasi-common = { path = "../wasmtime/crates/wasi-common" }
 once_cell = "1.18.0"
 component-init = { git = "https://github.com/dicej/component-init" }
 async-trait = "0.1.74"
@@ -37,6 +37,8 @@ cap-std = "2.0.0"
 im-rc = "15.1.0"
 serde = { version = "1.0.193", features = ["derive"] }
 toml = "0.8.8"
+isyswasfa-transform = { path = "../transform" }
+semver = "1.0.22"
 
 [dev-dependencies]
 async-trait = "0.1.74"
