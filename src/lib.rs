@@ -61,16 +61,10 @@ pub struct Ctx {
 }
 
 impl WasiView for Ctx {
-    fn ctx(&self) -> &WasiCtx {
-        &self.wasi
-    }
-    fn ctx_mut(&mut self) -> &mut WasiCtx {
+    fn ctx(&mut self) -> &mut WasiCtx {
         &mut self.wasi
     }
-    fn table(&self) -> &ResourceTable {
-        &self.table
-    }
-    fn table_mut(&mut self) -> &mut ResourceTable {
+    fn table(&mut self) -> &mut ResourceTable {
         &mut self.table
     }
 }
@@ -229,7 +223,7 @@ pub async fn componentize(
     ))))?)
     .unpack(stdlib.path())?;
 
-    // Untar the embedded copy of helper utilties into a temporary directory
+    // Untar the embedded copy of helper utilities into a temporary directory
     let bundled = tempfile::tempdir()?;
 
     Archive::new(Decoder::new(Cursor::new(include_bytes!(concat!(
@@ -579,6 +573,26 @@ pub async fn componentize(
             isyswasfa,
         )?;
         world_dir_mounts.push((vec!["world".to_owned()], world_dir));
+
+        // The helper utilities are hard-coded to assume the world module is named `proxy`.  Here we replace that
+        // with the actual world name.
+        fn replace(path: &Path, pattern: &str, replacement: &str) -> Result<()> {
+            if path.is_dir() {
+                for entry in fs::read_dir(path)? {
+                    replace(&entry?.path(), pattern, replacement)?;
+                }
+            } else {
+                fs::write(
+                    path,
+                    fs::read_to_string(path)?
+                        .replace(pattern, replacement)
+                        .as_bytes(),
+                )?;
+            }
+
+            Ok(())
+        }
+        replace(bundled.path(), "proxy", &module)?;
     };
 
     for (mounts, world_dir) in world_dir_mounts.iter() {
@@ -595,7 +609,7 @@ pub async fn componentize(
 
     // Generate a `Symbols` object containing metadata to be passed to the pre-init function.  The runtime library
     // will use this to look up types and functions that will later be referenced by the generated Wasm code.
-    let symbols = summary.collect_symbols(&locations);
+    let symbols = summary.collect_symbols(&locations, isyswasfa);
 
     // Finally, pre-initialize the component, writing the result to `output_path`.
 

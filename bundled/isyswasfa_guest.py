@@ -2,13 +2,14 @@ import asyncio
 import socket
 import subprocess
 from dataclasses import dataclass
-from typing import Any, Union
+from typing import Any, Union, Optional
 
 from proxy.types import Err
 from proxy.imports import isyswasfa
 from proxy.imports.isyswasfa import (
     PollInput, PollInput_Ready, PollInputReady, PollInput_Listening, PollOutput, PollOutput_Listen,
-    PollOutputListen, PollOutput_Pending, PollOutputPending, PollOutput_Ready, PollOutputReady, Ready, Pending
+    PollOutputListen, PollOutput_Pending, PollOutputPending, PollOutput_Ready, PollOutputReady, Ready, Pending,
+    Cancel
 )
 
 class Loop(asyncio.AbstractEventLoop):
@@ -258,6 +259,7 @@ _FutureState = Union[_FutureStatePending, _FutureStateReady]
 class _ListenState:
     future: Any
     future_state: int
+    cancel: Optional[Cancel]
       
 @dataclass
 class _PendingState:
@@ -282,17 +284,27 @@ def _poll_future(future: Any):
 
 def _push_listens(future_state: int):
     global _pending
+    global _poll_output
+    global _next_listen_state
+    global _listen_states
+    
     pending = _pending
     _pending = []
     for p in pending:
         # todo: wrap around at 2^32 and then skip any used slots        
         listen_state = _next_listen_state
         _next_listen_state += 1
-        _listen_states[listen_state] = _ListenState(p.future, future_state)
+        _listen_states[listen_state] = _ListenState(p.future, future_state, None)
         
         _poll_output.append(PollOutput_Listen(PollOutputListen(listen_state, p.pending)))
 
 def first_poll(coroutine: Any) -> Any:
+    global _loop
+    global _pending
+    global _next_future_state
+    global _future_states
+    global _poll_output
+    
     future = asyncio.ensure_future(coroutine, loop=_loop)
     _loop.poll_all()
 
@@ -313,17 +325,29 @@ def first_poll(coroutine: Any) -> Any:
         raise Err(pending)
 
 def get_ready(ready: Ready) -> Any:
+    global _future_states
+    
     with ready as ready:
         value = _future_states.pop(ready.state())
         assert isinstance(value, _FutureStateReady)
         return value.result
-
+    
 async def await_ready(pending: Pending) -> Ready:
+    global _loop
+    global _pending
+
     future = _loop.create_future()
     _pending.append(_PendingState(pending, future))
     return await future
 
 def poll(input: list[PollInput]) -> list[PollOutput]:
+    global _loop
+    global _pending
+    global _pollables
+    global _poll_output
+    global _listen_states
+    global _future_states
+
     for i in input:
         if isinstance(i, PollInput_Ready):
             value = i.value
@@ -333,16 +357,16 @@ def poll(input: list[PollInput]) -> list[PollOutput]:
                 listen_state.future.set_result(value.ready)
                 listen_state.future = None
 
+            if listen_state.cancel is not None:
+                listen_state.cancel.__exit__()
+
             _pollables.add(listen_state.future_state)
         elif isinstance(i, PollInput_Listening):
-            # TODO: store or use `i.value.cancel`
-            i.value.cancel.__exit__()
-            pass
+            _listen_states[i.value.state].cancel = i.value.cancel
         else:
             raise NotImplementedError("todo: handle cancellation")
                 
     while True:
-        global _pollables
         pollables = _pollables
         _pollables = set()
 
@@ -361,7 +385,6 @@ def poll(input: list[PollInput]) -> list[PollOutput]:
                 else:
                     _push_listens(future_state)
         else:
-            global _poll_output
             poll_output = _poll_output
             _poll_output = []
             return poll_output

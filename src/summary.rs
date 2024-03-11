@@ -3,15 +3,16 @@ use {
         abi::{self, MAX_FLAT_PARAMS, MAX_FLAT_RESULTS},
         bindgen::{self, DISPATCHABLE_CORE_PARAM_COUNT},
         exports::exports::{
-            self, Case, Constructor, Function, FunctionExport, LocalResource, OwnedKind, OwnedType,
-            RemoteResource, Resource, Static, Symbols,
+            self, Bundled, Case, Constructor, Function, FunctionExport, LocalResource, OwnedKind,
+            OwnedType, RemoteResource, Resource, Static, Symbols,
         },
         util::Types as _,
     },
     anyhow::{bail, Result},
     heck::{ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase},
     indexmap::{IndexMap, IndexSet},
-    once_cell::sync::Lazy,
+    once_cell::{sync, unsync},
+    semver::Version,
     std::{
         collections::{hash_map::Entry, HashMap, HashSet},
         fmt::Write as _,
@@ -65,6 +66,7 @@ pub enum FunctionKind {
 pub struct PackageName<'a> {
     pub namespace: &'a str,
     pub name: &'a str,
+    pub version: Option<&'a Version>,
 }
 
 #[derive(Clone)]
@@ -170,7 +172,9 @@ impl<'a> MyFunction<'a> {
     }
 }
 
+#[derive(Copy, Clone)]
 pub struct InterfaceInfo<'a> {
+    package: Option<PackageName<'a>>,
     name: &'a str,
     docs: Option<&'a str>,
 }
@@ -223,6 +227,8 @@ pub struct Summary<'a> {
     dispatch_count: usize,
     world_types: HashMap<WorldId, HashSet<TypeId>>,
     world_keys: HashMap<WorldId, HashSet<(Direction, WorldKey)>>,
+    imported_interface_names: HashMap<InterfaceId, String>,
+    exported_interface_names: HashMap<InterfaceId, String>,
 }
 
 impl<'a> Summary<'a> {
@@ -243,6 +249,8 @@ impl<'a> Summary<'a> {
             dispatch_count: 0,
             world_types: HashMap::new(),
             world_keys: HashMap::new(),
+            imported_interface_names: HashMap::new(),
+            exported_interface_names: HashMap::new(),
         };
 
         let mut import_keys_seen = HashSet::new();
@@ -263,6 +271,9 @@ impl<'a> Summary<'a> {
         }
 
         me.types = me.types_sorted();
+
+        me.imported_interface_names = me.interface_names(me.imported_interfaces.keys().copied());
+        me.exported_interface_names = me.interface_names(me.exported_interfaces.keys().copied());
 
         Ok(me)
     }
@@ -372,10 +383,11 @@ impl<'a> Summary<'a> {
                                 Direction::Import => {
                                     info.remote_dispatch_index = Some(self.dispatch_count);
 
-                                    static DROP_PARAMS: Lazy<[(String, Type); 1]> =
-                                        Lazy::new(|| [("handle".to_string(), Type::U32)]);
+                                    static DROP_PARAMS: sync::Lazy<[(String, Type); 1]> =
+                                        sync::Lazy::new(|| [("handle".to_string(), Type::U32)]);
 
-                                    static DROP_RESULTS: Lazy<Results> = Lazy::new(Results::empty);
+                                    static DROP_RESULTS: sync::Lazy<Results> =
+                                        sync::Lazy::new(Results::empty);
 
                                     self.push_function(make(
                                         FunctionKind::ResourceDropRemote,
@@ -391,8 +403,8 @@ impl<'a> Summary<'a> {
                                     // initialization order in `summarize_type`.
                                     // TODO: make this less fragile.
 
-                                    static NEW_PARAMS: Lazy<[(String, Type); 1]> =
-                                        Lazy::new(|| [("rep".to_string(), Type::U32)]);
+                                    static NEW_PARAMS: sync::Lazy<[(String, Type); 1]> =
+                                        sync::Lazy::new(|| [("rep".to_string(), Type::U32)]);
 
                                     static NEW_RESULTS: Results = Results::Anon(Type::U32);
 
@@ -402,8 +414,8 @@ impl<'a> Summary<'a> {
                                         &NEW_RESULTS,
                                     ));
 
-                                    static REP_PARAMS: Lazy<[(String, Type); 1]> =
-                                        Lazy::new(|| [("handle".to_string(), Type::U32)]);
+                                    static REP_PARAMS: sync::Lazy<[(String, Type); 1]> =
+                                        sync::Lazy::new(|| [("handle".to_string(), Type::U32)]);
 
                                     static REP_RESULTS: Results = Results::Anon(Type::U32);
 
@@ -413,10 +425,11 @@ impl<'a> Summary<'a> {
                                         &REP_RESULTS,
                                     ));
 
-                                    static DROP_PARAMS: Lazy<[(String, Type); 1]> =
-                                        Lazy::new(|| [("handle".to_string(), Type::U32)]);
+                                    static DROP_PARAMS: sync::Lazy<[(String, Type); 1]> =
+                                        sync::Lazy::new(|| [("handle".to_string(), Type::U32)]);
 
-                                    static DROP_RESULTS: Lazy<Results> = Lazy::new(Results::empty);
+                                    static DROP_RESULTS: sync::Lazy<Results> =
+                                        sync::Lazy::new(Results::empty);
 
                                     self.push_function(make(
                                         FunctionKind::ResourceDropLocal,
@@ -522,6 +535,7 @@ impl<'a> Summary<'a> {
                                             Some(PackageName {
                                                 namespace: &package_name.namespace,
                                                 name: &package_name.name,
+                                                version: package_name.version.as_ref(),
                                             }),
                                             name,
                                         )
@@ -536,6 +550,7 @@ impl<'a> Summary<'a> {
 
                     let interface = &self.resolve.interfaces[*id];
                     let info = InterfaceInfo {
+                        package,
                         name: item_name,
                         docs: interface.docs.contents.as_deref(),
                     };
@@ -681,14 +696,41 @@ impl<'a> Summary<'a> {
         }
     }
 
-    pub fn collect_symbols(&self, locations: &Locations) -> Symbols {
+    pub fn collect_symbols(&self, locations: &Locations, isyswasfa: Option<&str>) -> Symbols {
+        let only_one_world_export = unsync::Lazy::new(|| {
+            self.functions
+                .iter()
+                .filter(|function| {
+                    matches!(
+                        (&function.kind, &function.interface),
+                        (FunctionKind::Export, None)
+                    )
+                })
+                .count()
+                == 1
+        });
         let mut exports = Vec::new();
         for function in &self.functions {
             if let FunctionKind::Export = function.kind {
                 let scope = if let Some(interface) = &function.interface {
-                    interface.name
+                    &self.exported_interface_names[&interface.id]
                 } else {
-                    locations.keys.get(&function.key()).unwrap()
+                    let scope = locations.keys.get(&function.key()).unwrap();
+
+                    if let Some(suffix) = isyswasfa {
+                        if *only_one_world_export
+                            && function.name == format!("isyswasfa-poll{suffix}")
+                        {
+                            exports.push(FunctionExport::Bundled(Bundled {
+                                module: scope.to_snake_case().escape(),
+                                protocol: scope.to_upper_camel_case().escape(),
+                                name: self.function_name(function),
+                            }));
+                            continue;
+                        }
+                    }
+
+                    scope
                 };
 
                 exports.push(match function.wit_kind {
@@ -1046,7 +1088,7 @@ impl<'a> Summary<'a> {
         return_type: &str,
         docs: &str,
         need_isyswasfa_guest: &mut bool,
-    ) -> String {
+    ) -> (&'static str, String) {
         if let Some(prefix) = function.name.strip_suffix("-isyswasfa-start") {
             *need_isyswasfa_guest = true;
 
@@ -1065,20 +1107,27 @@ impl<'a> Summary<'a> {
                 wit_parser::FunctionKind::Constructor(_) => unreachable!(),
             };
 
-            format!(
-                "return isyswasfa_guest.first_poll({prefix}{name}({args}))
+            (
+                "",
+                format!(
+                    "return isyswasfa_guest.first_poll({prefix}{name}({args}))
 {class_method}
     @abstractmethod
     async def {name}({params}){return_type}:
         {docs}{NOT_IMPLEMENTED}
 "
+                ),
             )
         } else if function.name.ends_with("-isyswasfa-result") {
             *need_isyswasfa_guest = true;
 
-            "return isyswasfa_guest.get_ready(input)".into()
+            ("", "return isyswasfa_guest.get_ready(ready)".into())
         } else {
-            NOT_IMPLEMENTED.into()
+            (
+                "@abstractmethod
+    ",
+                NOT_IMPLEMENTED.into(),
+            )
         }
     }
 
@@ -1104,7 +1153,7 @@ impl<'a> Summary<'a> {
                 .map(|(name, _)| name.to_snake_case().escape())
                 .collect::<Vec<_>>()
                 .join(", ");
-            let result = format!("{name}-isyswasfa-result");
+            let result = format!("{name}_isyswasfa_result");
             let prefix = match function.wit_kind {
                 wit_parser::FunctionKind::Freestanding => "",
                 wit_parser::FunctionKind::Method(_) => "self.",
@@ -1118,12 +1167,77 @@ impl<'a> Summary<'a> {
 {indent}    {docs}try:
 {indent}        return {prefix}{snake}({args})
 {indent}    except Err as e:
-{indent}        return {prefix}{result}(await isyswasfa_guest::await_ready(e.value))
+{indent}        return {prefix}{result}(await isyswasfa_guest.await_ready(e.value))
 "
             )
         } else {
             String::new()
         }
+    }
+
+    fn interface_names(
+        &self,
+        ids: impl Iterator<Item = InterfaceId>,
+    ) -> HashMap<InterfaceId, String> {
+        let mut tree = HashMap::<_, HashMap<_, HashMap<_, _>>>::new();
+        for id in ids {
+            let info = if let Some(info) = self.imported_interfaces.get(&id) {
+                info
+            } else if let Some(info) = self.exported_interfaces.get(&id) {
+                info
+            } else {
+                unreachable!()
+            };
+
+            assert!(tree
+                .entry(info.name)
+                .or_default()
+                .entry(info.package.map(|p| (p.namespace, p.name)))
+                .or_default()
+                .insert(info.package.and_then(|p| p.version), id)
+                .is_none());
+        }
+
+        let mut names = HashMap::new();
+        for (name, packages) in &tree {
+            for (package, versions) in packages {
+                if let Some((package_namespace, package_name)) = package {
+                    for (version, id) in versions {
+                        assert!(names
+                            .insert(
+                                *id,
+                                if let Some(version) = version {
+                                    if versions.len() == 1 {
+                                        if packages.len() == 1 {
+                                            (*name).to_owned()
+                                        } else {
+                                            format!("{}-{}-{name}", package_namespace, package_name)
+                                        }
+                                    } else {
+                                        format!(
+                                            "{}-{}-{name}-{}",
+                                            package_namespace,
+                                            package_name,
+                                            version.to_string().replace('.', "-")
+                                        )
+                                    }
+                                } else if packages.len() == 1 {
+                                    (*name).to_owned()
+                                } else {
+                                    format!("{}-{}-{name}", package_namespace, package_name)
+                                }
+                            )
+                            .is_none());
+                    }
+                } else {
+                    assert!(names
+                        .insert(*versions.get(&None).unwrap(), (*name).to_owned())
+                        .is_none());
+                }
+            }
+        }
+
+        names
     }
 
     pub fn generate_code(
@@ -1174,8 +1288,8 @@ impl<'a> Summary<'a> {
             }
         };
 
-        let mut interface_imports = HashMap::<&str, Definitions>::new();
-        let mut interface_exports = HashMap::<&str, Definitions>::new();
+        let mut interface_imports = HashMap::<InterfaceId, Definitions>::new();
+        let mut interface_exports = HashMap::<InterfaceId, Definitions>::new();
         let mut world_imports = Definitions::default();
         let mut world_exports = Definitions::default();
         let mut seen = HashSet::new();
@@ -1524,7 +1638,7 @@ class {camel}:
 
                                 let docs = docstring(function.docs, 2, error.as_deref());
 
-                                let body = if isyswasfa.is_some() {
+                                let (abstract_method, body) = if isyswasfa.is_some() {
                                     self.async_export_code(
                                         function,
                                         class_method,
@@ -1534,13 +1648,16 @@ class {camel}:
                                         &mut need_isyswasfa_guest,
                                     )
                                 } else {
-                                    NOT_IMPLEMENTED.into()
+                                    (
+                                        "@abstractmethod
+    ",
+                                        NOT_IMPLEMENTED.into(),
+                                    )
                                 };
 
                                 format!(
                                     "{class_method}
-    @abstractmethod
-    def {snake}({params}){return_type}:
+    {abstract_method}def {snake}({params}){return_type}:
         {docs}{body}
 "
                                 )
@@ -1622,9 +1739,9 @@ class {camel}(Protocol):
                         Code::Shared(code) => vec![(
                             code,
                             if let Some(info) = self.imported_interfaces.get(&interface) {
-                                (interface_imports.entry(info.name).or_default(), info.docs)
+                                (interface_imports.entry(interface).or_default(), info.docs)
                             } else if let Some(info) = self.exported_interfaces.get(&interface) {
-                                (interface_exports.entry(info.name).or_default(), info.docs)
+                                (interface_exports.entry(interface).or_default(), info.docs)
                             } else {
                                 unreachable!()
                             },
@@ -1634,7 +1751,7 @@ class {camel}(Protocol):
                                 let info = self.imported_interfaces.get(&interface).unwrap();
                                 (
                                     code,
-                                    (interface_imports.entry(info.name).or_default(), info.docs),
+                                    (interface_imports.entry(interface).or_default(), info.docs),
                                 )
                             })
                             .into_iter()
@@ -1642,7 +1759,7 @@ class {camel}(Protocol):
                                 let info = self.exported_interfaces.get(&interface).unwrap();
                                 (
                                     code,
-                                    (interface_exports.entry(info.name).or_default(), info.docs),
+                                    (interface_exports.entry(interface).or_default(), info.docs),
                                 )
                             }))
                             .collect(),
@@ -1766,7 +1883,7 @@ def {snake}({params}){return_type}:
 
                             let (definitions, docs) = if let Some(interface) = &function.interface {
                                 (
-                                    interface_imports.entry(interface.name).or_default(),
+                                    interface_imports.entry(interface.id).or_default(),
                                     interface.docs,
                                 )
                             } else {
@@ -1784,7 +1901,7 @@ def {snake}({params}){return_type}:
                         FunctionKind::Export => {
                             let (definitions, docs) = if let Some(interface) = &function.interface {
                                 (
-                                    interface_exports.entry(interface.name).or_default(),
+                                    interface_exports.entry(interface.id).or_default(),
                                     interface.docs,
                                 )
                             } else {
@@ -1808,11 +1925,11 @@ def {snake}({params}){return_type}:
 
                                 let function_docs = docstring(function.docs, 2, error.as_deref());
 
-                                let body = if let Some(suffix) = isyswasfa {
+                                let (abstract_method, body) = if let Some(suffix) = isyswasfa {
                                     if function.name == format!("isyswasfa-poll{suffix}") {
                                         need_isyswasfa_guest = true;
 
-                                        "return isyswasfa_guest.poll(input)".to_owned()
+                                        ("", "return isyswasfa_guest.poll(input)".to_owned())
                                     } else {
                                         self.async_export_code(
                                             function,
@@ -1824,13 +1941,16 @@ def {snake}({params}){return_type}:
                                         )
                                     }
                                 } else {
-                                    NOT_IMPLEMENTED.into()
+                                    (
+                                        "@abstractmethod
+    ",
+                                        NOT_IMPLEMENTED.into(),
+                                    )
                                 };
 
                                 let code = format!(
                                     "
-    @abstractmethod
-    def {snake}({params}){return_type}:
+    {abstract_method}def {snake}({params}){return_type}:
         {function_docs}{body}
 "
                                 );
@@ -1911,7 +2031,8 @@ Result = Union[Ok[T], Err[E]]
             let dir = path.join("imports");
             fs::create_dir(&dir)?;
             File::create(dir.join("__init__.py"))?;
-            for (name, code) in interface_imports {
+            for (id, code) in interface_imports {
+                let name = self.imported_interface_names.get(&id).unwrap();
                 let mut file =
                     File::create(dir.join(&format!("{}.py", name.to_snake_case().escape())))?;
                 let types = code.types.concat();
@@ -1952,7 +2073,11 @@ from ..types import Result, Ok, Err, Some
 
             let mut protocol_imports = HashSet::new();
             let mut protocols = String::new();
-            for (name, code) in interface_exports {
+            let mut need_isyswasfa_guest = false;
+            for (id, code) in interface_exports {
+                need_isyswasfa_guest |= code.need_isyswasfa_guest;
+
+                let name = self.exported_interface_names.get(&id).unwrap();
                 let mut file =
                     File::create(dir.join(&format!("{}.py", name.to_snake_case().escape())))?;
                 let types = code.types.concat();
@@ -2012,6 +2137,7 @@ class {camel}(Protocol):
             let imports = protocol_imports
                 .into_iter()
                 .map(|interface| import("..", interface))
+                .chain(need_isyswasfa_guest.then(|| "import isyswasfa_guest".into()))
                 .collect::<Vec<_>>()
                 .join("\n");
 
@@ -2043,8 +2169,14 @@ from ..types import Result, Ok, Err, Some
                     world_exports.functions.concat()
                 };
 
+                let protocol = if isyswasfa.is_some() && world_exports.functions.len() == 1 {
+                    ""
+                } else {
+                    "(Protocol)"
+                };
+
                 format!(
-                    "class {camel}(Protocol):
+                    "class {camel}{protocol}:
 {methods}"
                 )
             };
@@ -2090,13 +2222,12 @@ from .types import Result, Ok, Err, Some
     }
 
     fn interface_package(&self, interface: InterfaceId) -> (&'static str, String) {
-        if let Some(info) = self.imported_interfaces.get(&interface) {
-            ("imports", info.name.to_snake_case().escape())
+        if let Some(name) = self.imported_interface_names.get(&interface) {
+            ("imports", name.to_snake_case().escape())
         } else {
             (
                 "exports",
-                self.exported_interfaces[&interface]
-                    .name
+                self.exported_interface_names[&interface]
                     .to_snake_case()
                     .escape(),
             )
