@@ -50,6 +50,7 @@ struct ResourceState<'a> {
     interface: Option<MyInterface<'a>>,
 }
 
+#[derive(Copy, Clone)]
 pub enum FunctionKind {
     Import,
     ResourceNew,
@@ -1080,25 +1081,29 @@ impl<'a> Summary<'a> {
         sorted
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn async_export_code(
         &self,
+        world_module: &str,
         function: &MyFunction,
+        names: &mut TypeNames,
+        seen: &HashSet<TypeId>,
         class_method: &str,
         params: &str,
-        return_type: &str,
-        docs: &str,
         need_isyswasfa_guest: &mut bool,
     ) -> (&'static str, String) {
         if let Some(prefix) = function.name.strip_suffix("-isyswasfa-start") {
             *need_isyswasfa_guest = true;
 
             let name = self.function_name_with(&function.wit_kind, prefix);
+
             let args = function
                 .params
                 .iter()
                 .map(|(name, _)| name.to_snake_case().escape())
                 .collect::<Vec<_>>()
                 .join(", ");
+
             let prefix = match function.wit_kind {
                 wit_parser::FunctionKind::Freestanding | wit_parser::FunctionKind::Method(_) => {
                     "self."
@@ -1107,10 +1112,51 @@ impl<'a> Summary<'a> {
                 wit_parser::FunctionKind::Constructor(_) => unreachable!(),
             };
 
+            let FunctionCode {
+                return_type, error, ..
+            } = self.function_code(
+                Direction::Export,
+                world_module,
+                &MyFunction {
+                    results: &if let Results::Anon(Type::Id(id)) = &function.results {
+                        if let TypeDefKind::Result(Result_ { ok, .. }) =
+                            &self.resolve.types[*id].kind
+                        {
+                            ok.map(Results::Anon)
+                                .unwrap_or_else(|| Results::Named(Vec::new()))
+                        } else {
+                            unreachable!()
+                        }
+                    } else {
+                        unreachable!()
+                    },
+                    interface: function.interface.clone(),
+                    wit_kind: function.wit_kind.clone(),
+                    ..*function
+                },
+                names,
+                seen,
+                None,
+            );
+
+            let docs = docstring(world_module, function.docs, 2, error.as_deref());
+
+            let code = if error.is_some() {
+                format!("return isyswasfa_guest.first_poll({prefix}{name}({args}))")
+            } else {
+                format!(
+                    "result = isyswasfa_guest.first_poll({prefix}{name}({args}))
+        if isinstance(result, Ok):
+            return result.value
+        else:
+            raise result"
+                )
+            };
+
             (
                 "",
                 format!(
-                    "return isyswasfa_guest.first_poll({prefix}{name}({args}))
+                    "{code}
 {class_method}
     @abstractmethod
     async def {name}({params}){return_type}:
@@ -1260,34 +1306,6 @@ impl<'a> Summary<'a> {
             alias_module: Option<String>,
         }
 
-        let docstring = |docs: Option<&str>, indent_level, error: Option<&str>| {
-            let docs = match (
-                docs,
-                error.map(|e| format!("Raises: `{world_module}.types.Err({e})`")),
-            ) {
-                (Some(docs), Some(error_docs)) => Some(format!("{docs}\n\n{error_docs}")),
-                (Some(docs), None) => Some(docs.to_owned()),
-                (None, Some(error_docs)) => Some(error_docs),
-                (None, None) => None,
-            };
-
-            if let Some(docs) = docs {
-                let newline = '\n';
-                let indent = (0..indent_level)
-                    .map(|_| "    ")
-                    .collect::<Vec<_>>()
-                    .concat();
-                let docs = docs
-                    .lines()
-                    .map(|line| format!("{indent}{line}\n"))
-                    .collect::<Vec<_>>()
-                    .concat();
-                format!(r#""""{newline}{docs}{indent}"""{newline}{indent}"#)
-            } else {
-                String::new()
-            }
-        };
-
         let mut interface_imports = HashMap::<InterfaceId, Definitions>::new();
         let mut interface_exports = HashMap::<InterfaceId, Definitions>::new();
         let mut world_imports = Definitions::default();
@@ -1330,7 +1348,7 @@ impl<'a> Summary<'a> {
                     fields = "pass".to_owned()
                 }
 
-                let docs = docstring(docs, 1, None);
+                let docs = docstring(world_module, docs, 1, None);
 
                 format!(
                     "
@@ -1389,7 +1407,7 @@ class {name}:
                             .collect::<Vec<_>>()
                             .join(", ");
 
-                        let docs = docstring(ty.docs.contents.as_deref(), 0, None);
+                        let docs = docstring(world_module, ty.docs.contents.as_deref(), 0, None);
 
                         (
                             Some(Code::Shared(format!(
@@ -1424,7 +1442,7 @@ class {name}:
                             .collect::<Vec<_>>()
                             .join("\n    ");
 
-                        let docs = docstring(ty.docs.contents.as_deref(), 1, None);
+                        let docs = docstring(world_module, ty.docs.contents.as_deref(), 1, None);
 
                         (
                             Some(Code::Shared(format!(
@@ -1451,7 +1469,7 @@ class {camel}(Enum):
                             flags
                         };
 
-                        let docs = docstring(ty.docs.contents.as_deref(), 1, None);
+                        let docs = docstring(world_module, ty.docs.contents.as_deref(), 1, None);
 
                         (
                             Some(Code::Shared(format!(
@@ -1466,7 +1484,7 @@ class {camel}(Flag):
                     TypeDefKind::Resource => {
                         let camel = camel();
 
-                        let docs = docstring(ty.docs.contents.as_deref(), 1, None);
+                        let docs = docstring(world_module, ty.docs.contents.as_deref(), 1, None);
 
                         let empty = &ResourceInfo::default();
 
@@ -1496,7 +1514,8 @@ class {camel}(Flag):
                                     Some(id),
                                 );
 
-                                let docs = docstring(function.docs, 2, error.as_deref());
+                                let docs =
+                                    docstring(world_module, function.docs, 2, error.as_deref());
 
                                 if let wit_parser::FunctionKind::Constructor(_) = function.wit_kind
                                 {
@@ -1636,15 +1655,17 @@ class {camel}:
                                     Some(id),
                                 );
 
-                                let docs = docstring(function.docs, 2, error.as_deref());
+                                let docs =
+                                    docstring(world_module, function.docs, 2, error.as_deref());
 
                                 let (abstract_method, body) = if isyswasfa.is_some() {
                                     self.async_export_code(
+                                        world_module,
                                         function,
+                                        &mut names,
+                                        &seen,
                                         class_method,
                                         &params,
-                                        &return_type,
-                                        &docs,
                                         &mut need_isyswasfa_guest,
                                     )
                                 } else {
@@ -1847,7 +1868,7 @@ class {camel}(Protocol):
 
                     match function.kind {
                         FunctionKind::Import => {
-                            let docs = docstring(function.docs, 1, error.as_deref());
+                            let docs = docstring(world_module, function.docs, 1, error.as_deref());
 
                             let async_code = if isyswasfa.is_some() {
                                 self.async_import_code(
@@ -1923,7 +1944,8 @@ def {snake}({params}){return_type}:
                                     format!("self, {params}")
                                 };
 
-                                let function_docs = docstring(function.docs, 2, error.as_deref());
+                                let function_docs =
+                                    docstring(world_module, function.docs, 2, error.as_deref());
 
                                 let (abstract_method, body) = if let Some(suffix) = isyswasfa {
                                     if function.name == format!("isyswasfa-poll{suffix}") {
@@ -1932,11 +1954,12 @@ def {snake}({params}){return_type}:
                                         ("", "return isyswasfa_guest.poll(input)".to_owned())
                                     } else {
                                         self.async_export_code(
+                                            world_module,
                                             function,
+                                            &mut names,
+                                            &seen,
                                             "",
                                             &params,
-                                            &return_type,
-                                            &function_docs,
                                             &mut need_isyswasfa_guest,
                                         )
                                     }
@@ -2047,7 +2070,7 @@ Result = Union[Ok[T], Err[E]]
                     )
                     .collect::<Vec<_>>()
                     .join("\n");
-                let docs = docstring(code.docs, 0, None);
+                let docs = docstring(world_module, code.docs, 0, None);
 
                 let imports = if stub_runtime_calls {
                     imports
@@ -2091,7 +2114,7 @@ from ..types import Result, Ok, Err, Some
                     )
                     .collect::<Vec<_>>()
                     .join("\n");
-                let docs = docstring(code.docs, 0, None);
+                let docs = docstring(world_module, code.docs, 0, None);
 
                 write!(
                     file,
@@ -2198,7 +2221,7 @@ from ..types import Result, Ok, Err, Some
                 .collect::<Vec<_>>()
                 .join("\n");
 
-            let docs = docstring(world_exports.docs, 0, None);
+            let docs = docstring(world_module, world_exports.docs, 0, None);
 
             let imports = if stub_runtime_calls {
                 imports
@@ -2457,5 +2480,38 @@ fn world_module_import(name: &str, alias: &str) -> String {
         format!("from {front} import {rear} as {alias}")
     } else {
         format!("import {name} as {alias}")
+    }
+}
+
+fn docstring(
+    world_module: &str,
+    docs: Option<&str>,
+    indent_level: usize,
+    error: Option<&str>,
+) -> String {
+    let docs = match (
+        docs,
+        error.map(|e| format!("Raises: `{world_module}.types.Err({e})`")),
+    ) {
+        (Some(docs), Some(error_docs)) => Some(format!("{docs}\n\n{error_docs}")),
+        (Some(docs), None) => Some(docs.to_owned()),
+        (None, Some(error_docs)) => Some(error_docs),
+        (None, None) => None,
+    };
+
+    if let Some(docs) = docs {
+        let newline = '\n';
+        let indent = (0..indent_level)
+            .map(|_| "    ")
+            .collect::<Vec<_>>()
+            .concat();
+        let docs = docs
+            .lines()
+            .map(|line| format!("{indent}{line}\n"))
+            .collect::<Vec<_>>()
+            .concat();
+        format!(r#""""{newline}{docs}{indent}"""{newline}{indent}"#)
+    } else {
+        String::new()
     }
 }

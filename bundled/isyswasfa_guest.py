@@ -4,7 +4,7 @@ import subprocess
 from dataclasses import dataclass
 from typing import Any, Union, Optional
 
-from proxy.types import Err
+from proxy.types import Result, Ok, Err
 from proxy.imports import isyswasfa
 from proxy.imports.isyswasfa import (
     PollInput, PollInput_Ready, PollInputReady, PollInput_Listening, PollOutput, PollOutput_Listen,
@@ -298,7 +298,7 @@ def _push_listens(future_state: int):
         
         _poll_output.append(PollOutput_Listen(PollOutputListen(listen_state, p.pending)))
 
-def first_poll(coroutine: Any) -> Any:
+def first_poll(coroutine: Any) -> Result[Any, Any]:
     global _loop
     global _pending
     global _next_future_state
@@ -310,7 +310,10 @@ def first_poll(coroutine: Any) -> Any:
 
     if future.done():
         _pending.clear()
-        return future.result()
+        try:
+            return Ok(future.result())
+        except Err as e:
+            return e
     else:
         pending, cancel, ready = isyswasfa.make_task()
 
