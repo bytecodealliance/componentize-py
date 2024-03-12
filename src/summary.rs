@@ -1108,7 +1108,7 @@ impl<'a> Summary<'a> {
                 wit_parser::FunctionKind::Freestanding | wit_parser::FunctionKind::Method(_) => {
                     "self."
                 }
-                wit_parser::FunctionKind::Static(_) => "Self.",
+                wit_parser::FunctionKind::Static(_) => "cls.",
                 wit_parser::FunctionKind::Constructor(_) => unreachable!(),
             };
 
@@ -1180,15 +1180,18 @@ impl<'a> Summary<'a> {
     #[allow(clippy::too_many_arguments)]
     fn async_import_code(
         &self,
-        indent: &str,
+        indent_level: usize,
+        world_module: &str,
         function: &MyFunction,
+        names: &mut TypeNames,
+        seen: &HashSet<TypeId>,
         class_method: &str,
         snake: &str,
         params: &str,
-        return_type: &str,
-        docs: &str,
         need_isyswasfa_guest: &mut bool,
     ) -> String {
+        // TODO: deduplicate code with respect to `async_export_code`
+
         if let Some(prefix) = function.name.strip_suffix("-isyswasfa-start") {
             *need_isyswasfa_guest = true;
 
@@ -1199,19 +1202,72 @@ impl<'a> Summary<'a> {
                 .map(|(name, _)| name.to_snake_case().escape())
                 .collect::<Vec<_>>()
                 .join(", ");
+
             let result = format!("{name}_isyswasfa_result");
+
             let prefix = match function.wit_kind {
                 wit_parser::FunctionKind::Freestanding => "",
                 wit_parser::FunctionKind::Method(_) => "self.",
-                wit_parser::FunctionKind::Static(_) => "Self.",
+                wit_parser::FunctionKind::Static(_) => "cls.",
                 wit_parser::FunctionKind::Constructor(_) => unreachable!(),
+            };
+
+            let FunctionCode {
+                return_type, error, ..
+            } = self.function_code(
+                Direction::Export,
+                world_module,
+                &MyFunction {
+                    results: &if let Results::Anon(Type::Id(id)) = &function.results {
+                        if let TypeDefKind::Result(Result_ { ok, .. }) =
+                            &self.resolve.types[*id].kind
+                        {
+                            ok.map(Results::Anon)
+                                .unwrap_or_else(|| Results::Named(Vec::new()))
+                        } else {
+                            unreachable!()
+                        }
+                    } else {
+                        unreachable!()
+                    },
+                    interface: function.interface.clone(),
+                    wit_kind: function.wit_kind.clone(),
+                    ..*function
+                },
+                names,
+                seen,
+                None,
+            );
+
+            let docs = docstring(
+                world_module,
+                function.docs,
+                indent_level + 1,
+                error.as_deref(),
+            );
+
+            let indent = (0..indent_level)
+                .map(|_| "    ")
+                .collect::<Vec<_>>()
+                .concat();
+
+            let code = if error.is_some() {
+                format!(
+                    "result = {prefix}{snake}({args})
+{indent}        if isinstance(result, Ok):
+{indent}            return result.value
+{indent}        else:
+{indent}            raise result"
+                )
+            } else {
+                format!("return {prefix}{snake}({args})")
             };
 
             format!(
                 "{class_method}
 {indent}async def {name}({params}){return_type}:
 {indent}    {docs}try:
-{indent}        return {prefix}{snake}({args})
+{indent}        {code}
 {indent}    except Err as e:
 {indent}        return {prefix}{result}(await isyswasfa_guest.await_ready(e.value))
 "
@@ -1540,13 +1596,14 @@ class {camel}(Flag):
                                 } else {
                                     let async_code = if isyswasfa.is_some() {
                                         self.async_import_code(
-                                            "    ",
+                                            1,
+                                            world_module,
                                             function,
+                                            &mut names,
+                                            &seen,
                                             class_method,
                                             &snake,
                                             &params,
-                                            &return_type,
-                                            &docs,
                                             &mut need_isyswasfa_guest,
                                         )
                                     } else {
@@ -1872,13 +1929,14 @@ class {camel}(Protocol):
 
                             let async_code = if isyswasfa.is_some() {
                                 self.async_import_code(
-                                    "",
+                                    0,
+                                    world_module,
                                     function,
+                                    &mut names,
+                                    &seen,
                                     "",
                                     &snake,
                                     &params,
-                                    &return_type,
-                                    &docs,
                                     &mut need_isyswasfa_guest,
                                 )
                             } else {

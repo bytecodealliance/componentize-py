@@ -3,6 +3,7 @@ import socket
 import subprocess
 from dataclasses import dataclass
 from typing import Any, Union, Optional
+from contextvars import ContextVar, Context
 
 from proxy.types import Result, Ok, Err
 from proxy.imports import isyswasfa
@@ -12,21 +13,26 @@ from proxy.imports.isyswasfa import (
     Cancel
 )
 
-class Loop(asyncio.AbstractEventLoop):
-    def __init__(self):
-        self.running = False
-        self.handles = []
-        self.exception = None
+_future_state: ContextVar[int] = ContextVar("_future_state")
 
-    def poll_all(self):
-        handles = self.handles
-        self.handles = []
-        for handle in handles:
-            if not handle._cancelled:
-                handle._run()
+class _Loop(asyncio.AbstractEventLoop):
+    def __init__(self):
+        self.running: bool = False
+        self.handles: dict[int, list[asyncio.Handle]] = {}
+        self.exception: Optional[Any] = None
+
+    def poll(self, future_state: int):
+        while True:
+            handles = self.handles.pop(future_state, [])
+            for handle in handles:
+                if not handle._cancelled:
+                    handle._run()
                 
-        if self.exception is not None:
-            raise self.exception
+            if self.exception is not None:
+                raise self.exception
+
+            if len(handles) == 0:
+                return
     
     def get_debug(self):
         return False
@@ -50,12 +56,18 @@ class Loop(asyncio.AbstractEventLoop):
         self.exception = context.get('exception', None)
 
     def call_soon(self, callback, *args, context=None):
+        global _pollables
+
+        future_state = context[_future_state]
         handle = asyncio.Handle(callback, args, self, context)
-        self.handles.append(handle)
+        if self.handles.get(future_state) is None:
+            self.handles[future_state] = []
+        self.handles[future_state].append(handle)
+        _pollables.add(future_state)
         return handle
 
-    def create_task(self, coroutine):
-        return asyncio.Task(coroutine, loop=self)
+    def create_task(self, coroutine, context=None):
+        return asyncio.Task(coroutine, loop=self, context=context) # type: ignore
 
     def create_future(self):
         return asyncio.Future(loop=self)
@@ -266,7 +278,7 @@ class _PendingState:
     pending: Pending
     future: Any
 
-_loop = Loop()
+_loop = _Loop()
 asyncio.set_event_loop(_loop)
 _loop.running = True
 asyncio.events._set_running_loop(_loop)
@@ -278,6 +290,9 @@ _next_listen_state: int = 0
 _future_states: dict[int, _FutureState] = {}
 _next_future_state: int = 0
 _pollables: set[int] = set()
+
+def _set_future_state(future_state: int):
+    _future_state.set(future_state)
 
 def _poll_future(future: Any):
     raise NotImplementedError
@@ -299,17 +314,31 @@ def _push_listens(future_state: int):
         _poll_output.append(PollOutput_Listen(PollOutputListen(listen_state, p.pending)))
 
 def first_poll(coroutine: Any) -> Result[Any, Any]:
+    return _first_poll(coroutine, True)
+    
+def _first_poll(coroutine: Any, poll: bool) -> Result[Any, Any]:
     global _loop
     global _pending
     global _next_future_state
     global _future_states
     global _poll_output
     
-    future = asyncio.ensure_future(coroutine, loop=_loop)
-    _loop.poll_all()
+    # todo: wrap around at 2^32 and then skip any used slots
+    future_state = _next_future_state
+    _next_future_state += 1
+    _future_states[future_state] = _FutureStateReady(None)
+
+    context = Context()
+    context.run(_set_future_state, future_state)
+    future = asyncio.create_task(coroutine, context=context)
+    
+    if poll:
+        _loop.poll(future_state)
 
     if future.done():
         _pending.clear()
+        _future_states.pop(future_state)
+        _pollables.remove(future_state)
         try:
             return Ok(future.result())
         except Err as e:
@@ -317,9 +346,6 @@ def first_poll(coroutine: Any) -> Result[Any, Any]:
     else:
         pending, cancel, ready = isyswasfa.make_task()
 
-        # todo: wrap around at 2^32 and then skip any used slots
-        future_state = _next_future_state
-        _next_future_state += 1
         _future_states[future_state] = _FutureStatePending(ready, future)
         
         _push_listens(future_state)
@@ -362,8 +388,6 @@ def poll(input: list[PollInput]) -> list[PollOutput]:
 
             if listen_state.cancel is not None:
                 listen_state.cancel.__exit__()
-
-            _pollables.add(listen_state.future_state)
         elif isinstance(i, PollInput_Listening):
             _listen_states[i.value.state].cancel = i.value.cancel
         else:
@@ -376,18 +400,31 @@ def poll(input: list[PollInput]) -> list[PollOutput]:
         if pollables:
             for future_state in pollables:
                 state = _future_states[future_state]
-                assert isinstance(state, _FutureStatePending)
-                _loop.poll_all()
+                if isinstance(state, _FutureStatePending):
+                    _loop.poll(future_state)
                 
-                if state.future.done():
-                    _pending.clear()
+                    if state.future.done():
+                        _pending.clear()
 
-                    _future_states[future_state] = _FutureStateReady(state.future.result())
+                        _future_states[future_state] = _FutureStateReady(state.future.result())
 
-                    _poll_output.append(PollOutput_Ready(PollOutputReady(future_state, state.ready)))
-                else:
-                    _push_listens(future_state)
+                        _poll_output.append(PollOutput_Ready(PollOutputReady(future_state, state.ready)))
+                    else:
+                        _push_listens(future_state)
         else:
             poll_output = _poll_output
             _poll_output = []
             return poll_output
+
+def spawn(coroutine: Any):
+    global _pending
+    
+    pending = _pending
+    _pending = []
+    
+    try:
+        _first_poll(coroutine, False)
+    except Err as e:
+        e.value.__exit__()
+        
+    _pending = pending

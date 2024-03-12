@@ -622,7 +622,7 @@ pub async fn componentize(
     let wasi = wasi
         .env(
             "PYTHONPATH",
-            format!("/python:/bundled:/world:{python_path}"),
+            format!("/python:/world:{python_path}:/bundled"),
         )
         .build();
 

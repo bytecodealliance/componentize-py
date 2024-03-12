@@ -72,7 +72,7 @@ class Stream:
                     raise e
 
 class Sink:
-    """Writer abstraction over `wasi-http/types#outgoing-body`."""
+    """Writer abstraction over `wasi:http/types#outgoing-body`."""
     def __init__(self, body: OutgoingBody):
         self.body = body
         self.stream = body.write()
