@@ -33,6 +33,7 @@ wit_bindgen::generate!({
     }
 });
 
+static STUB_WASI: OnceCell<bool> = OnceCell::new();
 static EXPORTS: OnceCell<Vec<Export>> = OnceCell::new();
 static TYPES: OnceCell<Vec<Type>> = OnceCell::new();
 static ENVIRON: OnceCell<Py<PyMapping>> = OnceCell::new();
@@ -169,7 +170,7 @@ fn componentize_py_module(_py: Python<'_>, module: &PyModule) -> PyResult<()> {
     module.add_function(pyo3::wrap_pyfunction!(drop_resource, module)?)
 }
 
-fn do_init(app_name: String, symbols: Symbols) -> Result<()> {
+fn do_init(app_name: String, symbols: Symbols, stub_wasi: bool) -> Result<()> {
     pyo3::append_to_inittab!(componentize_py_module);
 
     pyo3::prepare_freethreaded_python();
@@ -182,6 +183,8 @@ fn do_init(app_name: String, symbols: Symbols) -> Result<()> {
                 return Err(e.into());
             }
         };
+
+        STUB_WASI.set(stub_wasi).unwrap();
 
         EXPORTS
             .set(
@@ -368,8 +371,8 @@ fn do_init(app_name: String, symbols: Symbols) -> Result<()> {
 struct MyExports;
 
 impl Guest for MyExports {
-    fn init(app_name: String, symbols: Symbols) -> Result<(), String> {
-        let result = do_init(app_name, symbols).map_err(|e| format!("{e:?}"));
+    fn init(app_name: String, symbols: Symbols, stub_wasi: bool) -> Result<(), String> {
+        let result = do_init(app_name, symbols, stub_wasi).map_err(|e| format!("{e:?}"));
 
         // This tells the WASI Preview 1 component adapter to reset its state.  In particular, we want it to forget
         // about any open handles and re-request the stdio handles at runtime since we'll be running under a brand
@@ -413,24 +416,26 @@ pub unsafe extern "C" fn componentize_py_dispatch(
         // todo: is this sound, or do we need to `.into_iter().map(MaybeUninit::assume_init).collect()` instead?
         let params_py = mem::transmute::<Vec<MaybeUninit<&PyAny>>, Vec<&PyAny>>(params_py);
 
-        static ONCE: Once = Once::new();
-        ONCE.call_once(|| {
-            // We must call directly into the host to get the runtime environment since libc's version will only
-            // contain the build-time pre-init snapshot.
-            let environ = ENVIRON.get().unwrap().as_ref(py);
-            for (k, v) in environment::get_environment() {
-                environ.set_item(k, v).unwrap();
-            }
+        if !*STUB_WASI.get().unwrap() {
+            static ONCE: Once = Once::new();
+            ONCE.call_once(|| {
+                // We must call directly into the host to get the runtime environment since libc's version will only
+                // contain the build-time pre-init snapshot.
+                let environ = ENVIRON.get().unwrap().as_ref(py);
+                for (k, v) in environment::get_environment() {
+                    environ.set_item(k, v).unwrap();
+                }
 
-            // Likewise for CLI arguments.
-            for arg in environment::get_arguments() {
-                ARGV.get().unwrap().as_ref(py).append(arg).unwrap();
-            }
+                // Likewise for CLI arguments.
+                for arg in environment::get_arguments() {
+                    ARGV.get().unwrap().as_ref(py).append(arg).unwrap();
+                }
 
-            // Call `random.seed()` to ensure we get a fresh seed rather than the one that got baked in during
-            // pre-init.
-            SEED.get().unwrap().call0(py).unwrap();
-        });
+                // Call `random.seed()` to ensure we get a fresh seed rather than the one that got baked in during
+                // pre-init.
+                SEED.get().unwrap().call0(py).unwrap();
+            });
+        }
 
         let export = &EXPORTS.get().unwrap()[export];
         let result = match export {

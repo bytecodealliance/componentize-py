@@ -4,9 +4,10 @@ use {
     tokio::runtime::Runtime,
 };
 
+#[allow(clippy::too_many_arguments)]
 #[pyo3::pyfunction]
 #[pyo3(name = "componentize")]
-#[pyo3(signature = (wit_path, world, python_path, module_worlds, app_name, output_path, isyswasfa))]
+#[pyo3(signature = (wit_path, world, python_path, module_worlds, app_name, output_path, isyswasfa, stub_wasi))]
 fn python_componentize(
     wit_path: Option<PathBuf>,
     world: Option<&str>,
@@ -15,6 +16,7 @@ fn python_componentize(
     app_name: &str,
     output_path: PathBuf,
     isyswasfa: Option<&str>,
+    stub_wasi: bool,
 ) -> PyResult<()> {
     (|| {
         Runtime::new()?.block_on(crate::componentize(
@@ -26,6 +28,7 @@ fn python_componentize(
             &output_path,
             None,
             isyswasfa,
+            stub_wasi,
         ))
     })()
     .map_err(|e| PyAssertionError::new_err(format!("{e:?}")))
