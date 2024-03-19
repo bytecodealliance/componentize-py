@@ -82,6 +82,14 @@ pub struct Componentize {
     /// Output file to which to write the resulting component
     #[arg(short = 'o', long, default_value = "index.wasm")]
     pub output: PathBuf,
+
+    /// If set, replace all WASI imports with trapping stubs.
+    ///
+    /// PLEASE NOTE: This has the effect of baking whatever PRNG seed is generated at build time into the
+    /// component, meaning Python's `random` module will return the exact same sequence each time the component is
+    /// run.  Do *not* use this option in situations where a secure source of randomness is required.
+    #[arg(short = 's', long)]
+    pub stub_wasi: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -150,6 +158,7 @@ fn componentize(common: Common, componentize: Componentize) -> Result<()> {
         &componentize.output,
         None,
         common.isyswasfa.as_deref(),
+        componentize.stub_wasi,
     ))?;
 
     if !common.quiet {

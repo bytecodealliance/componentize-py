@@ -20,6 +20,12 @@ use {
     },
     summary::{Escape, Locations, Summary},
     tar::Archive,
+    wasm_convert::IntoValType,
+    wasm_encoder::{
+        CodeSection, ExportKind, ExportSection, Function, FunctionSection, Instruction, Module,
+        TypeSection,
+    },
+    wasmparser::{FuncType, Parser, Payload, TypeRef},
     wasmtime::{
         component::{Component, Instance, Linker, ResourceTable, ResourceType},
         Config, Engine, Store,
@@ -213,6 +219,7 @@ pub async fn componentize(
     output_path: &Path,
     add_to_linker: Option<&dyn Fn(&mut Linker<Ctx>) -> Result<()>>,
     isyswasfa: Option<&str>,
+    stub_wasi: bool,
 ) -> Result<()> {
     // Untar the embedded copy of the Python standard library into a temporary directory
     let stdlib = tempfile::tempdir()?;
@@ -356,107 +363,183 @@ pub async fn componentize(
 
     let summary = Summary::try_new(&resolve, &worlds)?;
 
-    // Link all the libraries (including any native extensions) into a single component.
-    let mut linker = wit_component::Linker::default()
-        .validate(true)
-        .library(
-            "libcomponentize_py_runtime.so",
-            &zstd::decode_all(Cursor::new(include_bytes!(concat!(
+    struct Library {
+        name: String,
+        module: Vec<u8>,
+        dl_openable: bool,
+    }
+
+    let mut libraries = vec![
+        Library {
+            name: "libcomponentize_py_runtime.so".into(),
+            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
                 env!("OUT_DIR"),
                 "/libcomponentize_py_runtime.so.zst"
             ))))?,
-            false,
-        )?
-        .library(
-            "libpython3.12.so",
-            &zstd::decode_all(Cursor::new(include_bytes!(concat!(
+            dl_openable: false,
+        },
+        Library {
+            name: "libpython3.12.so".into(),
+            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
                 env!("OUT_DIR"),
                 "/libpython3.12.so.zst"
             ))))?,
-            false,
-        )?
-        .library(
-            "libc.so",
-            &zstd::decode_all(Cursor::new(include_bytes!(concat!(
+            dl_openable: false,
+        },
+        Library {
+            name: "libc.so".into(),
+            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
                 env!("OUT_DIR"),
                 "/libc.so.zst"
             ))))?,
-            false,
-        )?
-        .library(
-            "libwasi-emulated-mman.so",
-            &zstd::decode_all(Cursor::new(include_bytes!(concat!(
+            dl_openable: false,
+        },
+        Library {
+            name: "libwasi-emulated-mman.so".into(),
+            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
                 env!("OUT_DIR"),
                 "/libwasi-emulated-mman.so.zst"
             ))))?,
-            false,
-        )?
-        .library(
-            "libwasi-emulated-process-clocks.so",
-            &zstd::decode_all(Cursor::new(include_bytes!(concat!(
+            dl_openable: false,
+        },
+        Library {
+            name: "libwasi-emulated-process-clocks.so".into(),
+            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
                 env!("OUT_DIR"),
                 "/libwasi-emulated-process-clocks.so.zst"
             ))))?,
-            false,
-        )?
-        .library(
-            "libwasi-emulated-getpid.so",
-            &zstd::decode_all(Cursor::new(include_bytes!(concat!(
+            dl_openable: false,
+        },
+        Library {
+            name: "libwasi-emulated-getpid.so".into(),
+            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
                 env!("OUT_DIR"),
                 "/libwasi-emulated-getpid.so.zst"
             ))))?,
-            false,
-        )?
-        .library(
-            "libwasi-emulated-signal.so",
-            &zstd::decode_all(Cursor::new(include_bytes!(concat!(
+            dl_openable: false,
+        },
+        Library {
+            name: "libwasi-emulated-signal.so".into(),
+            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
                 env!("OUT_DIR"),
                 "/libwasi-emulated-signal.so.zst"
             ))))?,
-            false,
-        )?
-        .library(
-            "libc++.so",
-            &zstd::decode_all(Cursor::new(include_bytes!(concat!(
+            dl_openable: false,
+        },
+        Library {
+            name: "libc++.so".into(),
+            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
                 env!("OUT_DIR"),
                 "/libc++.so.zst"
             ))))?,
-            false,
-        )?
-        .library(
-            "libc++abi.so",
-            &zstd::decode_all(Cursor::new(include_bytes!(concat!(
+            dl_openable: false,
+        },
+        Library {
+            name: "libc++abi.so".into(),
+            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
                 env!("OUT_DIR"),
                 "/libc++abi.so.zst"
             ))))?,
-            false,
-        )?
-        .library(
-            "libcomponentize_py_bindings.so",
-            &bindings::make_bindings(&resolve, &worlds, &summary)?,
-            false,
-        )?
-        .adapter(
-            "wasi_snapshot_preview1",
-            &zstd::decode_all(Cursor::new(include_bytes!(concat!(
-                env!("OUT_DIR"),
-                "/wasi_snapshot_preview1.reactor.wasm.zst"
-            ))))?,
-        )?;
+            dl_openable: false,
+        },
+        Library {
+            name: "libcomponentize_py_bindings.so".into(),
+            module: bindings::make_bindings(&resolve, &worlds, &summary)?,
+            dl_openable: false,
+        },
+    ];
 
-    for (index, (path, libraries)) in library_path.iter().enumerate() {
-        for library in libraries {
+    for (index, (path, libs)) in library_path.iter().enumerate() {
+        for library in libs {
             let path = library
                 .strip_prefix(path)
                 .unwrap()
                 .to_str()
                 .context("non-UTF-8 path")?;
 
-            linker = linker.library(&format!("/{index}/{path}"), &fs::read(library)?, true)?;
+            libraries.push(Library {
+                name: format!("/{index}/{path}"),
+                module: fs::read(library)?,
+                dl_openable: true,
+            });
         }
     }
 
+    // Link all the libraries (including any native extensions) into a single component.
+    let mut linker = wit_component::Linker::default().validate(true);
+
+    let mut wasi_imports = HashMap::new();
+    for Library {
+        name,
+        module,
+        dl_openable,
+    } in &libraries
+    {
+        if stub_wasi {
+            add_wasi_imports(module, &mut wasi_imports)?;
+        }
+        linker = linker.library(name, module, *dl_openable)?;
+    }
+
+    linker = linker.adapter(
+        "wasi_snapshot_preview1",
+        &zstd::decode_all(Cursor::new(include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/wasi_snapshot_preview1.reactor.wasm.zst"
+        ))))?,
+    )?;
+
     let component = linker.encode()?;
+
+    let stubbed_component = if stub_wasi {
+        // When `stub_wasi` is `true`, we apply the pre-initialization snapshot to an alternate version of the
+        // component -- one where the WASI imports have been stubbed out.
+
+        let mut linker = wit_component::Linker::default().validate(true);
+
+        for Library {
+            name,
+            module,
+            dl_openable,
+        } in &libraries
+        {
+            linker = linker.library(name, module, *dl_openable)?;
+        }
+
+        for (module, imports) in &wasi_imports {
+            linker = linker.adapter(module, &make_stub_adapter(module, imports))?;
+        }
+
+        let component = linker.encode()?;
+
+        // As of this writing, `wit_component::Linker` generates a component such that the first module is the
+        // `main` one, followed by any adapters, followed by any libraries, followed by the `init` module, which is
+        // finally followed by any shim modules.  Given that the stubbed component may contain more adapters than
+        // the non-stubbed version, we need to tell `component-init` how to translate module indexes from the
+        // former to the latter.
+        //
+        // TODO: this is pretty fragile in that it could silently break if `wit_component::Linker`'s implementation
+        // changes.  Can we make it more robust?
+
+        let old_adapter_count = 1;
+        let new_adapter_count = u32::try_from(wasi_imports.len()).unwrap();
+        assert!(new_adapter_count >= old_adapter_count);
+
+        Some((component, move |index: u32| {
+            if index == 0 {
+                // `main` module
+                0
+            } else if index <= new_adapter_count {
+                // adapter module
+                old_adapter_count
+            } else {
+                // one of the other kinds of module
+                index + old_adapter_count - new_adapter_count
+            }
+        }))
+    } else {
+        None
+    };
 
     // Pre-initialize the component by running it through `component_init::initialize`.  Currently, this is the
     // application's first and only chance to load any standard or third-party modules since we do not yet include
@@ -643,24 +726,31 @@ pub async fn componentize(
     let mut store = Store::new(&engine, Ctx { wasi, table });
 
     let app_name = app_name.to_owned();
-    let component = component_init::initialize(&component, move |instrumented| {
-        async move {
-            let component = &Component::new(&engine, instrumented)?;
-            if !added_to_linker {
-                add_wasi_and_stubs(&resolve, &worlds, component, &mut linker)?;
+    let component = component_init::initialize_staged(
+        &component,
+        stubbed_component
+            .as_ref()
+            .map(|(component, map)| (component.deref(), map as &dyn Fn(u32) -> u32)),
+        move |instrumented| {
+            async move {
+                let component = &Component::new(&engine, instrumented)?;
+                if !added_to_linker {
+                    add_wasi_and_stubs(&resolve, &worlds, component, &mut linker)?;
+                }
+
+                let (init, instance) =
+                    Init::instantiate_async(&mut store, component, &linker).await?;
+
+                init.exports()
+                    .call_init(&mut store, &app_name, &symbols, stub_wasi)
+                    .await?
+                    .map_err(|e| anyhow!("{e}"))?;
+
+                Ok(Box::new(MyInvoker { store, instance }) as Box<dyn Invoker>)
             }
-
-            let (init, instance) = Init::instantiate_async(&mut store, component, &linker).await?;
-
-            init.exports()
-                .call_init(&mut store, &app_name, &symbols)
-                .await?
-                .map_err(|e| anyhow!("{e}"))?;
-
-            Ok(Box::new(MyInvoker { store, instance }) as Box<dyn Invoker>)
-        }
-        .boxed()
-    })
+            .boxed()
+        },
+    )
     .await
     .with_context(move || {
         format!(
@@ -867,4 +957,73 @@ fn module_name(root: &Path, path: &Path) -> Option<String> {
     } else {
         None
     }
+}
+
+fn add_wasi_imports<'a>(
+    module: &'a [u8],
+    imports: &mut HashMap<&'a str, HashMap<&'a str, FuncType>>,
+) -> Result<()> {
+    let mut types = Vec::new();
+    for payload in Parser::new(0).parse_all(module) {
+        match payload? {
+            Payload::TypeSection(reader) => {
+                types = reader
+                    .into_iter_err_on_gc_types()
+                    .collect::<Result<Vec<_>, _>>()?;
+            }
+
+            Payload::ImportSection(reader) => {
+                for import in reader {
+                    let import = import?;
+
+                    if import.module == "wasi_snapshot_preview1"
+                        || import.module.starts_with("wasi:")
+                    {
+                        if let TypeRef::Func(ty) = import.ty {
+                            imports
+                                .entry(import.module)
+                                .or_default()
+                                .insert(import.name, types[usize::try_from(ty).unwrap()].clone());
+                        } else {
+                            bail!("encountered non-function import from WASI namespace")
+                        }
+                    }
+                }
+                break;
+            }
+
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
+fn make_stub_adapter(_module: &str, stubs: &HashMap<&str, FuncType>) -> Vec<u8> {
+    let mut types = TypeSection::new();
+    let mut functions = FunctionSection::new();
+    let mut exports = ExportSection::new();
+    let mut code = CodeSection::new();
+
+    for (index, (name, ty)) in stubs.iter().enumerate() {
+        let index = u32::try_from(index).unwrap();
+        types.function(
+            ty.params().iter().map(|&v| IntoValType(v).into()),
+            ty.results().iter().map(|&v| IntoValType(v).into()),
+        );
+        functions.function(index);
+        exports.export(name, ExportKind::Func, index);
+        let mut function = Function::new([]);
+        function.instruction(&Instruction::Unreachable);
+        function.instruction(&Instruction::End);
+        code.function(&function);
+    }
+
+    let mut module = Module::new();
+    module.section(&types);
+    module.section(&functions);
+    module.section(&exports);
+    module.section(&code);
+
+    module.finish()
 }

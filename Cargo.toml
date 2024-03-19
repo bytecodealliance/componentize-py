@@ -1,6 +1,6 @@
 [package]
 name = "componentize-py"
-version = "0.12.0"
+version = "0.13.0"
 edition = "2021"
 exclude = ["cpython"]
 
@@ -15,19 +15,26 @@ tar = "0.4.40"
 tempfile = "3.8.1"
 zstd = "0.13.0"
 componentize-py-shared = { path = "shared" }
-wasmparser = "0.118.0"
-wasm-encoder = "0.38.1"
-wit-parser = "0.13.1"
-wit-component = "0.20.0"
+# TODO: switch to upstream release versions of these deps once
+# https://github.com/bytecodealliance/wasm-tools/pull/1459 is merged and
+# released:
+wasm-encoder = { git = "https://github.com/dicej/wasm-tools", branch = "adapt-world-imports" }
+wit-parser = { git = "https://github.com/dicej/wasm-tools", branch = "adapt-world-imports" }
+wit-component = { git = "https://github.com/dicej/wasm-tools", branch = "adapt-world-imports" }
+wasmparser = { git = "https://github.com/dicej/wasm-tools", branch = "adapt-world-imports" }
 indexmap = "2.1.0"
 bincode = "1.3.3"
 heck = "0.4.1"
 pyo3 = { version = "0.20.0", features = ["abi3-py37", "extension-module"], optional = true }
-wasmtime = { path = "../wasmtime/crates/wasmtime", features = ["component-model"] }
-wasmtime-wasi = { path = "../wasmtime/crates/wasi" }
-wasi-common = { path = "../wasmtime/crates/wasi-common" }
+# TODO: switch to upstream release versions of these deps once
+# https://github.com/bytecodealliance/wasm-tools/pull/1459 is merged and
+# released, and Wasmtime has adopted those releases:
+wasmtime = { git = "https://github.com/dicej/wasmtime", branch = "isyswasfa", features = ["component-model"] }
+wasmtime-wasi = { git = "https://github.com/dicej/wasmtime", branch = "isyswasfa" }
+wasi-common = { git = "https://github.com/dicej/wasmtime", branch = "isyswasfa" }
 once_cell = "1.18.0"
 component-init = { git = "https://github.com/dicej/component-init" }
+wasm-convert = { git = "https://github.com/dicej/wasm-convert" }
 async-trait = "0.1.74"
 futures = "0.3.29"
 tokio = { version = "1.34.0", features = ["macros", "rt", "rt-multi-thread", "fs"] }
@@ -37,7 +44,7 @@ cap-std = "2.0.0"
 im-rc = "15.1.0"
 serde = { version = "1.0.193", features = ["derive"] }
 toml = "0.8.8"
-isyswasfa-transform = { path = "../transform" }
+isyswasfa-transform = { git = "https://github.com/dicej/isyswasfa-transform" }
 semver = "1.0.22"
 
 [dev-dependencies]

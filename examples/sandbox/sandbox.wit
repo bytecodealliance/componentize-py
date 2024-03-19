@@ -1,0 +1,6 @@
+package local:sandbox;
+
+world sandbox {
+  export eval: func(expression: string) -> result<string, string>;
+  export exec: func(statements: string) -> result<_, string>;
+}

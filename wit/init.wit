@@ -83,6 +83,6 @@ world init {
             types: list<%type>
         }
 
-        init: func(app-name: string, symbols: symbols) -> result<_, string>;
+        init: func(app-name: string, symbols: symbols, stub-wasi: bool) -> result<_, string>;
     }
 }
