@@ -2,7 +2,7 @@
 
 This is an example of how to use
 [`wasmtime-py`](https://github.com/bytecodealliance/wasmtime-py) and
-[`componentize-py`](https://github.com/dicej/componentize-py) to execute
+[`componentize-py`](https://github.com/bytecodealliance/componentize-py) to execute
 sandboxed Python code snippets from within a Python app.
 
 ## Prerequisites
