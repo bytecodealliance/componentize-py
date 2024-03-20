@@ -17,7 +17,7 @@ pip install componentize-py==0.13.0 wasmtime==18.0.2
 ## Running the demo
 
 ```
-componentize-py -d wit -w sandbox componentize guest -o sandbox.wasm
+componentize-py -d sandbox.wit componentize --stub-wasi guest -o sandbox.wasm
 python3 -m wasmtime.bindgen sandbox.wasm --out-dir sandbox
 python3 host.py "2 + 2"
 ```
