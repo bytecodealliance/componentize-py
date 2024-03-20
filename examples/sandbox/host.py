@@ -16,6 +16,7 @@ if len(args) == 0:
 
 config = Config()
 config.epoch_interruption = True
+config.cache = True
 
 def on_timeout(engine):
     print("timeout!")
