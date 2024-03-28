@@ -47,7 +47,7 @@ timeout is reached, `wasmtime` will raise a `Trap` error.
  $ python3 host.py 'while True: pass' '1'
 timeout!
 Traceback (most recent call last):
-  File "/Users/dicej/p/component-sandbox-demo/host.py", line 31, in <module>
+  File "/Users/dicej/p/componentize-py/examples/sandbox/host.py", line 36, in <module>
     result = sandbox.exec(store, arg)
              ^^^^^^^^^^^^^^^^^^^^^^^^
 ...
