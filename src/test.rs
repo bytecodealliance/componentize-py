@@ -15,7 +15,7 @@ use {
         component::{Component, Instance, InstancePre, Linker, ResourceTable},
         Config, Engine, Store,
     },
-    wasmtime_wasi::preview2::WasiCtxBuilder,
+    wasmtime_wasi::preview2::{WasiCtx, WasiCtxBuilder},
 };
 
 mod echoes;
@@ -156,16 +156,30 @@ impl<H: Host> Tester<H> {
         &self,
         test: impl Fn(&H1::World, &mut Store<Ctx>, &Runtime) -> Result<()>,
     ) -> Result<()> {
-        let runtime = Runtime::new()?;
-
-        let mut store = runtime.block_on(async {
-            let table = ResourceTable::new();
-            let wasi = WasiCtxBuilder::new()
+        self.test_with_wasi::<H1>(
+            WasiCtxBuilder::new()
                 .inherit_stdout()
                 .inherit_stderr()
-                .build();
+                .build(),
+            test,
+        )
+    }
 
-            Store::new(&ENGINE, Ctx { wasi, table })
+    fn test_with_wasi<H1: Host>(
+        &self,
+        wasi: WasiCtx,
+        test: impl Fn(&H1::World, &mut Store<Ctx>, &Runtime) -> Result<()>,
+    ) -> Result<()> {
+        let runtime = Runtime::new()?;
+
+        let mut store = runtime.block_on(async move {
+            Store::new(
+                &ENGINE,
+                Ctx {
+                    wasi,
+                    table: ResourceTable::new(),
+                },
+            )
         });
 
         let (world, _) = runtime

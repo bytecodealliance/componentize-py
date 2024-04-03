@@ -1,6 +1,6 @@
 use {
     super::{Ctx, Tester, SEED},
-    anyhow::{Error, Result},
+    anyhow::{anyhow, Error, Result},
     async_trait::async_trait,
     once_cell::sync::Lazy,
     std::str,
@@ -8,7 +8,10 @@ use {
         component::{Instance, InstancePre, Linker, Resource, ResourceAny},
         Store,
     },
-    wasmtime_wasi::preview2::{command, WasiView},
+    wasmtime_wasi::{
+        preview2::{command, DirPerms, FilePerms, WasiCtxBuilder, WasiView},
+        Dir,
+    },
 };
 
 wasmtime::component::bindgen!({
@@ -785,6 +788,38 @@ fn multiworld() -> Result<()> {
                 .await?;
 
             assert_eq!("Howdy BarInterface.test HostFoo::test", result);
+
+            Ok(())
+        })
+    })
+}
+
+#[test]
+fn filesystem() -> Result<()> {
+    let filename = "foo.txt";
+    let message = b"The Jabberwock, with eyes of flame";
+
+    let dir = tempfile::tempdir()?;
+    std::fs::write(dir.path().join(filename), message)?;
+    let wasi = WasiCtxBuilder::new()
+        .inherit_stdout()
+        .inherit_stderr()
+        .preopened_dir(
+            Dir::open_ambient_dir(dir.path(), cap_std::ambient_authority())?,
+            DirPerms::all(),
+            FilePerms::all(),
+            "/",
+        )
+        .build();
+
+    TESTER.test_with_wasi::<Host>(wasi, |world, store, runtime| {
+        runtime.block_on(async {
+            let value = world
+                .call_read_file(store, filename)
+                .await?
+                .map_err(|s| anyhow!("{s}"))?;
+
+            assert_eq!(&value, message);
 
             Ok(())
         })
