@@ -383,8 +383,16 @@ impl Guest for MyExports {
             fn reset_adapter_state();
         }
 
+        // This tells wasi-libc to reset its preopen state, forcing re-initialization at runtime.
+        #[link(wasm_import_module = "env")]
+        extern "C" {
+            #[cfg_attr(target_arch = "wasm32", link_name = "__wasilibc_reset_preopens")]
+            fn wasilibc_reset_preopens();
+        }
+
         unsafe {
             reset_adapter_state();
+            wasilibc_reset_preopens();
         }
 
         result

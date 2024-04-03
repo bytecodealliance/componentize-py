@@ -177,4 +177,6 @@ world tests {
   export test-resource-alias: func(things: list<thing>) -> list<thing>;
 
   export add: func(a: borrow<float>, b: borrow<float>) -> own<float>;
+
+  export read-file: func(path: string) -> result<list<u8>, string>;
 }

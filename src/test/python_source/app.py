@@ -1,3 +1,4 @@
+import traceback
 import tests
 import resource_borrow_export
 import resource_aggregates
@@ -7,7 +8,7 @@ from tests import exports, imports
 from tests.imports import resource_borrow_import
 from tests.imports import simple_import_and_export
 from tests.exports import resource_alias2
-from tests.types import Result, Ok
+from tests.types import Result, Ok, Err
 from typing import Tuple, List, Optional
 from foo_sdk.wit import exports as foo_exports
 from foo_sdk.wit.imports.foo_interface import test as foo_test
@@ -122,10 +123,17 @@ class Tests(tests.Tests):
         return resource_borrow_import.foo(resource_borrow_import.Thing(v + 1)) + 4
 
     def test_resource_alias(self, things: List[imports.resource_alias1.Thing]) -> List[imports.resource_alias1.Thing]:
-       return things
+        return things
 
     def add(self, a: imports.resource_floats.Float, b: imports.resource_floats.Float) -> imports.resource_floats.Float:
-       return imports.resource_floats.Float(a.get() + b.get() + 5)
+        return imports.resource_floats.Float(a.get() + b.get() + 5)
+
+    def read_file(self, path: str) -> bytes:
+        try:
+            with open(file=path, mode="rb") as f:
+                return f.read()
+        except:
+            raise Err(traceback.format_exc())
    
 class FooInterface(foo_exports.FooInterface):
     def test(self, s: str) -> str:
