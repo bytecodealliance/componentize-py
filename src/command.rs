@@ -136,7 +136,7 @@ fn generate_bindings(common: Common, bindings: Bindings) -> Result<()> {
 fn componentize(common: Common, componentize: Componentize) -> Result<()> {
     let mut python_path = componentize.python_path;
 
-    if let Some(site_packages) = find_site_packages()? {
+    for site_packages in find_site_packages()? {
         python_path.push(
             site_packages
                 .to_str()
@@ -168,18 +168,18 @@ fn componentize(common: Common, componentize: Componentize) -> Result<()> {
     Ok(())
 }
 
-fn find_site_packages() -> Result<Option<PathBuf>> {
+fn find_site_packages() -> Result<Vec<PathBuf>> {
     Ok(if let Ok(env) = env::var("VIRTUAL_ENV") {
         let dir = Path::new(&env).join("lib");
 
         if let Some(site_packages) = find_dir("site-packages", &dir)? {
-            Some(site_packages)
+            vec![site_packages]
         } else {
             eprintln!(
                 "warning: site-packages directory not found under {}",
                 dir.display()
             );
-            None
+            Vec::new()
         }
     } else {
         let pipenv_packages = match process::Command::new("pipenv").arg("--venv").output() {
@@ -188,38 +188,45 @@ fn find_site_packages() -> Result<Option<PathBuf>> {
                     let dir = Path::new(str::from_utf8(&output.stdout)?.trim()).join("lib");
 
                     if let Some(site_packages) = find_dir("site-packages", &dir)? {
-                        Some(site_packages)
+                        vec![site_packages]
                     } else {
                         eprintln!(
                             "warning: site-packages directory not found under {}",
                             dir.display()
                         );
-                        None
+                        Vec::new()
                     }
                 } else {
                     // `pipenv` is in `$PATH`, but this app does not appear to be using it
-                    None
+                    Vec::new()
                 }
             }
             Err(_) => {
                 // `pipenv` is not in `$PATH -- assume this app isn't using it
-                None
+                Vec::new()
             }
         };
 
-        if pipenv_packages.is_some() {
+        if !pipenv_packages.is_empty() {
             pipenv_packages
         } else {
             // Get site packages location using the `site` module in python
             match process::Command::new("python3")
-                .args(["-c", "import site; print(site.getsitepackages()[0])"])
+                .args([
+                    "-c",
+                    "import site; \
+                     list = site.getsitepackages(); \
+                     list.insert(0, site.getusersitepackages()); \
+                     print(';'.join(list))",
+                ])
                 .output()
             {
-                Ok(output) => {
-                    let path = Path::new(str::from_utf8(&output.stdout)?.trim()).to_path_buf();
-                    Some(path)
-                }
-                Err(_) => None,
+                Ok(output) => str::from_utf8(&output.stdout)?
+                    .trim()
+                    .split(';')
+                    .map(|p| Path::new(p).to_path_buf())
+                    .collect(),
+                Err(_) => Vec::new(),
             }
         }
     })
