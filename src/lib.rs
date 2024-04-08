@@ -221,6 +221,12 @@ pub async fn componentize(
     isyswasfa: Option<&str>,
     stub_wasi: bool,
 ) -> Result<()> {
+    // Remove non-existent elements from `python_path` so we don't choke on them later:
+    let python_path = &python_path
+        .iter()
+        .filter_map(|&s| Path::new(s).exists().then_some(s))
+        .collect::<Vec<_>>();
+
     // Untar the embedded copy of the Python standard library into a temporary directory
     let stdlib = tempfile::tempdir()?;
 
