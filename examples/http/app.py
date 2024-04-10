@@ -13,7 +13,7 @@ from proxy import exports
 from proxy.types import Ok
 from proxy.imports import types
 from proxy.imports.types import (
-    MethodGet, MethodPost, Scheme, SchemeHttp, SchemeHttps, SchemeOther, IncomingRequest, ResponseOutparam,
+    Method_Get, Method_Post, Scheme, Scheme_Http, Scheme_Https, Scheme_Other, IncomingRequest, ResponseOutparam,
     OutgoingResponse, Fields, OutgoingBody, OutgoingRequest
 )
 from poll_loop import Stream, Sink, PollLoop
@@ -40,7 +40,7 @@ async def handle_async(request: IncomingRequest, response_out: ResponseOutparam)
     path = request.path_with_query()
     headers = request.headers().entries()
 
-    if isinstance(method, MethodGet) and path == "/hash-all":
+    if isinstance(method, Method_Get) and path == "/hash-all":
         # Collect one or more "url" headers, download their contents
         # concurrently, compute their SHA-256 hashes incrementally (i.e. without
         # buffering the response bodies), and stream the results back to the
@@ -61,7 +61,7 @@ async def handle_async(request: IncomingRequest, response_out: ResponseOutparam)
 
         sink.close()
 
-    elif isinstance(method, MethodPost) and path == "/echo":
+    elif isinstance(method, Method_Post) and path == "/echo":
         # Echo the request body back to the client without buffering.
 
         response = OutgoingResponse(Fields.from_list(list(filter(lambda pair: pair[0] == "content-type", headers))))
@@ -99,11 +99,11 @@ async def sha256(url: str) -> Tuple[str, str]:
 
     match url_parsed.scheme:
         case "http":
-            scheme: Scheme = SchemeHttp()
+            scheme: Scheme = Scheme_Http()
         case "https":
-            scheme = SchemeHttps()
+            scheme = Scheme_Https()
         case _:
-            scheme = SchemeOther(url_parsed.scheme)
+            scheme = Scheme_Other(url_parsed.scheme)
 
     request = OutgoingRequest(Fields.from_list([]))
     request.set_scheme(scheme)

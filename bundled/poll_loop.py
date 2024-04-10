@@ -14,7 +14,7 @@ import subprocess
 from proxy.types import Ok, Err
 from proxy.imports import types, streams, poll, outgoing_handler
 from proxy.imports.types import IncomingBody, OutgoingBody, OutgoingRequest, IncomingResponse
-from proxy.imports.streams import StreamErrorClosed, InputStream
+from proxy.imports.streams import StreamError_Closed, InputStream
 from proxy.imports.poll import Pollable
 from typing import Optional, cast
 
@@ -61,7 +61,7 @@ class Stream:
                     else:
                         return buffer
             except Err as e:
-                if isinstance(e.value, StreamErrorClosed):
+                if isinstance(e.value, StreamError_Closed):
                     if self.stream is not None:
                         self.stream.__exit__()
                         self.stream = None
