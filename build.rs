@@ -249,6 +249,8 @@ fn include(path: &Path) -> bool {
 }
 
 fn add(builder: &mut Builder<impl Write>, root: &Path, path: &Path) -> Result<()> {
+    println!("cargo:rerun-if-changed={}", path.to_str().unwrap());
+
     if path.is_dir() {
         for entry in fs::read_dir(path)? {
             add(builder, root, &entry?.path())?;
