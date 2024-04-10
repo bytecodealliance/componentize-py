@@ -61,6 +61,84 @@ async def handle_async(request: IncomingRequest, response_out: ResponseOutparam)
 
         sink.close()
 
+    elif isinstance(method, Method_Get) and path == "/post-outgoing":
+        # Post a large body to the specified URL and forward the response back
+        # to the client.
+
+        url = list(map(lambda pair: str(pair[1], "utf-8"), filter(lambda pair: pair[0] == "url", headers)))[0]
+
+        url_parsed = parse.urlparse(url)
+
+        match url_parsed.scheme:
+            case "http":
+                scheme: Scheme = Scheme_Http()
+            case "https":
+                scheme = Scheme_Https()
+            case _:
+                scheme = Scheme_Other(url_parsed.scheme)
+
+        outgoing_request = OutgoingRequest(Fields.from_list([]))
+        outgoing_request.set_method(Method_Post())
+        outgoing_request.set_scheme(scheme)
+        outgoing_request.set_authority(url_parsed.netloc)
+        outgoing_request.set_path_with_query(url_parsed.path)
+
+        sink = Sink(outgoing_request.body())
+
+        incoming_response = (await asyncio.gather(
+            poll_loop.send(outgoing_request),
+            sink.send(bytes([x % 256 for x in range(1024 * 1024)]))
+        ))[0]
+
+        sink.close()
+
+        incoming_status = incoming_response.status()
+        incoming_headers = incoming_response.headers()
+
+        buffer = bytearray()
+        stream = Stream(incoming_response.consume())
+        hasher = hashlib.sha256()
+        while True:
+            chunk = await stream.next()
+            if chunk is None:
+                break;
+            else:
+                buffer += chunk
+
+        outgoing_response = OutgoingResponse(incoming_headers)
+        outgoing_response.set_status_code(incoming_status)
+
+        response_body = outgoing_response.body()
+
+        ResponseOutparam.set(response_out, Ok(outgoing_response))
+
+        sink = Sink(response_body)
+        await sink.send(bytes(buffer))
+        sink.close()
+
+    elif isinstance(method, Method_Post) and path == "/hash-incoming":
+        # Hash the request body and send the result to the client.
+
+        response = OutgoingResponse(Fields.from_list([("content-type", b"text/plain")]))
+
+        response_body = response.body()
+
+        ResponseOutparam.set(response_out, Ok(response))
+
+        stream = Stream(request.consume())
+        hasher = hashlib.sha256()
+        while True:
+            chunk = await stream.next()
+            if chunk is None:
+                sha = hasher.hexdigest()
+                break
+            else:
+                hasher.update(chunk)
+
+        sink = Sink(response_body)
+        await sink.send(bytes(f"{sha}\n", "utf-8"))
+        sink.close()
+
     elif isinstance(method, Method_Post) and path == "/echo":
         # Echo the request body back to the client without buffering.
 
