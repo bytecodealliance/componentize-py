@@ -125,10 +125,11 @@ class PollLoop(asyncio.AbstractEventLoop):
         self.running = True
         asyncio.events._set_running_loop(self)
         while self.running and not future.done():
-            handle = self.handles[0]
-            self.handles = self.handles[1:]
-            if not handle._cancelled:
-                handle._run()
+            handles = self.handles
+            self.handles = []
+            for handle in handles:
+                if not handle._cancelled:
+                    handle._run()
                 
             if self.wakers:
                 [pollables, wakers] = list(map(list, zip(*self.wakers)))
