@@ -73,7 +73,6 @@ pub struct PackageName<'a> {
 #[derive(Clone)]
 pub struct MyInterface<'a> {
     pub id: InterfaceId,
-    pub package: Option<PackageName<'a>>,
     pub name: &'a str,
     pub docs: Option<&'a str>,
     pub resource_directions: im_rc::HashMap<TypeId, Direction>,
@@ -559,7 +558,6 @@ impl<'a> Summary<'a> {
                     self.resource_state = Some(ResourceState {
                         direction,
                         interface: Some(MyInterface {
-                            package,
                             name: item_name,
                             id: *id,
                             docs: interface.docs.contents.as_deref(),
@@ -578,7 +576,6 @@ impl<'a> Summary<'a> {
                     for (func_name, func) in &interface.functions {
                         self.visit_function(
                             Some(MyInterface {
-                                package,
                                 name: item_name,
                                 id: *id,
                                 docs: interface.docs.contents.as_deref(),
