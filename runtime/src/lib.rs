@@ -1256,3 +1256,13 @@ pub mod dl {
         LIBRARIES.0 = libraries;
     }
 }
+
+// As of this writing, recent Rust `nightly` builds include a version of the `libc` crate that expects `wasi-libc`
+// to define the following global variables, but `wasi-libc` defines them as preprocessor constants which aren't
+// visible at link time, so we need to define them somewhere.  Ideally, we should fix this upstream, but for now we
+// work around it:
+
+#[no_mangle]
+static _CLOCK_PROCESS_CPUTIME_ID: u8 = 2;
+#[no_mangle]
+static _CLOCK_THREAD_CPUTIME_ID: u8 = 3;
