@@ -39,7 +39,7 @@ If you're using an IDE or just want to examine the bindings produced for the WIT
 world, you can generate them using the `bindings` subcommand:
 
 ```shell
-componentize-py -d hello.wit -w hello bindings .
+componentize-py -d hello.wit -w hello bindings hello_guest
 ```
 
 Then, use the `hello` module produced by the command above to write your app:
@@ -56,7 +56,38 @@ EOF
 And finally generate the component:
 
 ```shell
-componentize-py -d hello.wit -w hello componentize app -o app.wasm
+componentize-py -d hello.wit -w hello componentize --stub-wasi app -o app.wasm
+```
+
+To test it, you can install `wasmtime-py` and use it to generate host-side
+bindings for the component:
+
+```shell
+pip install wasmtime
+python3 -m wasmtime.bindgen app.wasm --out-dir hello_host
+```
+
+Now we can write a simple host app using those bindings:
+
+```shell
+cat >host.py <<EOF
+from hello_host import Root
+from wasmtime import Config, Engine, Store
+
+config = Config()
+config.cache = True
+engine = Engine(config)
+store = Store(engine)
+hello = Root(store)
+print(f"component says: {hello.hello(store)}")
+EOF
+```
+
+And finally run it:
+
+```shell
+ $ python3 host.py
+component says: Hello, World!
 ```
 
 See the

@@ -1085,7 +1085,8 @@ pub extern "C" fn componentize_py_to_canon_handle(
     }
 }
 
-// TODO: move this into `wasm-tools`
+// TODO: Update to the latest `wit-component`, which has a `use_built_in_libdl` option that makes the following
+// unecessary:
 pub mod dl {
     use std::{
         ffi::{c_char, c_int, c_void, CStr},
