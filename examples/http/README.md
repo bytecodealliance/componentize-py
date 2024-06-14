@@ -10,7 +10,7 @@ run a Python-based component targetting the [wasi-http] `proxy` world.
 ## Prerequisites
 
 * `Wasmtime` 18.0.0 or later
-* `componentize-py` 0.13.3
+* `componentize-py` 0.13.4
 
 Below, we use [Rust](https://rustup.rs/)'s `cargo` to install `Wasmtime`.  If
 you don't have `cargo`, you can download and install from
@@ -18,7 +18,7 @@ https://github.com/bytecodealliance/wasmtime/releases/tag/v18.0.0.
 
 ```
 cargo install --version 18.0.0 wasmtime-cli
-pip install componentize-py==0.13.3
+pip install componentize-py==0.13.4
 ```
 
 ## Running the demo

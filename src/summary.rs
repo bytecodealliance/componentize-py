@@ -1398,7 +1398,7 @@ impl<'a> Summary<'a> {
                     .join("\n    ");
 
                 if fields.is_empty() {
-                    fields = "pass".to_owned()
+                    "pass".to_owned().clone_into(&mut fields)
                 }
 
                 let docs = docstring(world_module, docs, 1, None);

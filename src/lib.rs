@@ -461,7 +461,8 @@ pub async fn componentize(
                 .strip_prefix(path)
                 .unwrap()
                 .to_str()
-                .context("non-UTF-8 path")?;
+                .context("non-UTF-8 path")?
+                .replace('\\', "/");
 
             libraries.push(Library {
                 name: format!("/{index}/{path}"),
@@ -915,9 +916,9 @@ fn search_directory(
                     // subdirectory to be the true owner of the file.  This is important later, when we derive a
                     // package name by stripping the root directory from the file path.
                     if root > existing.root {
-                        existing.module = module.clone();
-                        existing.root = root.to_owned();
-                        existing.path = path.parent().unwrap().to_owned();
+                        module.clone_into(&mut existing.module);
+                        root.clone_into(&mut existing.root);
+                        path.parent().unwrap().clone_into(&mut existing.path);
                     }
                     push = false;
                     break;
