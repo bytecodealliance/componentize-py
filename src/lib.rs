@@ -461,7 +461,8 @@ pub async fn componentize(
                 .strip_prefix(path)
                 .unwrap()
                 .to_str()
-                .context("non-UTF-8 path")?;
+                .context("non-UTF-8 path")?
+		.replace('\\', "/");
 
             libraries.push(Library {
                 name: format!("/{index}/{path}"),
