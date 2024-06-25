@@ -618,7 +618,7 @@ pub async fn componentize(
                         .join(binding_path)
                         .strip_prefix(dir)
                         .ok()
-                        .map(|p| (index, p.to_str().unwrap().to_owned()))
+                        .map(|p| (index, p.to_str().unwrap().replace('\\', "/")))
                 } else {
                     None
                 })
