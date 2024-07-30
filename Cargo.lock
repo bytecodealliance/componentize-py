@@ -395,7 +395,7 @@ dependencies = [
  "hex",
  "im-rc",
  "indexmap",
- "isyswasfa-transform",
+ "isyswasfa-transform 0.1.0 (git+https://github.com/dicej/isyswasfa-transform?rev=db4fb62d)",
  "once_cell",
  "pretty_env_logger",
  "proptest",
@@ -1061,6 +1061,14 @@ dependencies = [
  "hermit-abi",
  "libc",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "isyswasfa-transform"
+version = "0.1.0"
+source = "git+https://github.com/dicej/isyswasfa-transform?rev=db4fb62d#db4fb62de494f96cb68daf081d02e36ae32354fa"
+dependencies = [
+ "wit-parser 0.201.0",
 ]
 
 [[package]]
@@ -2426,7 +2434,7 @@ version = "18.0.0"
 source = "git+https://github.com/dicej/wasmtime?branch=isyswasfa#aa4b5c04916d8091c16bf8334df36664a873dc3f"
 dependencies = [
  "anyhow",
- "isyswasfa-transform",
+ "isyswasfa-transform 0.1.0 (git+https://github.com/dicej/isyswasfa-transform)",
  "proc-macro2",
  "quote",
  "syn",
