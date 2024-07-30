@@ -368,12 +368,12 @@ checksum = "acbf1af155f9b9ef647e42cdc158db4b64a1b61f743629225fde6f3e0be2a7c7"
 [[package]]
 name = "component-init"
 version = "0.1.0"
-source = "git+https://github.com/dicej/component-init?rev=312bc8c5#312bc8c558ab262630c9a86beca2ccd204aa4b8d"
+source = "git+https://github.com/dicej/component-init?rev=70d4523b#70d4523bbb5a3fbc14af3e2845ae4028a9e860b8"
 dependencies = [
  "anyhow",
  "async-trait",
  "futures",
- "wasm-convert 0.1.0 (git+https://github.com/dicej/wasm-convert)",
+ "wasm-convert",
  "wasm-encoder 0.201.0 (git+https://github.com/dicej/wasm-tools?branch=adapt-world-imports)",
  "wasmparser 0.201.0",
 ]
@@ -408,7 +408,7 @@ dependencies = [
  "tokio",
  "toml 0.8.12",
  "wasi-common",
- "wasm-convert 0.1.0 (git+https://github.com/dicej/wasm-convert?rev=f4cb9b22)",
+ "wasm-convert",
  "wasm-encoder 0.201.0 (git+https://github.com/dicej/wasm-tools?branch=adapt-world-imports)",
  "wasmparser 0.201.0",
  "wasmtime",
@@ -2226,15 +2226,6 @@ checksum = "af190c94f2773fdb3729c55b007a722abb5384da03bc0986df4c289bf5567e96"
 name = "wasm-convert"
 version = "0.1.0"
 source = "git+https://github.com/dicej/wasm-convert?rev=f4cb9b22#f4cb9b224b3e3f7799d84c031075982babbbc81d"
-dependencies = [
- "wasm-encoder 0.201.0 (git+https://github.com/dicej/wasm-tools?branch=adapt-world-imports)",
- "wasmparser 0.201.0",
-]
-
-[[package]]
-name = "wasm-convert"
-version = "0.1.0"
-source = "git+https://github.com/dicej/wasm-convert#f4cb9b224b3e3f7799d84c031075982babbbc81d"
 dependencies = [
  "wasm-encoder 0.201.0 (git+https://github.com/dicej/wasm-tools?branch=adapt-world-imports)",
  "wasmparser 0.201.0",
