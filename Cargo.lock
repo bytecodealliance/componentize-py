@@ -368,7 +368,7 @@ checksum = "acbf1af155f9b9ef647e42cdc158db4b64a1b61f743629225fde6f3e0be2a7c7"
 [[package]]
 name = "component-init"
 version = "0.1.0"
-source = "git+https://github.com/dicej/component-init#312bc8c558ab262630c9a86beca2ccd204aa4b8d"
+source = "git+https://github.com/dicej/component-init?rev=312bc8c5#312bc8c558ab262630c9a86beca2ccd204aa4b8d"
 dependencies = [
  "anyhow",
  "async-trait",

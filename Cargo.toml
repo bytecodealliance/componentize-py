@@ -33,7 +33,7 @@ wasmtime = { git = "https://github.com/dicej/wasmtime", branch = "isyswasfa", fe
 wasmtime-wasi = { git = "https://github.com/dicej/wasmtime", branch = "isyswasfa" }
 wasi-common = { git = "https://github.com/dicej/wasmtime", branch = "isyswasfa" }
 once_cell = "1.18.0"
-component-init = { git = "https://github.com/dicej/component-init" }
+component-init = { git = "https://github.com/dicej/component-init", rev = "312bc8c5" }
 wasm-convert = { git = "https://github.com/dicej/wasm-convert", rev = "f4cb9b22" }
 async-trait = "0.1.74"
 futures = "0.3.29"
