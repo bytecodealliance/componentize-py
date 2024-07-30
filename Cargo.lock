@@ -373,7 +373,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "futures",
- "wasm-convert",
+ "wasm-convert 0.1.0 (git+https://github.com/dicej/wasm-convert)",
  "wasm-encoder 0.201.0 (git+https://github.com/dicej/wasm-tools?branch=adapt-world-imports)",
  "wasmparser 0.201.0",
 ]
@@ -408,7 +408,7 @@ dependencies = [
  "tokio",
  "toml 0.8.12",
  "wasi-common",
- "wasm-convert",
+ "wasm-convert 0.1.0 (git+https://github.com/dicej/wasm-convert?rev=f4cb9b22)",
  "wasm-encoder 0.201.0 (git+https://github.com/dicej/wasm-tools?branch=adapt-world-imports)",
  "wasmparser 0.201.0",
  "wasmtime",
@@ -2221,6 +2221,15 @@ name = "wasm-bindgen-shared"
 version = "0.2.92"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af190c94f2773fdb3729c55b007a722abb5384da03bc0986df4c289bf5567e96"
+
+[[package]]
+name = "wasm-convert"
+version = "0.1.0"
+source = "git+https://github.com/dicej/wasm-convert?rev=f4cb9b22#f4cb9b224b3e3f7799d84c031075982babbbc81d"
+dependencies = [
+ "wasm-encoder 0.201.0 (git+https://github.com/dicej/wasm-tools?branch=adapt-world-imports)",
+ "wasmparser 0.201.0",
+]
 
 [[package]]
 name = "wasm-convert"
