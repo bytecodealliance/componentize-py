@@ -38,6 +38,11 @@ pub static IMPORT_SIGNATURES: &[(&str, &[ValType], &[ValType])] = &[
     ),
     ("componentize-py#Free", &[ValType::I32; 3], &[]),
     (
+        "componentize-py#ToCanonBool",
+        &[ValType::I32; 2],
+        &[ValType::I32],
+    ),
+    (
         "componentize-py#ToCanonI32",
         &[ValType::I32; 2],
         &[ValType::I32],
@@ -76,6 +81,11 @@ pub static IMPORT_SIGNATURES: &[(&str, &[ValType], &[ValType])] = &[
     (
         "componentize-py#GetListElement",
         &[ValType::I32; 3],
+        &[ValType::I32],
+    ),
+    (
+        "componentize-py#FromCanonBool",
+        &[ValType::I32; 2],
         &[ValType::I32],
     ),
     (
@@ -575,7 +585,14 @@ impl<'a> FunctionBindgen<'a> {
 
     fn to_canon(&mut self, ty: Type, context: u32, value: u32) {
         match ty {
-            Type::Bool | Type::U8 | Type::U16 | Type::U32 | Type::S8 | Type::S16 | Type::S32 => {
+            Type::Bool => {
+                self.push(Ins::LocalGet(context));
+                self.push(Ins::LocalGet(value));
+                self.push(Ins::Call(
+                    *IMPORTS.get("componentize-py#ToCanonBool").unwrap(),
+                ));
+            }
+            Type::U8 | Type::U16 | Type::U32 | Type::S8 | Type::S16 | Type::S32 => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value));
                 self.push(Ins::Call(
@@ -850,7 +867,16 @@ impl<'a> FunctionBindgen<'a> {
 
     fn store(&mut self, ty: Type, context: u32, value: u32, destination: u32) {
         match ty {
-            Type::Bool | Type::U8 | Type::S8 => {
+            Type::Bool => {
+                self.push(Ins::LocalGet(destination));
+                self.push(Ins::LocalGet(context));
+                self.push(Ins::LocalGet(value));
+                self.push(Ins::Call(
+                    *IMPORTS.get("componentize-py#ToCanonBool").unwrap(),
+                ));
+                self.push(Ins::I32Store8(mem_arg(0, 0)));
+            }
+            Type::U8 | Type::S8 => {
                 self.push(Ins::LocalGet(destination));
                 self.to_canon(ty, context, value);
                 self.push(Ins::I32Store8(mem_arg(0, 0)));
@@ -1384,7 +1410,14 @@ impl<'a> FunctionBindgen<'a> {
 
     fn from_canon(&mut self, ty: Type, context: u32, value: &[u32]) {
         match ty {
-            Type::Bool | Type::U8 | Type::U16 | Type::U32 | Type::S8 | Type::S16 | Type::S32 => {
+            Type::Bool => {
+                self.push(Ins::LocalGet(context));
+                self.push(Ins::LocalGet(value[0]));
+                self.push(Ins::Call(
+                    *IMPORTS.get("componentize-py#FromCanonBool").unwrap(),
+                ));
+            }
+            Type::U8 | Type::U16 | Type::U32 | Type::S8 | Type::S16 | Type::S32 => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value[0]));
                 self.push(Ins::Call(
