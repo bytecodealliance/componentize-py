@@ -2397,8 +2397,8 @@ impl<'a> TypeNames<'a> {
 
     fn type_name(&mut self, ty: Type, seen: &HashSet<TypeId>, resource: Option<TypeId>) -> String {
         match ty {
-            Type::Bool
-            | Type::U8
+            Type::Bool => "bool".into(),
+            Type::U8
             | Type::U16
             | Type::U32
             | Type::U64

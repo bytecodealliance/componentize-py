@@ -12,7 +12,7 @@ use {
     pyo3::{
         exceptions::PyAssertionError,
         intern,
-        types::{PyBytes, PyDict, PyList, PyMapping, PyModule, PyString, PyTuple},
+        types::{PyBool, PyBytes, PyDict, PyList, PyMapping, PyModule, PyString, PyTuple},
         Py, PyAny, PyErr, PyObject, PyResult, Python, ToPyObject,
     },
     std::{
@@ -512,6 +512,15 @@ pub unsafe extern "C" fn componentize_py_free(ptr: *mut u8, size: usize, align: 
     alloc::dealloc(ptr, Layout::from_size_align(size, align).unwrap())
 }
 
+#[export_name = "componentize-py#ToCanonBool"]
+pub extern "C" fn componentize_py_to_canon_bool(_py: &Python, value: &PyAny) -> u32 {
+    if value.is_true().unwrap() {
+        1
+    } else {
+        0
+    }
+}
+
 #[export_name = "componentize-py#ToCanonI32"]
 pub extern "C" fn componentize_py_to_canon_i32(_py: &Python, value: &PyAny) -> i32 {
     value.extract().unwrap()
@@ -685,6 +694,11 @@ pub extern "C" fn componentize_py_get_list_element<'a>(
     index: usize,
 ) -> &'a PyAny {
     value.downcast::<PyList>().unwrap().get_item(index).unwrap()
+}
+
+#[export_name = "componentize-py#FromCanonBool"]
+pub extern "C" fn componentize_py_from_canon_bool<'a>(py: &'a Python<'a>, value: u32) -> &'a PyAny {
+    PyBool::new(*py, value != 0)
 }
 
 #[export_name = "componentize-py#FromCanonI32"]

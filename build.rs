@@ -142,7 +142,7 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
             run(Command::new(clang)
                 .arg("-shared")
                 .arg("-o")
-                .arg(&out_dir.join(name))
+                .arg(out_dir.join(name))
                 .arg("-Wl,--whole-archive")
                 .arg(&path)
                 .arg("-Wl,--no-whole-archive")

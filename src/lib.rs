@@ -584,7 +584,7 @@ pub async fn componentize(
                 .with_context(|| format!("unable to open {path}"))?,
             DirPerms::all(),
             FilePerms::all(),
-            &index.to_string(),
+            index.to_string(),
         );
     }
 
