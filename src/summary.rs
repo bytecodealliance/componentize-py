@@ -297,8 +297,8 @@ impl<'a> Summary<'a> {
             | Type::Char
             | Type::U64
             | Type::S64
-            | Type::Float32
-            | Type::Float64
+            | Type::F32
+            | Type::F64
             | Type::String => (),
             Type::Id(id) => {
                 self.world_types.entry(world).or_default().insert(id);
@@ -522,7 +522,7 @@ impl<'a> Summary<'a> {
             }
 
             match item {
-                WorldItem::Interface(id) => {
+                WorldItem::Interface { id, .. } => {
                     let (package, item_name) = match key {
                         wit_parser::WorldKey::Name(name) => (None, name),
                         wit_parser::WorldKey::Interface(id) => {
@@ -964,8 +964,8 @@ impl<'a> Summary<'a> {
             | Type::Char
             | Type::U64
             | Type::S64
-            | Type::Float32
-            | Type::Float64
+            | Type::F32
+            | Type::F64
             | Type::String => (),
             Type::Id(id) => {
                 let ty = &self.resolve.types[id];
@@ -1656,7 +1656,7 @@ class {camel}(Flag):
                                 "#;
                                 if stub_runtime_calls {
                                     format!(
-                                        "{enter}                                    
+                                        "{enter}
     def __exit__(self, *args):
         {docs}{NOT_IMPLEMENTED}
 "
@@ -2335,8 +2335,8 @@ from .types import Result, Ok, Err, Some
             | Type::Char
             | Type::U64
             | Type::S64
-            | Type::Float32
-            | Type::Float64
+            | Type::F32
+            | Type::F64
             | Type::String => false,
             Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => record
@@ -2406,7 +2406,7 @@ impl<'a> TypeNames<'a> {
             | Type::S16
             | Type::S32
             | Type::S64 => "int".into(),
-            Type::Float32 | Type::Float64 => "float".into(),
+            Type::F32 | Type::F64 => "float".into(),
             Type::Char | Type::String => "str".into(),
             Type::Id(id) => {
                 let ty = &self.summary.resolve.types[id];

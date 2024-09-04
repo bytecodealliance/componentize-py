@@ -11,7 +11,7 @@ use {
     std::borrow::Cow,
     wasm_encoder::{
         CodeSection, ConstExpr, CustomSection, ElementSection, Elements, Encode, EntityType,
-        ExportKind, ExportSection, Function, FunctionSection, GlobalType, HeapType, ImportSection,
+        ExportKind, ExportSection, Function, FunctionSection, GlobalType, ImportSection,
         Instruction as Ins, MemoryType, Module, RefType, TableType, TypeSection, ValType,
     },
     wit_component::metadata,
@@ -112,6 +112,7 @@ pub fn make_bindings(
         EntityType::Global(GlobalType {
             val_type: ValType::I32,
             mutable: false,
+            shared: false,
         }),
     );
     global_names.push((table_base, "__table_base".to_owned()));
@@ -123,6 +124,7 @@ pub fn make_bindings(
         EntityType::Global(GlobalType {
             val_type: ValType::I32,
             mutable: true,
+            shared: false,
         }),
     );
     global_names.push((stack_pointer, "__stack_pointer".to_owned()));
@@ -135,6 +137,7 @@ pub fn make_bindings(
             maximum: None,
             memory64: false,
             shared: false,
+            page_size_log2: None,
         }),
     );
 
@@ -142,10 +145,7 @@ pub fn make_bindings(
         "env",
         "__indirect_function_table",
         EntityType::Table(TableType {
-            element_type: RefType {
-                nullable: true,
-                heap_type: HeapType::Func,
-            },
+            element_type: RefType::FUNCREF,
             minimum: summary
                 .functions
                 .iter()
@@ -154,6 +154,7 @@ pub fn make_bindings(
                 .try_into()
                 .unwrap(),
             maximum: None,
+            table64: false,
         }),
     );
 

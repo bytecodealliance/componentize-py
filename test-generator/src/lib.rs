@@ -802,7 +802,6 @@ use {{
     async_trait::async_trait,
     once_cell::sync::Lazy,
     proptest::strategy::{{Just, Strategy}},
-    wasmtime_wasi::preview2::command,
     wasmtime::{{
         component::{{Instance, InstancePre, Linker, TypedFunc}},
         Store,
@@ -812,7 +811,8 @@ use {{
 wasmtime::component::bindgen!({{
     path: {wit_path:?},
     world: "echoes-generated-test",
-    async: true
+    async: true,
+    trappable_imports: true,
 }});
 
 pub struct Exports {{
@@ -831,7 +831,7 @@ impl super::Host for Host {{
     type World = Exports;
 
     fn add_to_linker(linker: &mut Linker<Ctx>) -> Result<()> {{
-        command::add_to_linker(&mut *linker)?;
+        wasmtime_wasi::add_to_linker_async(&mut *linker)?;
         {PREFIX}::add_to_linker(linker, |ctx| ctx)?;
         Ok(())
     }}

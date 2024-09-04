@@ -31,12 +31,8 @@ use {
         Config, Engine, Store,
     },
     wasmtime_wasi::{
-        preview2::{
-            command as wasi_command,
-            pipe::{MemoryInputPipe, MemoryOutputPipe},
-            DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, WasiView,
-        },
-        Dir,
+        pipe::{MemoryInputPipe, MemoryOutputPipe},
+        DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, WasiView,
     },
     wit_parser::{Resolve, TypeDefKind, UnresolvedPackage, WorldId, WorldItem, WorldKey},
     zstd::Decoder,
@@ -322,7 +318,7 @@ pub async fn componentize(
 
                     if let Some(resolve) = &mut resolve {
                         let remap = resolve.merge(my_resolve)?;
-                        world = remap.worlds[world.index()];
+                        world = remap.worlds[world.index()].expect("missing world");
                     } else {
                         resolve = Some(my_resolve);
                     }
@@ -562,30 +558,12 @@ pub async fn componentize(
         .env("PYTHONUNBUFFERED", "1")
         .env("COMPONENTIZE_PY_APP_NAME", app_name)
         .env("PYTHONHOME", "/python")
-        .preopened_dir(
-            Dir::open_ambient_dir(stdlib.path(), cap_std::ambient_authority())
-                .with_context(|| format!("unable to open {}", stdlib.path().display()))?,
-            DirPerms::all(),
-            FilePerms::all(),
-            "python",
-        )
-        .preopened_dir(
-            Dir::open_ambient_dir(bundled.path(), cap_std::ambient_authority())
-                .with_context(|| format!("unable to open {}", bundled.path().display()))?,
-            DirPerms::all(),
-            FilePerms::all(),
-            "bundled",
-        );
+        .preopened_dir(stdlib.path(), "python", DirPerms::all(), FilePerms::all())?
+        .preopened_dir(bundled.path(), "bundled", DirPerms::all(), FilePerms::all())?;
 
     // Generate guest mounts for each host directory in `python_path`.
     for (index, path) in python_path.iter().enumerate() {
-        wasi.preopened_dir(
-            Dir::open_ambient_dir(path, cap_std::ambient_authority())
-                .with_context(|| format!("unable to open {path}"))?,
-            DirPerms::all(),
-            FilePerms::all(),
-            index.to_string(),
-        );
+        wasi.preopened_dir(path, index.to_string(), DirPerms::all(), FilePerms::all())?;
     }
 
     // For each Python package with a `componentize-py.toml` file that specifies where generated bindings for that
@@ -687,13 +665,7 @@ pub async fn componentize(
 
     for (mounts, world_dir) in world_dir_mounts.iter() {
         for mount in mounts {
-            wasi.preopened_dir(
-                Dir::open_ambient_dir(world_dir.path(), cap_std::ambient_authority())
-                    .with_context(|| format!("unable to open {}", world_dir.path().display()))?,
-                DirPerms::all(),
-                FilePerms::all(),
-                mount,
-            );
+            wasi.preopened_dir(world_dir.path(), mount, DirPerms::all(), FilePerms::all())?;
         }
     }
 
@@ -742,7 +714,7 @@ pub async fn componentize(
             async move {
                 let component = &Component::new(&engine, instrumented)?;
                 if !added_to_linker {
-                    add_wasi_and_stubs(&resolve, &worlds, component, &mut linker)?;
+                    add_wasi_and_stubs(&resolve, &worlds, &mut linker)?;
                 }
 
                 let (init, instance) =
@@ -787,10 +759,9 @@ fn parse_wit(path: &Path, world: Option<&str>) -> Result<(Resolve, WorldId)> {
 fn add_wasi_and_stubs(
     resolve: &Resolve,
     worlds: &IndexSet<WorldId>,
-    component: &Component,
     linker: &mut Linker<Ctx>,
 ) -> Result<()> {
-    wasi_command::add_to_linker(linker)?;
+    wasmtime_wasi::add_to_linker_async(linker)?;
 
     enum Stub<'a> {
         Function(&'a String),
@@ -801,13 +772,13 @@ fn add_wasi_and_stubs(
     for &world in worlds {
         for (key, item) in &resolve.worlds[world].imports {
             match item {
-                WorldItem::Interface(interface) => {
+                WorldItem::Interface { id, .. } => {
                     let interface_name = match key {
                         WorldKey::Name(name) => name.clone(),
                         WorldKey::Interface(interface) => resolve.id_of(*interface).unwrap(),
                     };
 
-                    let interface = &resolve.interfaces[*interface];
+                    let interface = &resolve.interfaces[*id];
                     for function_name in interface.functions.keys() {
                         stubs
                             .entry(Some(interface_name.clone()))
@@ -849,7 +820,7 @@ fn add_wasi_and_stubs(
                 for stub in stubs {
                     let interface_name = interface_name.clone();
                     match stub {
-                        Stub::Function(name) => instance.func_new(component, name, {
+                        Stub::Function(name) => instance.func_new(name, {
                             let name = name.clone();
                             move |_, _, _| {
                                 Err(anyhow!("called trapping stub: {interface_name}#{name}"))
@@ -870,7 +841,7 @@ fn add_wasi_and_stubs(
             let mut instance = linker.root();
             for stub in stubs {
                 match stub {
-                    Stub::Function(name) => instance.func_new(component, name, {
+                    Stub::Function(name) => instance.func_new(name, {
                         let name = name.clone();
                         move |_, _, _| Err(anyhow!("called trapping stub: {name}"))
                     }),
