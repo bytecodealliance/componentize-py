@@ -5,7 +5,7 @@ use {
     once_cell::sync::Lazy,
     std::str,
     wasmtime::{
-        component::{Instance, InstancePre, Linker, Resource, ResourceAny},
+        component::{InstancePre, Linker, Resource, ResourceAny},
         Store,
     },
     wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder, WasiView},
@@ -89,11 +89,8 @@ impl super::Host for Host {
         Ok(())
     }
 
-    async fn instantiate_pre(
-        store: &mut Store<Ctx>,
-        pre: &InstancePre<Ctx>,
-    ) -> Result<(Self::World, Instance)> {
-        Ok(Tests::instantiate_pre(store, pre).await?)
+    async fn instantiate_pre(store: &mut Store<Ctx>, pre: InstancePre<Ctx>) -> Result<Self::World> {
+        Ok(TestsPre::new(pre)?.instantiate_async(store).await?)
     }
 }
 
@@ -107,11 +104,10 @@ impl super::Host for FooHost {
         unreachable!()
     }
 
-    async fn instantiate_pre(
-        store: &mut Store<Ctx>,
-        pre: &InstancePre<Ctx>,
-    ) -> Result<(Self::World, Instance)> {
-        Ok(foo_sdk::FooWorld::instantiate_pre(store, pre).await?)
+    async fn instantiate_pre(store: &mut Store<Ctx>, pre: InstancePre<Ctx>) -> Result<Self::World> {
+        Ok(foo_sdk::FooWorldPre::new(pre)?
+            .instantiate_async(store)
+            .await?)
     }
 }
 
@@ -125,11 +121,10 @@ impl super::Host for BarHost {
         unreachable!()
     }
 
-    async fn instantiate_pre(
-        store: &mut Store<Ctx>,
-        pre: &InstancePre<Ctx>,
-    ) -> Result<(Self::World, Instance)> {
-        Ok(bar_sdk::BarWorld::instantiate_pre(store, pre).await?)
+    async fn instantiate_pre(store: &mut Store<Ctx>, pre: InstancePre<Ctx>) -> Result<Self::World> {
+        Ok(bar_sdk::BarWorldPre::new(pre)?
+            .instantiate_async(store)
+            .await?)
     }
 }
 

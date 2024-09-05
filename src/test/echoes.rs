@@ -5,7 +5,7 @@ use {
     once_cell::sync::Lazy,
     proptest::strategy::{Just, Strategy},
     wasmtime::{
-        component::{Instance, InstancePre, Linker},
+        component::{InstancePre, Linker},
         Store,
     },
 };
@@ -197,11 +197,8 @@ impl super::Host for Host {
         Ok(())
     }
 
-    async fn instantiate_pre(
-        store: &mut Store<Ctx>,
-        pre: &InstancePre<Ctx>,
-    ) -> Result<(Self::World, Instance)> {
-        Ok(EchoesTest::instantiate_pre(store, pre).await?)
+    async fn instantiate_pre(store: &mut Store<Ctx>, pre: InstancePre<Ctx>) -> Result<Self::World> {
+        Ok(EchoesTestPre::new(pre)?.instantiate_async(store).await?)
     }
 }
 

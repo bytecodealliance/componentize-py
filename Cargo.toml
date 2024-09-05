@@ -15,10 +15,10 @@ tar = "0.4.41"
 tempfile = "3.12.0"
 zstd = "0.13.2"
 componentize-py-shared = { path = "shared" }
-wasm-encoder = "0.209.1"
-wit-parser = "0.209.1"
-wit-component = "0.209.1"
-wasmparser = "0.209.1"
+wasm-encoder = "0.216.0"
+wit-parser = "0.216.0"
+wit-component = "0.216.0"
+wasmparser = "0.216.0"
 indexmap = "2.5.0"
 bincode = "1.3.3"
 heck = "0.5.0"
@@ -26,12 +26,12 @@ pyo3 = { version = "0.20.0", features = [
     "abi3-py37",
     "extension-module",
 ], optional = true }
-wasmtime = "22.0.0"
-wasmtime-wasi = "22.0.0"
-wasi-common = "22.0.0"
+wasmtime = "24.0.0"
+wasmtime-wasi = "24.0.0"
+wasi-common = "24.0.0"
 once_cell = "1.19.0"
-component-init = { git = "https://github.com/dicej/component-init", rev = "8f25acd" }
-wasm-convert = { git = "https://github.com/dicej/wasm-convert", rev = "dc76f82" }
+component-init = { git = "https://github.com/benbrandt/component-init", rev = "b79eccb" }
+wasm-convert = { git = "https://github.com/benbrandt/wasm-convert", rev = "4c5a4b5" }
 async-trait = "0.1.82"
 futures = "0.3.30"
 tokio = { version = "1.40.0", features = [

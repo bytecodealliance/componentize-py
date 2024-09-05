@@ -5,6 +5,7 @@ use {
     async_trait::async_trait,
     bytes::Bytes,
     component_init::Invoker,
+    exports::exports::Symbols,
     futures::future::FutureExt,
     heck::ToSnakeCase,
     indexmap::{IndexMap, IndexSet},
@@ -34,7 +35,7 @@ use {
         pipe::{MemoryInputPipe, MemoryOutputPipe},
         DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, WasiView,
     },
-    wit_parser::{Resolve, TypeDefKind, UnresolvedPackage, WorldId, WorldItem, WorldKey},
+    wit_parser::{Resolve, TypeDefKind, UnresolvedPackageGroup, WorldId, WorldItem, WorldKey},
     zstd::Decoder,
 };
 
@@ -121,9 +122,7 @@ impl Invoker for MyInvoker {
     async fn call_s32(&mut self, function: &str) -> Result<i32> {
         let func = self
             .instance
-            .exports(&mut self.store)
-            .root()
-            .typed_func::<(), (i32,)>(function)?;
+            .get_typed_func::<(), (i32,)>(&mut self.store, function)?;
         let result = func.call_async(&mut self.store, ()).await?.0;
         func.post_return_async(&mut self.store).await?;
         Ok(result)
@@ -132,9 +131,7 @@ impl Invoker for MyInvoker {
     async fn call_s64(&mut self, function: &str) -> Result<i64> {
         let func = self
             .instance
-            .exports(&mut self.store)
-            .root()
-            .typed_func::<(), (i64,)>(function)?;
+            .get_typed_func::<(), (i64,)>(&mut self.store, function)?;
         let result = func.call_async(&mut self.store, ()).await?.0;
         func.post_return_async(&mut self.store).await?;
         Ok(result)
@@ -143,9 +140,7 @@ impl Invoker for MyInvoker {
     async fn call_float32(&mut self, function: &str) -> Result<f32> {
         let func = self
             .instance
-            .exports(&mut self.store)
-            .root()
-            .typed_func::<(), (f32,)>(function)?;
+            .get_typed_func::<(), (f32,)>(&mut self.store, function)?;
         let result = func.call_async(&mut self.store, ()).await?.0;
         func.post_return_async(&mut self.store).await?;
         Ok(result)
@@ -154,9 +149,7 @@ impl Invoker for MyInvoker {
     async fn call_float64(&mut self, function: &str) -> Result<f64> {
         let func = self
             .instance
-            .exports(&mut self.store)
-            .root()
-            .typed_func::<(), (f64,)>(function)?;
+            .get_typed_func::<(), (f64,)>(&mut self.store, function)?;
         let result = func.call_async(&mut self.store, ()).await?.0;
         func.post_return_async(&mut self.store).await?;
         Ok(result)
@@ -165,9 +158,7 @@ impl Invoker for MyInvoker {
     async fn call_list_u8(&mut self, function: &str) -> Result<Vec<u8>> {
         let func = self
             .instance
-            .exports(&mut self.store)
-            .root()
-            .typed_func::<(), (Vec<u8>,)>(function)?;
+            .get_typed_func::<(), (Vec<u8>,)>(&mut self.store, function)?;
         let result = func.call_async(&mut self.store, ()).await?.0;
         func.post_return_async(&mut self.store).await?;
         Ok(result)
@@ -695,12 +686,15 @@ pub async fn componentize(
                     add_wasi_and_stubs(&resolve, &worlds, &mut linker)?;
                 }
 
-                let (init, instance) =
-                    Init::instantiate_async(&mut store, component, &linker).await?;
+                let instance = linker.instantiate_async(&mut store, component).await?;
+                let init = instance
+                    .get_typed_func::<(&str, &Symbols, bool), (Result<(), String>,)>(
+                        &mut store, "init",
+                    )?;
 
-                init.exports()
-                    .call_init(&mut store, &app_name, &symbols, stub_wasi)
+                init.call_async(&mut store, (&app_name, &symbols, stub_wasi))
                     .await?
+                    .0
                     .map_err(|e| anyhow!("{e}"))?;
 
                 Ok(Box::new(MyInvoker { store, instance }) as Box<dyn Invoker>)
@@ -727,8 +721,8 @@ fn parse_wit(path: &Path, world: Option<&str>) -> Result<(Resolve, WorldId)> {
     let pkg = if path.is_dir() {
         resolve.push_dir(path)?.0
     } else {
-        let pkg = UnresolvedPackage::parse_file(path)?;
-        resolve.push(pkg)?
+        let pkg = UnresolvedPackageGroup::parse_file(path)?;
+        resolve.push_group(pkg)?
     };
     let world = resolve.select_world(pkg, world)?;
     Ok((resolve, world))

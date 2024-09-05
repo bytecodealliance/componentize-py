@@ -699,7 +699,7 @@ pub fn generate() -> Result<()> {
 
             writeln!(
                 &mut typed_function_inits,
-                r#"echo{test_index}: instance.typed_func::<({params}), ({result_type},)>("echo{test_index}")?,"#
+                r#"echo{test_index}: instance.get_typed_func::<({params}), ({result_type},)>(&mut *store, "componentize-py:test/echoes-generated/echo{test_index}")?,"#
             )
             .unwrap();
         }
@@ -838,14 +838,12 @@ impl super::Host for Host {{
 
     async fn instantiate_pre(
         store: &mut Store<Ctx>,
-        pre: &InstancePre<Ctx>,
-    ) -> Result<(Self::World, Instance)> {{
-        let guest_instance = pre.instantiate_async(&mut *store).await?;
-        let mut exports = guest_instance.exports(&mut *store);
-        let mut instance = exports.instance("componentize-py:test/echoes-generated").unwrap();
+        pre: InstancePre<Ctx>,
+    ) -> Result<Self::World> {{
+        let instance = pre.instantiate_async(&mut *store).await?;
         Ok((Self::World {{
            {typed_function_inits}
-        }}, guest_instance))
+        }}))
     }}
 }}
 

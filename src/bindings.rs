@@ -155,6 +155,7 @@ pub fn make_bindings(
                 .unwrap(),
             maximum: None,
             table64: false,
+            shared: false,
         }),
     );
 
@@ -272,8 +273,8 @@ pub fn make_bindings(
         dispatch.instruction(&Ins::GlobalGet(table_base));
         dispatch.instruction(&Ins::I32Add);
         dispatch.instruction(&Ins::CallIndirect {
-            ty: dispatchable_offset,
-            table: 0,
+            type_index: dispatchable_offset,
+            table_index: 0,
         });
         dispatch.instruction(&Ins::End);
 
