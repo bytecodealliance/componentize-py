@@ -46,7 +46,6 @@ cap-std = "3.2.0"
 im-rc = "15.1.0"
 serde = { version = "1.0.209", features = ["derive"] }
 toml = "0.8.19"
-isyswasfa-transform = { git = "https://github.com/dicej/isyswasfa-transform", rev = "7f69d7a" }
 semver = "1.0.23"
 
 [dev-dependencies]

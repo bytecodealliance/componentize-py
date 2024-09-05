@@ -3,15 +3,15 @@ use {
         abi::{self, MAX_FLAT_PARAMS, MAX_FLAT_RESULTS},
         bindgen::{self, DISPATCHABLE_CORE_PARAM_COUNT},
         exports::exports::{
-            self, Bundled, Case, Constructor, Function, FunctionExport, LocalResource, OwnedKind,
-            OwnedType, RemoteResource, Resource, Static, Symbols,
+            self, Case, Constructor, Function, FunctionExport, LocalResource, OwnedKind, OwnedType,
+            RemoteResource, Resource, Static, Symbols,
         },
         util::Types as _,
     },
     anyhow::{bail, Result},
     heck::{ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase},
     indexmap::{IndexMap, IndexSet},
-    once_cell::{sync, unsync},
+    once_cell::sync,
     semver::Version,
     std::{
         collections::{hash_map::Entry, HashMap, HashSet},
@@ -694,41 +694,14 @@ impl<'a> Summary<'a> {
         }
     }
 
-    pub fn collect_symbols(&self, locations: &Locations, isyswasfa: Option<&str>) -> Symbols {
-        let only_one_world_export = unsync::Lazy::new(|| {
-            self.functions
-                .iter()
-                .filter(|function| {
-                    matches!(
-                        (&function.kind, &function.interface),
-                        (FunctionKind::Export, None)
-                    )
-                })
-                .count()
-                == 1
-        });
+    pub fn collect_symbols(&self, locations: &Locations) -> Symbols {
         let mut exports = Vec::new();
         for function in &self.functions {
             if let FunctionKind::Export = function.kind {
                 let scope = if let Some(interface) = &function.interface {
                     &self.exported_interface_names[&interface.id]
                 } else {
-                    let scope = locations.keys.get(&function.key()).unwrap();
-
-                    if let Some(suffix) = isyswasfa {
-                        if *only_one_world_export
-                            && function.name == format!("isyswasfa-poll{suffix}")
-                        {
-                            exports.push(FunctionExport::Bundled(Bundled {
-                                module: scope.to_snake_case().escape(),
-                                protocol: scope.to_upper_camel_case().escape(),
-                                name: self.function_name(function),
-                            }));
-                            continue;
-                        }
-                    }
-
-                    scope
+                    locations.keys.get(&function.key()).unwrap()
                 };
 
                 exports.push(match function.wit_kind {
@@ -1078,202 +1051,6 @@ impl<'a> Summary<'a> {
         sorted
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn async_export_code(
-        &self,
-        world_module: &str,
-        function: &MyFunction,
-        names: &mut TypeNames,
-        seen: &HashSet<TypeId>,
-        class_method: &str,
-        params: &str,
-        need_isyswasfa_guest: &mut bool,
-    ) -> (&'static str, String) {
-        if let Some(prefix) = function.name.strip_suffix("-isyswasfa-start") {
-            *need_isyswasfa_guest = true;
-
-            let name = self.function_name_with(&function.wit_kind, prefix);
-
-            let args = function
-                .params
-                .iter()
-                .map(|(name, _)| name.to_snake_case().escape())
-                .collect::<Vec<_>>()
-                .join(", ");
-
-            let prefix = match function.wit_kind {
-                wit_parser::FunctionKind::Freestanding | wit_parser::FunctionKind::Method(_) => {
-                    "self."
-                }
-                wit_parser::FunctionKind::Static(_) => "cls.",
-                wit_parser::FunctionKind::Constructor(_) => unreachable!(),
-            };
-
-            let FunctionCode {
-                return_type, error, ..
-            } = self.function_code(
-                Direction::Export,
-                world_module,
-                &MyFunction {
-                    results: &if let Results::Anon(Type::Id(id)) = &function.results {
-                        if let TypeDefKind::Result(Result_ { ok, .. }) =
-                            &self.resolve.types[*id].kind
-                        {
-                            ok.map(Results::Anon)
-                                .unwrap_or_else(|| Results::Named(Vec::new()))
-                        } else {
-                            unreachable!()
-                        }
-                    } else {
-                        unreachable!()
-                    },
-                    interface: function.interface.clone(),
-                    wit_kind: function.wit_kind.clone(),
-                    ..*function
-                },
-                names,
-                seen,
-                None,
-            );
-
-            let docs = docstring(world_module, function.docs, 2, error.as_deref());
-
-            let code = if error.is_some() {
-                format!("return isyswasfa_guest.first_poll({prefix}{name}({args}))")
-            } else {
-                format!(
-                    "result = isyswasfa_guest.first_poll({prefix}{name}({args}))
-        if isinstance(result, Ok):
-            return result.value
-        else:
-            raise result"
-                )
-            };
-
-            (
-                "",
-                format!(
-                    "{code}
-{class_method}
-    @abstractmethod
-    async def {name}({params}){return_type}:
-        {docs}{NOT_IMPLEMENTED}
-"
-                ),
-            )
-        } else if function.name.ends_with("-isyswasfa-result") {
-            *need_isyswasfa_guest = true;
-
-            ("", "return isyswasfa_guest.get_ready(ready)".into())
-        } else {
-            (
-                "@abstractmethod
-    ",
-                NOT_IMPLEMENTED.into(),
-            )
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn async_import_code(
-        &self,
-        indent_level: usize,
-        world_module: &str,
-        function: &MyFunction,
-        names: &mut TypeNames,
-        seen: &HashSet<TypeId>,
-        class_method: &str,
-        snake: &str,
-        params: &str,
-        need_isyswasfa_guest: &mut bool,
-    ) -> String {
-        // TODO: deduplicate code with respect to `async_export_code`
-
-        if let Some(prefix) = function.name.strip_suffix("-isyswasfa-start") {
-            *need_isyswasfa_guest = true;
-
-            let name = self.function_name_with(&function.wit_kind, prefix);
-            let args = function
-                .params
-                .iter()
-                .map(|(name, _)| name.to_snake_case().escape())
-                .collect::<Vec<_>>()
-                .join(", ");
-
-            let result = format!("{name}_isyswasfa_result");
-
-            let prefix = match function.wit_kind {
-                wit_parser::FunctionKind::Freestanding => "",
-                wit_parser::FunctionKind::Method(_) => "self.",
-                wit_parser::FunctionKind::Static(_) => "cls.",
-                wit_parser::FunctionKind::Constructor(_) => unreachable!(),
-            };
-
-            let FunctionCode {
-                return_type, error, ..
-            } = self.function_code(
-                Direction::Export,
-                world_module,
-                &MyFunction {
-                    results: &if let Results::Anon(Type::Id(id)) = &function.results {
-                        if let TypeDefKind::Result(Result_ { ok, .. }) =
-                            &self.resolve.types[*id].kind
-                        {
-                            ok.map(Results::Anon)
-                                .unwrap_or_else(|| Results::Named(Vec::new()))
-                        } else {
-                            unreachable!()
-                        }
-                    } else {
-                        unreachable!()
-                    },
-                    interface: function.interface.clone(),
-                    wit_kind: function.wit_kind.clone(),
-                    ..*function
-                },
-                names,
-                seen,
-                None,
-            );
-
-            let docs = docstring(
-                world_module,
-                function.docs,
-                indent_level + 1,
-                error.as_deref(),
-            );
-
-            let indent = (0..indent_level)
-                .map(|_| "    ")
-                .collect::<Vec<_>>()
-                .concat();
-
-            let code = if error.is_some() {
-                format!(
-                    "result = {prefix}{snake}({args})
-{indent}        if isinstance(result, Ok):
-{indent}            return result.value
-{indent}        else:
-{indent}            raise result"
-                )
-            } else {
-                format!("return {prefix}{snake}({args})")
-            };
-
-            format!(
-                "{class_method}
-{indent}async def {name}({params}){return_type}:
-{indent}    {docs}try:
-{indent}        {code}
-{indent}    except Err as e:
-{indent}        return {prefix}{result}(await isyswasfa_guest.await_ready(e.value))
-"
-            )
-        } else {
-            String::new()
-        }
-    }
-
     fn interface_names(
         &self,
         ids: impl Iterator<Item = InterfaceId>,
@@ -1346,7 +1123,6 @@ impl<'a> Summary<'a> {
         world_module: &str,
         locations: &mut Locations,
         stub_runtime_calls: bool,
-        isyswasfa: Option<&str>,
     ) -> Result<()> {
         #[derive(Default)]
         struct Definitions<'a> {
@@ -1355,7 +1131,6 @@ impl<'a> Summary<'a> {
             type_imports: HashSet<InterfaceId>,
             function_imports: HashSet<InterfaceId>,
             docs: Option<&'a str>,
-            need_isyswasfa_guest: bool,
             alias_module: Option<String>,
         }
 
@@ -1411,8 +1186,6 @@ class {name}:
 "
                 )
             };
-
-            let mut need_isyswasfa_guest = false;
 
             let code = if let Some(location) = locations.types.get(&id) {
                 location.aliases.clone()
@@ -1590,39 +1363,19 @@ class {camel}(Flag):
 "
                                         )
                                     }
-                                } else {
-                                    let async_code = if isyswasfa.is_some() {
-                                        self.async_import_code(
-                                            1,
-                                            world_module,
-                                            function,
-                                            &mut names,
-                                            &seen,
-                                            class_method,
-                                            &snake,
-                                            &params,
-                                            &mut need_isyswasfa_guest,
-                                        )
-                                    } else {
-                                        String::new()
-                                    };
-
-                                    if stub_runtime_calls {
-                                        format!(
-                                            "{class_method}
+                                } else if stub_runtime_calls {
+                                    format!(
+                                        "{class_method}
     def {snake}({params}){return_type}:
-        {docs}{NOT_IMPLEMENTED}
-{async_code}"
-                                        )
-                                    } else {
-                                        format!(
-                                            "{class_method}
+        {docs}{NOT_IMPLEMENTED}"
+                                    )
+                                } else {
+                                    format!(
+                                        "{class_method}
     def {snake}({params}){return_type}:
         {docs}result = componentize_py_runtime.call_import({index}, [{args}], {result_count})
-        {return_statement}
-{async_code}"
-                                        )
-                                    }
+        {return_statement}"
+                                    )
                                 }
                             };
 
@@ -1712,28 +1465,11 @@ class {camel}:
                                 let docs =
                                     docstring(world_module, function.docs, 2, error.as_deref());
 
-                                let (abstract_method, body) = if isyswasfa.is_some() {
-                                    self.async_export_code(
-                                        world_module,
-                                        function,
-                                        &mut names,
-                                        &seen,
-                                        class_method,
-                                        &params,
-                                        &mut need_isyswasfa_guest,
-                                    )
-                                } else {
-                                    (
-                                        "@abstractmethod
-    ",
-                                        NOT_IMPLEMENTED.into(),
-                                    )
-                                };
-
                                 format!(
                                     "{class_method}
-    {abstract_method}def {snake}({params}){return_type}:
-        {docs}{body}
+    @abstractmethod
+    def {snake}({params}){return_type}:
+        {docs}{NOT_IMPLEMENTED}
 "
                                 )
                             };
@@ -1859,7 +1595,6 @@ class {camel}(Protocol):
                     definitions.types.push(code);
                     definitions.type_imports.extend(names.imports.clone());
                     definitions.docs = docs;
-                    definitions.need_isyswasfa_guest |= need_isyswasfa_guest;
                 }
             }
 
@@ -1918,34 +1653,16 @@ class {camel}(Protocol):
                         None,
                     );
 
-                    let mut need_isyswasfa_guest = false;
-
                     match function.kind {
                         FunctionKind::Import => {
                             let docs = docstring(world_module, function.docs, 1, error.as_deref());
-
-                            let async_code = if isyswasfa.is_some() {
-                                self.async_import_code(
-                                    0,
-                                    world_module,
-                                    function,
-                                    &mut names,
-                                    &seen,
-                                    "",
-                                    &snake,
-                                    &params,
-                                    &mut need_isyswasfa_guest,
-                                )
-                            } else {
-                                String::new()
-                            };
 
                             let code = if stub_runtime_calls {
                                 format!(
                                     "
 def {snake}({params}){return_type}:
     {docs}{NOT_IMPLEMENTED}
-{async_code}"
+"
                                 )
                             } else {
                                 format!(
@@ -1953,7 +1670,7 @@ def {snake}({params}){return_type}:
 def {snake}({params}){return_type}:
     {docs}result = componentize_py_runtime.call_import({index}, [{args}], {result_count})
     {return_statement}
-{async_code}"
+"
                                 )
                             };
 
@@ -1972,7 +1689,6 @@ def {snake}({params}){return_type}:
                             definitions.functions.push(code);
                             definitions.function_imports.extend(names.imports);
                             definitions.docs = docs;
-                            definitions.need_isyswasfa_guest |= need_isyswasfa_guest;
                         }
                         FunctionKind::Export => {
                             let (definitions, docs) = if let Some(interface) = &function.interface {
@@ -2002,41 +1718,17 @@ def {snake}({params}){return_type}:
                                 let function_docs =
                                     docstring(world_module, function.docs, 2, error.as_deref());
 
-                                let (abstract_method, body) = if let Some(suffix) = isyswasfa {
-                                    if function.name == format!("isyswasfa-poll{suffix}") {
-                                        need_isyswasfa_guest = true;
-
-                                        ("", "return isyswasfa_guest.poll(input)".to_owned())
-                                    } else {
-                                        self.async_export_code(
-                                            world_module,
-                                            function,
-                                            &mut names,
-                                            &seen,
-                                            "",
-                                            &params,
-                                            &mut need_isyswasfa_guest,
-                                        )
-                                    }
-                                } else {
-                                    (
-                                        "@abstractmethod
-    ",
-                                        NOT_IMPLEMENTED.into(),
-                                    )
-                                };
-
                                 let code = format!(
                                     "
-    {abstract_method}def {snake}({params}){return_type}:
-        {function_docs}{body}
+    @abstractmethod
+    def {snake}({params}){return_type}:
+        {function_docs}{NOT_IMPLEMENTED}
 "
                                 );
 
                                 definitions.functions.push(code);
                                 definitions.function_imports.extend(names.imports);
                                 definitions.docs = docs;
-                                definitions.need_isyswasfa_guest |= need_isyswasfa_guest;
                             } else {
                                 definitions.alias_module = Some(module.clone());
                             }
@@ -2119,10 +1811,6 @@ Result = Union[Ok[T], Err[E]]
                     .type_imports
                     .union(&code.function_imports)
                     .map(|&interface| import("..", interface))
-                    .chain(
-                        code.need_isyswasfa_guest
-                            .then(|| "import isyswasfa_guest".into()),
-                    )
                     .collect::<Vec<_>>()
                     .join("\n");
                 let docs = docstring(world_module, code.docs, 0, None);
@@ -2151,10 +1839,7 @@ from ..types import Result, Ok, Err, Some
 
             let mut protocol_imports = HashSet::new();
             let mut protocols = String::new();
-            let mut need_isyswasfa_guest = false;
             for (id, code) in interface_exports {
-                need_isyswasfa_guest |= code.need_isyswasfa_guest;
-
                 let name = self.exported_interface_names.get(&id).unwrap();
                 let mut file =
                     File::create(dir.join(&format!("{}.py", name.to_snake_case().escape())))?;
@@ -2163,10 +1848,6 @@ from ..types import Result, Ok, Err, Some
                     .type_imports
                     .into_iter()
                     .map(|interface| import("..", interface))
-                    .chain(
-                        code.need_isyswasfa_guest
-                            .then(|| "import isyswasfa_guest".into()),
-                    )
                     .collect::<Vec<_>>()
                     .join("\n");
                 let docs = docstring(world_module, code.docs, 0, None);
@@ -2215,7 +1896,6 @@ class {camel}(Protocol):
             let imports = protocol_imports
                 .into_iter()
                 .map(|interface| import("..", interface))
-                .chain(need_isyswasfa_guest.then(|| "import isyswasfa_guest".into()))
                 .collect::<Vec<_>>()
                 .join("\n");
 
@@ -2247,14 +1927,8 @@ from ..types import Result, Ok, Err, Some
                     world_exports.functions.concat()
                 };
 
-                let protocol = if isyswasfa.is_some() && world_exports.functions.len() == 1 {
-                    ""
-                } else {
-                    "(Protocol)"
-                };
-
                 format!(
-                    "class {camel}{protocol}:
+                    "class {camel}(Protocol):
 {methods}"
                 )
             };
@@ -2269,10 +1943,6 @@ from ..types import Result, Ok, Err, Some
                         .collect(),
                 )
                 .map(|&interface| import(".", interface))
-                .chain(
-                    (world_imports.need_isyswasfa_guest || world_exports.need_isyswasfa_guest)
-                        .then(|| "import isyswasfa_guest".into()),
-                )
                 .collect::<Vec<_>>()
                 .join("\n");
 

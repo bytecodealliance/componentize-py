@@ -406,7 +406,6 @@ dependencies = [
  "hex",
  "im-rc",
  "indexmap",
- "isyswasfa-transform",
  "once_cell",
  "pretty_env_logger",
  "proptest",
@@ -1115,14 +1114,6 @@ name = "is_terminal_polyfill"
 version = "1.70.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7943c866cc5cd64cbc25b2e01621d07fa8eb2a1a23160ee81ce38704e97b8ecf"
-
-[[package]]
-name = "isyswasfa-transform"
-version = "0.1.0"
-source = "git+https://github.com/dicej/isyswasfa-transform?rev=7f69d7a#7f69d7a799360862698f97e9d57798a20a9c2c0d"
-dependencies = [
- "wit-parser 0.209.1",
-]
 
 [[package]]
 name = "itertools"
