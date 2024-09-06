@@ -1804,7 +1804,7 @@ Result = Union[Ok[T], Err[E]]
             for (id, code) in interface_imports {
                 let name = self.imported_interface_names.get(&id).unwrap();
                 let mut file =
-                    File::create(dir.join(&format!("{}.py", name.to_snake_case().escape())))?;
+                    File::create(dir.join(format!("{}.py", name.to_snake_case().escape())))?;
                 let types = code.types.concat();
                 let functions = code.functions.concat();
                 let imports = code
@@ -1842,7 +1842,7 @@ from ..types import Result, Ok, Err, Some
             for (id, code) in interface_exports {
                 let name = self.exported_interface_names.get(&id).unwrap();
                 let mut file =
-                    File::create(dir.join(&format!("{}.py", name.to_snake_case().escape())))?;
+                    File::create(dir.join(format!("{}.py", name.to_snake_case().escape())))?;
                 let types = code.types.concat();
                 let imports = code
                     .type_imports
