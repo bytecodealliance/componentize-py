@@ -370,12 +370,12 @@ checksum = "d3fd119d74b830634cea2a0f58bbd0d54540518a14397557951e79340abc28c0"
 [[package]]
 name = "component-init"
 version = "0.1.0"
-source = "git+https://github.com/benbrandt/component-init?rev=b79eccb#b79eccb00e9e7fa86d7d08e31823c92dd65fae65"
+source = "git+https://github.com/dicej/component-init?rev=bc276826#bc27682684774f7ea192d73e511f4ccb636c3ba3"
 dependencies = [
  "anyhow",
  "async-trait",
  "futures",
- "wasm-convert 0.1.0 (git+https://github.com/benbrandt/wasm-convert?rev=4c5a4b58ce92185a8f8d24fdc297c7f2df664ce2)",
+ "wasm-convert",
  "wasm-encoder 0.216.0",
  "wasmparser 0.216.0",
 ]
@@ -409,7 +409,7 @@ dependencies = [
  "tokio",
  "toml",
  "wasi-common",
- "wasm-convert 0.1.0 (git+https://github.com/benbrandt/wasm-convert?rev=4c5a4b5)",
+ "wasm-convert",
  "wasm-encoder 0.216.0",
  "wasmparser 0.216.0",
  "wasmtime",
@@ -2253,16 +2253,7 @@ checksum = "c62a0a307cb4a311d3a07867860911ca130c3494e8c2719593806c08bc5d0484"
 [[package]]
 name = "wasm-convert"
 version = "0.1.0"
-source = "git+https://github.com/benbrandt/wasm-convert?rev=4c5a4b5#4c5a4b58ce92185a8f8d24fdc297c7f2df664ce2"
-dependencies = [
- "wasm-encoder 0.216.0",
- "wasmparser 0.216.0",
-]
-
-[[package]]
-name = "wasm-convert"
-version = "0.1.0"
-source = "git+https://github.com/benbrandt/wasm-convert?rev=4c5a4b58ce92185a8f8d24fdc297c7f2df664ce2#4c5a4b58ce92185a8f8d24fdc297c7f2df664ce2"
+source = "git+https://github.com/dicej/wasm-convert?rev=afbec48b#afbec48bf992946d34ead239c9be19a9d61772f2"
 dependencies = [
  "wasm-encoder 0.216.0",
  "wasmparser 0.216.0",
