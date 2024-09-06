@@ -15,6 +15,10 @@ env:
   WASI_SDK_VERSION: 20.46gf3a1f8991535
   WASI_SDK_RELEASE: wasi-sockets-alpha-5
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
   linux:
     name: Populate cache
