@@ -5,29 +5,25 @@ use {
     once_cell::sync::Lazy,
     std::str,
     wasmtime::{
-        component::{Instance, InstancePre, Linker, Resource, ResourceAny},
+        component::{InstancePre, Linker, Resource, ResourceAny},
         Store,
     },
-    wasmtime_wasi::{
-        preview2::{command, DirPerms, FilePerms, WasiCtxBuilder, WasiView},
-        Dir,
-    },
+    wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder, WasiView},
 };
 
 wasmtime::component::bindgen!({
     path: "src/test/wit",
     world: "tests",
     async: true,
+    trappable_imports: true,
     with: {
         "componentize-py:test/resource-import-and-export/thing": ThingU32,
         "componentize-py:test/resource-borrow-import/thing": ThingU32,
-        "componentize-py:test/resource-borrow-export/thing": ThingU32,
         "componentize-py:test/resource-with-lists/thing": ThingList,
         "componentize-py:test/resource-aggregates/thing": ThingU32,
         "componentize-py:test/resource-alias1/thing": ThingString,
         "componentize-py:test/resource-floats/float": MyFloat,
         "resource-floats-imports/float": MyFloat,
-        "resource-floats-exports/float": MyFloat,
         "componentize-py:test/resource-borrow-in-record/thing": ThingString,
     },
 });
@@ -39,6 +35,7 @@ mod foo_sdk {
         async: {
             only_imports: [],
         },
+        trappable_imports: true,
     });
 }
 
@@ -86,17 +83,14 @@ impl super::Host for Host {
     type World = Tests;
 
     fn add_to_linker(linker: &mut Linker<Ctx>) -> Result<()> {
-        command::add_to_linker(linker)?;
+        wasmtime_wasi::add_to_linker_async(linker)?;
         Tests::add_to_linker(linker, |ctx| ctx)?;
         foo_sdk::FooWorld::add_to_linker(linker, |ctx| ctx)?;
         Ok(())
     }
 
-    async fn instantiate_pre(
-        store: &mut Store<Ctx>,
-        pre: &InstancePre<Ctx>,
-    ) -> Result<(Self::World, Instance)> {
-        Ok(Tests::instantiate_pre(store, pre).await?)
+    async fn instantiate_pre(store: &mut Store<Ctx>, pre: InstancePre<Ctx>) -> Result<Self::World> {
+        Ok(TestsPre::new(pre)?.instantiate_async(store).await?)
     }
 }
 
@@ -110,11 +104,10 @@ impl super::Host for FooHost {
         unreachable!()
     }
 
-    async fn instantiate_pre(
-        store: &mut Store<Ctx>,
-        pre: &InstancePre<Ctx>,
-    ) -> Result<(Self::World, Instance)> {
-        Ok(foo_sdk::FooWorld::instantiate_pre(store, pre).await?)
+    async fn instantiate_pre(store: &mut Store<Ctx>, pre: InstancePre<Ctx>) -> Result<Self::World> {
+        Ok(foo_sdk::FooWorldPre::new(pre)?
+            .instantiate_async(store)
+            .await?)
     }
 }
 
@@ -128,11 +121,10 @@ impl super::Host for BarHost {
         unreachable!()
     }
 
-    async fn instantiate_pre(
-        store: &mut Store<Ctx>,
-        pre: &InstancePre<Ctx>,
-    ) -> Result<(Self::World, Instance)> {
-        Ok(bar_sdk::BarWorld::instantiate_pre(store, pre).await?)
+    async fn instantiate_pre(store: &mut Store<Ctx>, pre: InstancePre<Ctx>) -> Result<Self::World> {
+        Ok(bar_sdk::BarWorldPre::new(pre)?
+            .instantiate_async(store)
+            .await?)
     }
 }
 
@@ -569,6 +561,7 @@ fn resource_alias() -> Result<()> {
             );
 
             let instance = world.componentize_py_test_resource_alias2();
+            let thing1 = thing.call_constructor(&mut *store, "Ciao").await?;
             let thing2 = thing.call_constructor(&mut *store, "Aloha").await?;
 
             let things = instance
@@ -804,12 +797,7 @@ fn filesystem() -> Result<()> {
     let wasi = WasiCtxBuilder::new()
         .inherit_stdout()
         .inherit_stderr()
-        .preopened_dir(
-            Dir::open_ambient_dir(dir.path(), cap_std::ambient_authority())?,
-            DirPerms::all(),
-            FilePerms::all(),
-            "/",
-        )
+        .preopened_dir(dir.path(), "/", DirPerms::all(), FilePerms::all())?
         .build();
 
     TESTER.test_with_wasi::<Host>(wasi, |world, store, runtime| {

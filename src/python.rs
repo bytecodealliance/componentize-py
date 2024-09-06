@@ -7,7 +7,7 @@ use {
 #[allow(clippy::too_many_arguments)]
 #[pyo3::pyfunction]
 #[pyo3(name = "componentize")]
-#[pyo3(signature = (wit_path, world, python_path, module_worlds, app_name, output_path, isyswasfa, stub_wasi))]
+#[pyo3(signature = (wit_path, world, python_path, module_worlds, app_name, output_path, stub_wasi))]
 fn python_componentize(
     wit_path: Option<PathBuf>,
     world: Option<&str>,
@@ -15,7 +15,6 @@ fn python_componentize(
     module_worlds: Vec<(&str, &str)>,
     app_name: &str,
     output_path: PathBuf,
-    isyswasfa: Option<&str>,
     stub_wasi: bool,
 ) -> PyResult<()> {
     (|| {
@@ -27,7 +26,6 @@ fn python_componentize(
             app_name,
             &output_path,
             None,
-            isyswasfa,
             stub_wasi,
         ))
     })()
@@ -36,15 +34,14 @@ fn python_componentize(
 
 #[pyo3::pyfunction]
 #[pyo3(name = "generate_bindings")]
-#[pyo3(signature = (wit_path, world, world_module, output_dir, isyswasfa))]
+#[pyo3(signature = (wit_path, world, world_module, output_dir))]
 fn python_generate_bindings(
     wit_path: PathBuf,
     world: Option<&str>,
     world_module: Option<&str>,
     output_dir: PathBuf,
-    isyswasfa: Option<&str>,
 ) -> PyResult<()> {
-    crate::generate_bindings(&wit_path, world, world_module, &output_dir, isyswasfa)
+    crate::generate_bindings(&wit_path, world, world_module, &output_dir)
         .map_err(|e| PyAssertionError::new_err(format!("{e:?}")))
 }
 

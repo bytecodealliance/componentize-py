@@ -12,10 +12,10 @@ use {
     std::{env, fs, iter, marker::PhantomData},
     tokio::runtime::Runtime,
     wasmtime::{
-        component::{Component, Instance, InstancePre, Linker, ResourceTable},
+        component::{Component, InstancePre, Linker, ResourceTable},
         Config, Engine, Store,
     },
-    wasmtime_wasi::preview2::{WasiCtx, WasiCtxBuilder},
+    wasmtime_wasi::{WasiCtx, WasiCtxBuilder},
 };
 
 mod echoes;
@@ -74,7 +74,6 @@ async fn make_component(
         "app",
         &tempdir.path().join("app.wasm"),
         add_to_linker,
-        None,
         false,
     )
     .await?;
@@ -106,10 +105,7 @@ trait Host {
 
     fn add_to_linker(linker: &mut Linker<Ctx>) -> Result<()>;
 
-    async fn instantiate_pre(
-        store: &mut Store<Ctx>,
-        pre: &InstancePre<Ctx>,
-    ) -> Result<(Self::World, Instance)>;
+    async fn instantiate_pre(store: &mut Store<Ctx>, pre: InstancePre<Ctx>) -> Result<Self::World>;
 }
 
 struct Tester<H> {
@@ -182,8 +178,8 @@ impl<H: Host> Tester<H> {
             )
         });
 
-        let (world, _) = runtime
-            .block_on(H1::instantiate_pre(&mut store, &self.pre))
+        let world = runtime
+            .block_on(H1::instantiate_pre(&mut store, self.pre.clone()))
             .unwrap();
 
         test(&world, &mut store, &runtime)
@@ -214,8 +210,8 @@ impl<H: Host> Tester<H> {
                 Store::new(&ENGINE, Ctx { wasi, table })
             });
 
-            let (world, _) = runtime
-                .block_on(H::instantiate_pre(&mut store, &self.pre))
+            let world = runtime
+                .block_on(H::instantiate_pre(&mut store, self.pre.clone()))
                 .unwrap();
 
             test(v, &world, &mut store, &runtime).unwrap();

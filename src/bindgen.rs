@@ -606,14 +606,14 @@ impl<'a> FunctionBindgen<'a> {
                     *IMPORTS.get("componentize-py#ToCanonI64").unwrap(),
                 ));
             }
-            Type::Float32 => {
+            Type::F32 => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value));
                 self.push(Ins::Call(
                     *IMPORTS.get("componentize-py#ToCanonF32").unwrap(),
                 ));
             }
-            Type::Float64 => {
+            Type::F64 => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value));
                 self.push(Ins::Call(
@@ -896,12 +896,12 @@ impl<'a> FunctionBindgen<'a> {
                 self.to_canon(ty, context, value);
                 self.push(Ins::I64Store(mem_arg(0, 3)));
             }
-            Type::Float32 => {
+            Type::F32 => {
                 self.push(Ins::LocalGet(destination));
                 self.to_canon(ty, context, value);
                 self.push(Ins::F32Store(mem_arg(0, 2)));
             }
-            Type::Float64 => {
+            Type::F64 => {
                 self.push(Ins::LocalGet(destination));
                 self.to_canon(ty, context, value);
                 self.push(Ins::F64Store(mem_arg(0, 3)));
@@ -1188,12 +1188,12 @@ impl<'a> FunctionBindgen<'a> {
                 self.push(Ins::LocalGet(source[0]));
                 self.push(Ins::I64Store(mem_arg(0, 3)));
             }
-            Type::Float32 => {
+            Type::F32 => {
                 self.push(Ins::LocalGet(destination));
                 self.push(Ins::LocalGet(source[0]));
                 self.push(Ins::F32Store(mem_arg(0, 2)));
             }
-            Type::Float64 => {
+            Type::F64 => {
                 self.push(Ins::LocalGet(destination));
                 self.push(Ins::LocalGet(source[0]));
                 self.push(Ins::F64Store(mem_arg(0, 3)));
@@ -1431,14 +1431,14 @@ impl<'a> FunctionBindgen<'a> {
                     *IMPORTS.get("componentize-py#FromCanonI64").unwrap(),
                 ));
             }
-            Type::Float32 => {
+            Type::F32 => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value[0]));
                 self.push(Ins::Call(
                     *IMPORTS.get("componentize-py#FromCanonF32").unwrap(),
                 ));
             }
-            Type::Float64 => {
+            Type::F64 => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value[0]));
                 self.push(Ins::Call(
@@ -1761,7 +1761,7 @@ impl<'a> FunctionBindgen<'a> {
                 self.from_canon(ty, context, &[value]);
                 self.pop_local(value, ValType::I64);
             }
-            Type::Float32 => {
+            Type::F32 => {
                 let value = self.push_local(ValType::F32);
                 self.push(Ins::LocalGet(source));
                 self.push(Ins::F32Load(mem_arg(0, 2)));
@@ -1769,7 +1769,7 @@ impl<'a> FunctionBindgen<'a> {
                 self.from_canon(ty, context, &[value]);
                 self.pop_local(value, ValType::F32);
             }
-            Type::Float64 => {
+            Type::F64 => {
                 let value = self.push_local(ValType::F64);
                 self.push(Ins::LocalGet(source));
                 self.push(Ins::F64Load(mem_arg(0, 3)));
@@ -2051,11 +2051,11 @@ impl<'a> FunctionBindgen<'a> {
                 self.push(Ins::LocalGet(source));
                 self.push(Ins::I64Load(mem_arg(0, 3)));
             }
-            Type::Float32 => {
+            Type::F32 => {
                 self.push(Ins::LocalGet(source));
                 self.push(Ins::F32Load(mem_arg(0, 2)));
             }
-            Type::Float64 => {
+            Type::F64 => {
                 self.push(Ins::LocalGet(source));
                 self.push(Ins::F64Load(mem_arg(0, 3)));
             }
@@ -2258,8 +2258,8 @@ impl<'a> FunctionBindgen<'a> {
             | Type::Char
             | Type::U64
             | Type::S64
-            | Type::Float32
-            | Type::Float64 => {}
+            | Type::F32
+            | Type::F64 => {}
 
             Type::String => {
                 self.push(Ins::LocalGet(value[0]));
@@ -2417,8 +2417,8 @@ impl<'a> FunctionBindgen<'a> {
             | Type::Char
             | Type::U64
             | Type::S64
-            | Type::Float32
-            | Type::Float64 => {}
+            | Type::F32
+            | Type::F64 => {}
 
             Type::String => {
                 self.push(Ins::LocalGet(value));

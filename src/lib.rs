@@ -31,14 +31,10 @@ use {
         Config, Engine, Store,
     },
     wasmtime_wasi::{
-        preview2::{
-            command as wasi_command,
-            pipe::{MemoryInputPipe, MemoryOutputPipe},
-            DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, WasiView,
-        },
-        Dir,
+        pipe::{MemoryInputPipe, MemoryOutputPipe},
+        DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, WasiView,
     },
-    wit_parser::{Resolve, TypeDefKind, UnresolvedPackage, WorldId, WorldItem, WorldKey},
+    wit_parser::{Resolve, TypeDefKind, UnresolvedPackageGroup, WorldId, WorldItem, WorldKey},
     zstd::Decoder,
 };
 
@@ -125,9 +121,7 @@ impl Invoker for MyInvoker {
     async fn call_s32(&mut self, function: &str) -> Result<i32> {
         let func = self
             .instance
-            .exports(&mut self.store)
-            .root()
-            .typed_func::<(), (i32,)>(function)?;
+            .get_typed_func::<(), (i32,)>(&mut self.store, function)?;
         let result = func.call_async(&mut self.store, ()).await?.0;
         func.post_return_async(&mut self.store).await?;
         Ok(result)
@@ -136,9 +130,7 @@ impl Invoker for MyInvoker {
     async fn call_s64(&mut self, function: &str) -> Result<i64> {
         let func = self
             .instance
-            .exports(&mut self.store)
-            .root()
-            .typed_func::<(), (i64,)>(function)?;
+            .get_typed_func::<(), (i64,)>(&mut self.store, function)?;
         let result = func.call_async(&mut self.store, ()).await?.0;
         func.post_return_async(&mut self.store).await?;
         Ok(result)
@@ -147,9 +139,7 @@ impl Invoker for MyInvoker {
     async fn call_float32(&mut self, function: &str) -> Result<f32> {
         let func = self
             .instance
-            .exports(&mut self.store)
-            .root()
-            .typed_func::<(), (f32,)>(function)?;
+            .get_typed_func::<(), (f32,)>(&mut self.store, function)?;
         let result = func.call_async(&mut self.store, ()).await?.0;
         func.post_return_async(&mut self.store).await?;
         Ok(result)
@@ -158,9 +148,7 @@ impl Invoker for MyInvoker {
     async fn call_float64(&mut self, function: &str) -> Result<f64> {
         let func = self
             .instance
-            .exports(&mut self.store)
-            .root()
-            .typed_func::<(), (f64,)>(function)?;
+            .get_typed_func::<(), (f64,)>(&mut self.store, function)?;
         let result = func.call_async(&mut self.store, ()).await?.0;
         func.post_return_async(&mut self.store).await?;
         Ok(result)
@@ -169,9 +157,7 @@ impl Invoker for MyInvoker {
     async fn call_list_u8(&mut self, function: &str) -> Result<Vec<u8>> {
         let func = self
             .instance
-            .exports(&mut self.store)
-            .root()
-            .typed_func::<(), (Vec<u8>,)>(function)?;
+            .get_typed_func::<(), (Vec<u8>,)>(&mut self.store, function)?;
         let result = func.call_async(&mut self.store, ()).await?.0;
         func.post_return_async(&mut self.store).await?;
         Ok(result)
@@ -183,15 +169,11 @@ pub fn generate_bindings(
     world: Option<&str>,
     world_module: Option<&str>,
     output_dir: &Path,
-    isyswasfa: Option<&str>,
 ) -> Result<()> {
     // TODO: Split out and reuse the code responsible for finding and using componentize-py.toml files in the
     // `componentize` function below, since that can affect the bindings we should be generating.
 
-    let (mut resolve, world) = parse_wit(wit_path, world)?;
-    if let Some(suffix) = isyswasfa {
-        isyswasfa_transform::transform(&mut resolve, world, Some(suffix));
-    }
+    let (resolve, world) = parse_wit(wit_path, world)?;
     let summary = Summary::try_new(&resolve, &iter::once(world).collect())?;
     let world_name = resolve.worlds[world].name.to_snake_case().escape();
     let world_module = world_module.unwrap_or(&world_name);
@@ -203,7 +185,6 @@ pub fn generate_bindings(
         world_module,
         &mut Locations::default(),
         true,
-        isyswasfa,
     )?;
 
     Ok(())
@@ -218,7 +199,6 @@ pub async fn componentize(
     app_name: &str,
     output_path: &Path,
     add_to_linker: Option<&dyn Fn(&mut Linker<Ctx>) -> Result<()>>,
-    isyswasfa: Option<&str>,
     stub_wasi: bool,
 ) -> Result<()> {
     // Remove non-existent elements from `python_path` so we don't choke on them later:
@@ -322,7 +302,7 @@ pub async fn componentize(
 
                     if let Some(resolve) = &mut resolve {
                         let remap = resolve.merge(my_resolve)?;
-                        world = remap.worlds[world.index()];
+                        world = remap.worlds[world.index()].expect("missing world");
                     } else {
                         resolve = Some(my_resolve);
                     }
@@ -337,7 +317,7 @@ pub async fn componentize(
         })
         .collect::<Result<IndexMap<_, _>>>()?;
 
-    let mut resolve = if let Some(resolve) = resolve {
+    let resolve = if let Some(resolve) = resolve {
         resolve
     } else {
         // If no WIT directory was provided as a parameter and none were referenced by Python packages, use ./wit
@@ -358,14 +338,6 @@ pub async fn componentize(
         .filter_map(|(_, world)| *world)
         .chain(main_world)
         .collect::<IndexSet<_>>();
-
-    if let Some(suffix) = isyswasfa {
-        let mut suffix = Some(suffix);
-        for &world in &worlds {
-            isyswasfa_transform::transform(&mut resolve, world, suffix);
-            suffix = None;
-        }
-    }
 
     let summary = Summary::try_new(&resolve, &worlds)?;
 
@@ -562,30 +534,12 @@ pub async fn componentize(
         .env("PYTHONUNBUFFERED", "1")
         .env("COMPONENTIZE_PY_APP_NAME", app_name)
         .env("PYTHONHOME", "/python")
-        .preopened_dir(
-            Dir::open_ambient_dir(stdlib.path(), cap_std::ambient_authority())
-                .with_context(|| format!("unable to open {}", stdlib.path().display()))?,
-            DirPerms::all(),
-            FilePerms::all(),
-            "python",
-        )
-        .preopened_dir(
-            Dir::open_ambient_dir(bundled.path(), cap_std::ambient_authority())
-                .with_context(|| format!("unable to open {}", bundled.path().display()))?,
-            DirPerms::all(),
-            FilePerms::all(),
-            "bundled",
-        );
+        .preopened_dir(stdlib.path(), "python", DirPerms::all(), FilePerms::all())?
+        .preopened_dir(bundled.path(), "bundled", DirPerms::all(), FilePerms::all())?;
 
     // Generate guest mounts for each host directory in `python_path`.
     for (index, path) in python_path.iter().enumerate() {
-        wasi.preopened_dir(
-            Dir::open_ambient_dir(path, cap_std::ambient_authority())
-                .with_context(|| format!("unable to open {path}"))?,
-            DirPerms::all(),
-            FilePerms::all(),
-            index.to_string(),
-        );
+        wasi.preopened_dir(path, index.to_string(), DirPerms::all(), FilePerms::all())?;
     }
 
     // For each Python package with a `componentize-py.toml` file that specifies where generated bindings for that
@@ -636,7 +590,6 @@ pub async fn componentize(
             &binding_module,
             &mut locations,
             false,
-            isyswasfa,
         )?;
 
         world_dir_mounts.push((
@@ -654,14 +607,7 @@ pub async fn componentize(
         let world_dir = tempfile::tempdir()?;
         let module_path = world_dir.path().join(&module);
         fs::create_dir_all(&module_path)?;
-        summary.generate_code(
-            &module_path,
-            world,
-            &module,
-            &mut locations,
-            false,
-            isyswasfa,
-        )?;
+        summary.generate_code(&module_path, world, &module, &mut locations, false)?;
         world_dir_mounts.push((vec!["world".to_owned()], world_dir));
 
         // The helper utilities are hard-coded to assume the world module is named `proxy`.  Here we replace that
@@ -687,19 +633,13 @@ pub async fn componentize(
 
     for (mounts, world_dir) in world_dir_mounts.iter() {
         for mount in mounts {
-            wasi.preopened_dir(
-                Dir::open_ambient_dir(world_dir.path(), cap_std::ambient_authority())
-                    .with_context(|| format!("unable to open {}", world_dir.path().display()))?,
-                DirPerms::all(),
-                FilePerms::all(),
-                mount,
-            );
+            wasi.preopened_dir(world_dir.path(), mount, DirPerms::all(), FilePerms::all())?;
         }
     }
 
     // Generate a `Symbols` object containing metadata to be passed to the pre-init function.  The runtime library
     // will use this to look up types and functions that will later be referenced by the generated Wasm code.
-    let symbols = summary.collect_symbols(&locations, isyswasfa);
+    let symbols = summary.collect_symbols(&locations);
 
     // Finally, pre-initialize the component, writing the result to `output_path`.
 
@@ -742,13 +682,14 @@ pub async fn componentize(
             async move {
                 let component = &Component::new(&engine, instrumented)?;
                 if !added_to_linker {
-                    add_wasi_and_stubs(&resolve, &worlds, component, &mut linker)?;
+                    add_wasi_and_stubs(&resolve, &worlds, &mut linker)?;
                 }
 
-                let (init, instance) =
-                    Init::instantiate_async(&mut store, component, &linker).await?;
+                let pre = InitPre::new(linker.instantiate_pre(component)?)?;
+                let instance = pre.instance_pre.instantiate_async(&mut store).await?;
+                let guest = pre.interface0.load(&mut store, &instance)?;
 
-                init.exports()
+                guest
                     .call_init(&mut store, &app_name, &symbols, stub_wasi)
                     .await?
                     .map_err(|e| anyhow!("{e}"))?;
@@ -777,8 +718,8 @@ fn parse_wit(path: &Path, world: Option<&str>) -> Result<(Resolve, WorldId)> {
     let pkg = if path.is_dir() {
         resolve.push_dir(path)?.0
     } else {
-        let pkg = UnresolvedPackage::parse_file(path)?;
-        resolve.push(pkg)?
+        let pkg = UnresolvedPackageGroup::parse_file(path)?;
+        resolve.push_group(pkg)?
     };
     let world = resolve.select_world(pkg, world)?;
     Ok((resolve, world))
@@ -787,10 +728,9 @@ fn parse_wit(path: &Path, world: Option<&str>) -> Result<(Resolve, WorldId)> {
 fn add_wasi_and_stubs(
     resolve: &Resolve,
     worlds: &IndexSet<WorldId>,
-    component: &Component,
     linker: &mut Linker<Ctx>,
 ) -> Result<()> {
-    wasi_command::add_to_linker(linker)?;
+    wasmtime_wasi::add_to_linker_async(linker)?;
 
     enum Stub<'a> {
         Function(&'a String),
@@ -801,13 +741,13 @@ fn add_wasi_and_stubs(
     for &world in worlds {
         for (key, item) in &resolve.worlds[world].imports {
             match item {
-                WorldItem::Interface(interface) => {
+                WorldItem::Interface { id, .. } => {
                     let interface_name = match key {
                         WorldKey::Name(name) => name.clone(),
                         WorldKey::Interface(interface) => resolve.id_of(*interface).unwrap(),
                     };
 
-                    let interface = &resolve.interfaces[*interface];
+                    let interface = &resolve.interfaces[*id];
                     for function_name in interface.functions.keys() {
                         stubs
                             .entry(Some(interface_name.clone()))
@@ -849,7 +789,7 @@ fn add_wasi_and_stubs(
                 for stub in stubs {
                     let interface_name = interface_name.clone();
                     match stub {
-                        Stub::Function(name) => instance.func_new(component, name, {
+                        Stub::Function(name) => instance.func_new(name, {
                             let name = name.clone();
                             move |_, _, _| {
                                 Err(anyhow!("called trapping stub: {interface_name}#{name}"))
@@ -870,7 +810,7 @@ fn add_wasi_and_stubs(
             let mut instance = linker.root();
             for stub in stubs {
                 match stub {
-                    Stub::Function(name) => instance.func_new(component, name, {
+                    Stub::Function(name) => instance.func_new(name, {
                         let name = name.clone();
                         move |_, _, _| Err(anyhow!("called trapping stub: {name}"))
                     }),

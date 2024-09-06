@@ -11,3 +11,5 @@ examples/http/.spin
 examples/http/http.wasm
 examples/tcp/tcp.wasm
 examples/cli/cli.wasm
+examples/sandbox/sandbox
+examples/sandbox/sandbox.wasm

@@ -16,7 +16,7 @@ const MAX_LIST_SIZE: usize = 100;
 const MAX_TUPLE_SIZE: usize = 12;
 // See note above about `MAX_TUPLE_SIZE`
 const MAX_PARAM_COUNT: usize = 12;
-const MAX_FLAG_COUNT: u32 = 100;
+const MAX_FLAG_COUNT: u32 = 32;
 const MAX_ENUM_COUNT: u32 = 100;
 
 static PREFIX: &str = "componentize_py::test::echoes_generated";
@@ -699,7 +699,7 @@ pub fn generate() -> Result<()> {
 
             writeln!(
                 &mut typed_function_inits,
-                r#"echo{test_index}: instance.typed_func::<({params}), ({result_type},)>("echo{test_index}")?,"#
+                r#"echo{test_index}: instance.get_typed_func::<({params}), ({result_type},)>(&mut *store, component.export_index(Some(&index), "echo{test_index}").unwrap().1)?,"#
             )
             .unwrap();
         }
@@ -802,7 +802,6 @@ use {{
     async_trait::async_trait,
     once_cell::sync::Lazy,
     proptest::strategy::{{Just, Strategy}},
-    wasmtime_wasi::preview2::command,
     wasmtime::{{
         component::{{Instance, InstancePre, Linker, TypedFunc}},
         Store,
@@ -812,7 +811,8 @@ use {{
 wasmtime::component::bindgen!({{
     path: {wit_path:?},
     world: "echoes-generated-test",
-    async: true
+    async: true,
+    trappable_imports: true,
 }});
 
 pub struct Exports {{
@@ -831,21 +831,21 @@ impl super::Host for Host {{
     type World = Exports;
 
     fn add_to_linker(linker: &mut Linker<Ctx>) -> Result<()> {{
-        command::add_to_linker(&mut *linker)?;
+        wasmtime_wasi::add_to_linker_async(&mut *linker)?;
         {PREFIX}::add_to_linker(linker, |ctx| ctx)?;
         Ok(())
     }}
 
     async fn instantiate_pre(
         store: &mut Store<Ctx>,
-        pre: &InstancePre<Ctx>,
-    ) -> Result<(Self::World, Instance)> {{
-        let guest_instance = pre.instantiate_async(&mut *store).await?;
-        let mut exports = guest_instance.exports(&mut *store);
-        let mut instance = exports.instance("componentize-py:test/echoes-generated").unwrap();
+        pre: InstancePre<Ctx>,
+    ) -> Result<Self::World> {{
+        let component = pre.component();
+        let (_, index) = component.export_index(None, "componentize-py:test/echoes-generated").unwrap();
+        let instance = pre.instantiate_async(&mut *store).await?;
         Ok((Self::World {{
            {typed_function_inits}
-        }}, guest_instance))
+        }}))
     }}
 }}
 

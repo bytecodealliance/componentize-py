@@ -5,16 +5,16 @@ use {
     once_cell::sync::Lazy,
     proptest::strategy::{Just, Strategy},
     wasmtime::{
-        component::{Instance, InstancePre, Linker},
+        component::{InstancePre, Linker},
         Store,
     },
-    wasmtime_wasi::preview2::command,
 };
 
 wasmtime::component::bindgen!({
     path: "src/test/wit",
     world: "echoes-test",
-    async: true
+    async: true,
+    trappable_imports: true,
 });
 
 #[async_trait]
@@ -192,16 +192,13 @@ impl super::Host for Host {
     type World = EchoesTest;
 
     fn add_to_linker(linker: &mut Linker<Ctx>) -> Result<()> {
-        command::add_to_linker(&mut *linker)?;
+        wasmtime_wasi::add_to_linker_async(&mut *linker)?;
         componentize_py::test::echoes::add_to_linker(linker, |ctx| ctx)?;
         Ok(())
     }
 
-    async fn instantiate_pre(
-        store: &mut Store<Ctx>,
-        pre: &InstancePre<Ctx>,
-    ) -> Result<(Self::World, Instance)> {
-        Ok(EchoesTest::instantiate_pre(store, pre).await?)
+    async fn instantiate_pre(store: &mut Store<Ctx>, pre: InstancePre<Ctx>) -> Result<Self::World> {
+        Ok(EchoesTestPre::new(pre)?.instantiate_async(store).await?)
     }
 }
 
