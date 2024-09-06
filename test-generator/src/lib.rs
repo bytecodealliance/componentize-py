@@ -16,7 +16,7 @@ const MAX_LIST_SIZE: usize = 100;
 const MAX_TUPLE_SIZE: usize = 12;
 // See note above about `MAX_TUPLE_SIZE`
 const MAX_PARAM_COUNT: usize = 12;
-const MAX_FLAG_COUNT: u32 = 100;
+const MAX_FLAG_COUNT: u32 = 32;
 const MAX_ENUM_COUNT: u32 = 100;
 
 static PREFIX: &str = "componentize_py::test::echoes_generated";
@@ -699,7 +699,7 @@ pub fn generate() -> Result<()> {
 
             writeln!(
                 &mut typed_function_inits,
-                r#"echo{test_index}: instance.get_typed_func::<({params}), ({result_type},)>(&mut *store, "componentize-py:test/echoes-generated/echo{test_index}")?,"#
+                r#"echo{test_index}: instance.get_typed_func::<({params}), ({result_type},)>(&mut *store, component.export_index(Some(&index), "echo{test_index}").unwrap().1)?,"#
             )
             .unwrap();
         }
@@ -840,6 +840,8 @@ impl super::Host for Host {{
         store: &mut Store<Ctx>,
         pre: InstancePre<Ctx>,
     ) -> Result<Self::World> {{
+        let component = pre.component();
+        let (_, index) = component.export_index(None, "componentize-py:test/echoes-generated").unwrap();
         let instance = pre.instantiate_async(&mut *store).await?;
         Ok((Self::World {{
            {typed_function_inits}

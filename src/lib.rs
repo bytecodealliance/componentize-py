@@ -5,7 +5,6 @@ use {
     async_trait::async_trait,
     bytes::Bytes,
     component_init::Invoker,
-    exports::exports::Symbols,
     futures::future::FutureExt,
     heck::ToSnakeCase,
     indexmap::{IndexMap, IndexSet},
@@ -686,15 +685,13 @@ pub async fn componentize(
                     add_wasi_and_stubs(&resolve, &worlds, &mut linker)?;
                 }
 
-                let instance = linker.instantiate_async(&mut store, component).await?;
-                let init = instance
-                    .get_typed_func::<(&str, &Symbols, bool), (Result<(), String>,)>(
-                        &mut store, "init",
-                    )?;
+                let pre = InitPre::new(linker.instantiate_pre(component)?)?;
+                let instance = pre.instance_pre.instantiate_async(&mut store).await?;
+                let guest = pre.interface0.load(&mut store, &instance)?;
 
-                init.call_async(&mut store, (&app_name, &symbols, stub_wasi))
+                guest
+                    .call_init(&mut store, &app_name, &symbols, stub_wasi)
                     .await?
-                    .0
                     .map_err(|e| anyhow!("{e}"))?;
 
                 Ok(Box::new(MyInvoker { store, instance }) as Box<dyn Invoker>)

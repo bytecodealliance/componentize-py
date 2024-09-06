@@ -561,6 +561,7 @@ fn resource_alias() -> Result<()> {
             );
 
             let instance = world.componentize_py_test_resource_alias2();
+            let thing1 = thing.call_constructor(&mut *store, "Ciao").await?;
             let thing2 = thing.call_constructor(&mut *store, "Aloha").await?;
 
             let things = instance
