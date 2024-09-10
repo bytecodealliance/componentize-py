@@ -13,8 +13,8 @@ use {
         exceptions::PyAssertionError,
         intern,
         types::{
-            PyAnyMethods, PyBool, PyBytes, PyDict, PyList, PyListMethods, PyMapping,
-            PyMappingMethods, PyModule, PyString, PyTuple,
+            PyAnyMethods, PyBool, PyBytes, PyBytesMethods, PyDict, PyList, PyListMethods,
+            PyMapping, PyMappingMethods, PyModule, PyModuleMethods, PyString, PyTuple,
         },
         Borrowed, Bound, Py, PyAny, PyErr, PyObject, PyResult, Python, ToPyObject,
     },
@@ -132,7 +132,7 @@ extern "C" {
 fn call_import<'a>(
     module: &'a Bound<PyModule>,
     index: u32,
-    params: Vec<&PyAny>,
+    params: Vec<Bound<PyAny>>,
     result_count: usize,
 ) -> PyResult<Vec<&'a PyAny>> {
     let mut results = vec![MaybeUninit::<&PyAny>::uninit(); result_count];
@@ -425,7 +425,7 @@ pub unsafe extern "C" fn componentize_py_dispatch(
         );
 
         // todo: is this sound, or do we need to `.into_iter().map(MaybeUninit::assume_init).collect()` instead?
-        let params_py = mem::transmute::<Vec<MaybeUninit<&PyAny>>, Vec<&PyAny>>(params_py);
+        let params_py = mem::transmute::<Vec<MaybeUninit<&PyAny>>, Vec<Bound<PyAny>>>(params_py);
 
         if !*STUB_WASI.get().unwrap() {
             static ONCE: Once = Once::new();
@@ -516,7 +516,7 @@ pub unsafe extern "C" fn componentize_py_free(ptr: *mut u8, size: usize, align: 
 }
 
 #[export_name = "componentize-py#ToCanonBool"]
-pub extern "C" fn componentize_py_to_canon_bool(_py: &Python, value: &PyAny) -> u32 {
+pub extern "C" fn componentize_py_to_canon_bool(_py: &Python, value: &Bound<PyAny>) -> u32 {
     if value.is_truthy().unwrap() {
         1
     } else {
@@ -525,27 +525,27 @@ pub extern "C" fn componentize_py_to_canon_bool(_py: &Python, value: &PyAny) -> 
 }
 
 #[export_name = "componentize-py#ToCanonI32"]
-pub extern "C" fn componentize_py_to_canon_i32(_py: &Python, value: &PyAny) -> i32 {
+pub extern "C" fn componentize_py_to_canon_i32(_py: &Python, value: &Bound<PyAny>) -> i32 {
     value.extract().unwrap()
 }
 
 #[export_name = "componentize-py#ToCanonI64"]
-pub extern "C" fn componentize_py_to_canon_i64(_py: &Python, value: &PyAny) -> i64 {
+pub extern "C" fn componentize_py_to_canon_i64(_py: &Python, value: &Bound<PyAny>) -> i64 {
     value.extract().unwrap()
 }
 
 #[export_name = "componentize-py#ToCanonF32"]
-pub extern "C" fn componentize_py_to_canon_f32(_py: &Python, value: &PyAny) -> f32 {
+pub extern "C" fn componentize_py_to_canon_f32(_py: &Python, value: &Bound<PyAny>) -> f32 {
     value.extract().unwrap()
 }
 
 #[export_name = "componentize-py#ToCanonF64"]
-pub extern "C" fn componentize_py_to_canon_f64(_py: &Python, value: &PyAny) -> f64 {
+pub extern "C" fn componentize_py_to_canon_f64(_py: &Python, value: &Bound<PyAny>) -> f64 {
     value.extract().unwrap()
 }
 
 #[export_name = "componentize-py#ToCanonChar"]
-pub extern "C" fn componentize_py_to_canon_char(_py: &Python, value: &PyAny) -> u32 {
+pub extern "C" fn componentize_py_to_canon_char(_py: &Python, value: &Bound<PyAny>) -> u32 {
     let value = value.extract::<String>().unwrap();
     assert!(value.chars().count() == 1);
     value.chars().next().unwrap() as u32
@@ -556,7 +556,7 @@ pub extern "C" fn componentize_py_to_canon_char(_py: &Python, value: &PyAny) -> 
 #[export_name = "componentize-py#ToCanonString"]
 pub unsafe extern "C" fn componentize_py_to_canon_string(
     _py: &Python,
-    value: &PyAny,
+    value: &Bound<PyAny>,
     destination: *mut (*const u8, usize),
 ) {
     let value = value.extract::<String>().unwrap().into_bytes();
@@ -681,7 +681,7 @@ pub extern "C" fn componentize_py_get_field<'a>(
 }
 
 #[export_name = "componentize-py#GetListLength"]
-pub extern "C" fn componentize_py_get_list_length(_py: &Python, value: &PyAny) -> usize {
+pub extern "C" fn componentize_py_get_list_length(_py: &Python, value: &Bound<PyAny>) -> usize {
     if let Ok(bytes) = value.downcast::<PyBytes>() {
         bytes.len().unwrap()
     } else {
@@ -692,9 +692,9 @@ pub extern "C" fn componentize_py_get_list_length(_py: &Python, value: &PyAny) -
 #[export_name = "componentize-py#GetListElement"]
 pub extern "C" fn componentize_py_get_list_element<'a>(
     _py: &'a Python,
-    value: &'a PyAny,
+    value: &Bound<'a, PyAny>,
     index: usize,
-) -> &'a PyAny {
+) -> Bound<'a, PyAny> {
     value.downcast::<PyList>().unwrap().get_item(index).unwrap()
 }
 
@@ -911,7 +911,11 @@ pub extern "C" fn componentize_py_make_list<'a>(py: &'a Python) -> Bound<'a, PyL
 }
 
 #[export_name = "componentize-py#ListAppend"]
-pub extern "C" fn componentize_py_list_append(_py: &Python, list: &PyList, element: &PyAny) {
+pub extern "C" fn componentize_py_list_append(
+    _py: &Python,
+    list: &Bound<PyList>,
+    element: &Bound<PyAny>,
+) {
     list.append(element).unwrap();
 }
 
@@ -925,7 +929,7 @@ pub extern "C" fn componentize_py_none<'a>(py: &'a Python) -> Bound<'a, PyAny> {
 #[export_name = "componentize-py#GetBytes"]
 pub unsafe extern "C" fn componentize_py_get_bytes(
     _py: &Python,
-    src: &PyBytes,
+    src: &Bound<PyBytes>,
     dst: *mut u8,
     len: usize,
 ) {
@@ -955,7 +959,7 @@ pub extern "C" fn componentize_py_from_canon_handle<'a>(
     borrow: i32,
     local: i32,
     resource: i32,
-) -> Bound<PyAny> {
+) -> Bound<'a, PyAny> {
     let ty = &TYPES.get().unwrap()[usize::try_from(resource).unwrap()];
     let Type::Resource {
         constructor,
@@ -1046,7 +1050,7 @@ pub extern "C" fn componentize_py_from_canon_handle<'a>(
 #[export_name = "componentize-py#ToCanonHandle"]
 pub extern "C" fn componentize_py_to_canon_handle(
     py: &Python,
-    value: &PyAny,
+    value: Bound<PyAny>,
     borrow: i32,
     local: i32,
     resource: i32,

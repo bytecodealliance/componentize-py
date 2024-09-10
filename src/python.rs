@@ -2,7 +2,7 @@ use {
     pyo3::{
         exceptions::PyAssertionError,
         pybacked::PyBackedStr,
-        types::{PyAnyMethods, PyModule},
+        types::{PyAnyMethods, PyModule, PyModuleMethods},
         Bound, PyResult, Python,
     },
     std::{ffi::OsString, path::PathBuf},
