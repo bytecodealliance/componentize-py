@@ -1,3 +1,4 @@
 [submodule "cpython"]
         path = cpython
-        url = https://github.com/dicej/cpython
+        url = https://github.com/python/cpython
+        branch = 3.12
