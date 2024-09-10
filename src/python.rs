@@ -1,5 +1,10 @@
 use {
-    pyo3::{exceptions::PyAssertionError, types::PyModule, PyResult, Python},
+    pyo3::{
+        exceptions::PyAssertionError,
+        pybacked::PyBackedStr,
+        types::{PyAnyMethods, PyModule},
+        Bound, PyResult, Python,
+    },
     std::{ffi::OsString, path::PathBuf},
     tokio::runtime::Runtime,
 };
@@ -11,8 +16,8 @@ use {
 fn python_componentize(
     wit_path: Option<PathBuf>,
     world: Option<&str>,
-    python_path: Vec<&str>,
-    module_worlds: Vec<(&str, &str)>,
+    python_path: Vec<PyBackedStr>,
+    module_worlds: Vec<(PyBackedStr, PyBackedStr)>,
     app_name: &str,
     output_path: PathBuf,
     stub_wasi: bool,
@@ -21,8 +26,11 @@ fn python_componentize(
         Runtime::new()?.block_on(crate::componentize(
             wit_path.as_deref(),
             world,
-            &python_path,
-            &module_worlds,
+            &python_path.iter().map(|s| &**s).collect::<Vec<_>>(),
+            &module_worlds
+                .iter()
+                .map(|(a, b)| (&**a, &**b))
+                .collect::<Vec<_>>(),
             app_name,
             &output_path,
             None,
@@ -49,7 +57,7 @@ fn python_generate_bindings(
 #[pyo3(name = "script")]
 fn python_script(py: Python) -> PyResult<()> {
     crate::command::run(
-        py.import("sys")?
+        py.import_bound("sys")?
             .getattr("argv")?
             .extract::<Vec<OsString>>()?,
     )
@@ -57,7 +65,7 @@ fn python_script(py: Python) -> PyResult<()> {
 }
 
 #[pyo3::pymodule]
-fn componentize_py(_py: Python, module: &PyModule) -> PyResult<()> {
+fn componentize_py(_py: Python, module: &Bound<PyModule>) -> PyResult<()> {
     module.add_function(pyo3::wrap_pyfunction!(python_componentize, module)?)?;
     module.add_function(pyo3::wrap_pyfunction!(python_generate_bindings, module)?)?;
     module.add_function(pyo3::wrap_pyfunction!(python_script, module)?)?;
