@@ -9,11 +9,7 @@ crate-type = ["staticlib"]
 [dependencies]
 anyhow = "1.0.87"
 once_cell = "1.19.0"
-pyo3 = { version = "0.22.2", features = [
-    "abi3-py312",
-    "num-bigint",
-    "py-clone",
-] }
+pyo3 = { version = "0.22.2", features = ["abi3-py312", "num-bigint"] }
 componentize-py-shared = { path = "../shared" }
 num-bigint = "0.4.6"
 wit-bindgen = "0.16.0"

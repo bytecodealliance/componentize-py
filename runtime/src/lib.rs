@@ -1003,7 +1003,7 @@ pub extern "C" fn componentize_py_from_canon_handle<'a>(
 
     if local != 0 {
         if borrow != 0 {
-            unsafe { PyObject::from_borrowed_ptr(*py, value as usize as _) }.into_bound(*py)
+            unsafe { Bound::from_borrowed_ptr(*py, value as usize as _) }
         } else {
             let Some(LocalResource { rep, .. }) = resource_local else {
                 panic!("expected local resource, found {ty:?}");
@@ -1023,7 +1023,7 @@ pub extern "C" fn componentize_py_from_canon_handle<'a>(
                 }
             };
 
-            let value = unsafe { PyObject::from_borrowed_ptr(*py, rep as _) }.into_bound(*py);
+            let value = unsafe { Bound::from_borrowed_ptr(*py, rep as _) };
 
             value
                 .delattr(intern!(*py, "__componentize_py_handle"))
@@ -1053,7 +1053,7 @@ pub extern "C" fn componentize_py_from_canon_handle<'a>(
         let handle = value.to_object(*py);
 
         instance
-            .setattr(*py, intern!(*py, "handle"), handle.clone())
+            .setattr(*py, intern!(*py, "handle"), handle.clone_ref(*py))
             .unwrap();
 
         let finalizer = FINALIZE
@@ -1062,7 +1062,7 @@ pub extern "C" fn componentize_py_from_canon_handle<'a>(
             .call1(
                 *py,
                 (
-                    instance.clone(),
+                    instance.clone_ref(*py),
                     DROP_RESOURCE.get().unwrap(),
                     drop.to_object(*py),
                     handle,
@@ -1125,7 +1125,7 @@ pub extern "C" fn componentize_py_to_canon_handle(
                 .call1(
                     *py,
                     (
-                        instance.clone(),
+                        instance.clone_ref(*py),
                         DROP_RESOURCE.get().unwrap(),
                         drop.to_object(*py),
                         handle,
