@@ -421,12 +421,6 @@ pub unsafe extern "C" fn componentize_py_dispatch(
             from_canon,
         );
 
-        let params_py = params_py
-            .into_iter()
-            .map(|p| p.assume_init())
-            .map(|p| Bound::from_borrowed_ptr(py, p.as_ptr()))
-            .collect::<Vec<_>>();
-
         if !*STUB_WASI.get().unwrap() {
             static ONCE: Once = Once::new();
             ONCE.call_once(|| {
@@ -449,13 +443,20 @@ pub unsafe extern "C" fn componentize_py_dispatch(
         }
 
         let export = &EXPORTS.get().unwrap()[export];
+
+        let mut params_py = params_py
+            .into_iter()
+            .map(|p| Bound::from_borrowed_ptr(py, p.assume_init().as_ptr()));
         let result = match export {
             Export::Freestanding { instance, name } => {
                 instance.call_method1(py, name.bind(py), PyTuple::new_bound(py, params_py))
             }
             Export::Constructor(class) => class.call1(py, PyTuple::new_bound(py, params_py)),
-            Export::Method(name) => params_py[0]
-                .call_method1(name.bind(py), PyTuple::new_bound(py, &params_py[1..]))
+            Export::Method(name) => params_py
+                // Call method on self with remaining iterator elements
+                .next()
+                .unwrap()
+                .call_method1(name.bind(py), PyTuple::new_bound(py, params_py))
                 .map(|r| r.into()),
             Export::Static { class, name } => class
                 .getattr(py, name.bind(py))
@@ -624,24 +625,18 @@ pub extern "C" fn componentize_py_get_field<'a>(
             unsafe { mem::transmute::<u32, i32>(value) }
                 .to_object(*py)
                 .into_bound(*py)
-                .extract()
-                .unwrap()
         }
         Type::Option => match i32::try_from(field).unwrap() {
             DISCRIMINANT_FIELD_INDEX => if value.is_none() { 0 } else { 1 }
                 .to_object(*py)
-                .into_bound(*py)
-                .extract()
-                .unwrap(),
+                .into_bound(*py),
             PAYLOAD_FIELD_INDEX => value,
             _ => unreachable!(),
         },
         Type::NestingOption => match i32::try_from(field).unwrap() {
             DISCRIMINANT_FIELD_INDEX => if value.is_none() { 0 } else { 1 }
                 .to_object(*py)
-                .into_bound(*py)
-                .extract()
-                .unwrap(),
+                .into_bound(*py),
             PAYLOAD_FIELD_INDEX => {
                 if value.is_none() {
                     value
@@ -721,7 +716,7 @@ pub extern "C" fn componentize_py_from_canon_i32<'a>(
     py: &'a Python<'a>,
     value: i32,
 ) -> Bound<'a, PyAny> {
-    value.to_object(*py).into_bound(*py).extract().unwrap()
+    value.to_object(*py).into_bound(*py)
 }
 
 #[export_name = "componentize-py#FromCanonI64"]
@@ -729,7 +724,7 @@ pub extern "C" fn componentize_py_from_canon_i64<'a>(
     py: &'a Python<'a>,
     value: i64,
 ) -> Bound<'a, PyAny> {
-    value.to_object(*py).into_bound(*py).extract().unwrap()
+    value.to_object(*py).into_bound(*py)
 }
 
 #[export_name = "componentize-py#FromCanonF32"]
@@ -737,7 +732,7 @@ pub extern "C" fn componentize_py_from_canon_f32<'a>(
     py: &'a Python<'a>,
     value: f32,
 ) -> Bound<'a, PyAny> {
-    value.to_object(*py).into_bound(*py).extract().unwrap()
+    value.to_object(*py).into_bound(*py)
 }
 
 #[export_name = "componentize-py#FromCanonF64"]
@@ -745,7 +740,7 @@ pub extern "C" fn componentize_py_from_canon_f64<'a>(
     py: &'a Python<'a>,
     value: f64,
 ) -> Bound<'a, PyAny> {
-    value.to_object(*py).into_bound(*py).extract().unwrap()
+    value.to_object(*py).into_bound(*py)
 }
 
 #[export_name = "componentize-py#FromCanonChar"]
@@ -758,8 +753,6 @@ pub extern "C" fn componentize_py_from_canon_char<'a>(
         .to_string()
         .to_object(*py)
         .into_bound(*py)
-        .extract()
-        .unwrap()
 }
 
 /// # Safety
