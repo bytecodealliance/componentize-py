@@ -326,7 +326,7 @@ fn do_init(app_name: String, symbols: Symbols, stub_wasi: bool) -> Result<()> {
         let environ = py
             .import_bound("os")?
             .getattr("environ")?
-            .extract::<Bound<PyMapping>>()
+            .downcast_into::<PyMapping>()
             .unwrap();
 
         let keys = environ.keys()?;
@@ -355,7 +355,7 @@ fn do_init(app_name: String, symbols: Symbols, stub_wasi: bool) -> Result<()> {
         let argv = py
             .import_bound("sys")?
             .getattr("argv")?
-            .extract::<Bound<PyList>>()
+            .downcast_into::<PyList>()
             .unwrap();
 
         for i in 0..argv.len() {
