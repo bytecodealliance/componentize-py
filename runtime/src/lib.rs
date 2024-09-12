@@ -16,7 +16,7 @@ use {
             PyAnyMethods, PyBool, PyBytes, PyBytesMethods, PyDict, PyList, PyListMethods,
             PyMapping, PyMappingMethods, PyModule, PyModuleMethods, PyString, PyTuple,
         },
-        Borrowed, Bound, Py, PyAny, PyErr, PyObject, PyResult, Python, ToPyObject,
+        AsPyPointer, Bound, Py, PyAny, PyErr, PyObject, PyResult, Python, ToPyObject,
     },
     std::{
         alloc::{self, Layout},
@@ -132,7 +132,7 @@ extern "C" {
 fn call_import<'a>(
     module: &'a Bound<PyModule>,
     index: u32,
-    params: Vec<Bound<PyAny>>,
+    params: Vec<Bound<'a, PyAny>>,
     result_count: usize,
 ) -> PyResult<Vec<&'a PyAny>> {
     let mut results = vec![MaybeUninit::<&PyAny>::uninit(); result_count];
@@ -144,10 +144,7 @@ fn call_import<'a>(
             index,
         );
 
-        // todo: is this sound, or do we need to `.into_iter().map(MaybeUninit::assume_init).collect()` instead?
-        Ok(mem::transmute::<Vec<MaybeUninit<&PyAny>>, Vec<&PyAny>>(
-            results,
-        ))
+        Ok(results.into_iter().map(|r| r.assume_init()).collect())
     }
 }
 
@@ -424,22 +421,25 @@ pub unsafe extern "C" fn componentize_py_dispatch(
             from_canon,
         );
 
-        // todo: is this sound, or do we need to `.into_iter().map(MaybeUninit::assume_init).collect()` instead?
-        let params_py = mem::transmute::<Vec<MaybeUninit<&PyAny>>, Vec<Bound<PyAny>>>(params_py);
+        let params_py = params_py
+            .into_iter()
+            .map(|p| p.assume_init())
+            .map(|p| Bound::from_borrowed_ptr(py, p.as_ptr()))
+            .collect::<Vec<_>>();
 
         if !*STUB_WASI.get().unwrap() {
             static ONCE: Once = Once::new();
             ONCE.call_once(|| {
                 // We must call directly into the host to get the runtime environment since libc's version will only
                 // contain the build-time pre-init snapshot.
-                let environ = ENVIRON.get().unwrap().bind(py);
+                let environ = ENVIRON.get().unwrap().bind_borrowed(py);
                 for (k, v) in environment::get_environment() {
                     environ.set_item(k, v).unwrap();
                 }
 
                 // Likewise for CLI arguments.
                 for arg in environment::get_arguments() {
-                    ARGV.get().unwrap().bind(py).append(arg).unwrap();
+                    ARGV.get().unwrap().bind_borrowed(py).append(arg).unwrap();
                 }
 
                 // Call `random.seed()` to ensure we get a fresh seed rather than the one that got baked in during
@@ -476,7 +476,7 @@ pub unsafe extern "C" fn componentize_py_dispatch(
                     if ERR_CONSTRUCTOR
                         .get()
                         .unwrap()
-                        .bind(py)
+                        .bind_borrowed(py)
                         .eq(result.get_type_bound(py))
                         .unwrap()
                     {
@@ -489,7 +489,7 @@ pub unsafe extern "C" fn componentize_py_dispatch(
             },
         };
 
-        let result = result.into_bound(py);
+        let result = result.bind_borrowed(py);
         let result_array = [result];
 
         componentize_py_call_indirect(
@@ -516,7 +516,8 @@ pub unsafe extern "C" fn componentize_py_free(ptr: *mut u8, size: usize, align: 
 }
 
 #[export_name = "componentize-py#ToCanonBool"]
-pub extern "C" fn componentize_py_to_canon_bool(_py: &Python, value: &Bound<PyAny>) -> u32 {
+pub extern "C" fn componentize_py_to_canon_bool(py: &Python, value: &PyAny) -> u32 {
+    let value = unsafe { Bound::from_borrowed_ptr(*py, value.as_ptr()) };
     if value.is_truthy().unwrap() {
         1
     } else {
@@ -525,27 +526,32 @@ pub extern "C" fn componentize_py_to_canon_bool(_py: &Python, value: &Bound<PyAn
 }
 
 #[export_name = "componentize-py#ToCanonI32"]
-pub extern "C" fn componentize_py_to_canon_i32(_py: &Python, value: &Bound<PyAny>) -> i32 {
+pub extern "C" fn componentize_py_to_canon_i32(py: &Python, value: &PyAny) -> i32 {
+    let value = unsafe { Bound::from_borrowed_ptr(*py, value.as_ptr()) };
     value.extract().unwrap()
 }
 
 #[export_name = "componentize-py#ToCanonI64"]
-pub extern "C" fn componentize_py_to_canon_i64(_py: &Python, value: &Bound<PyAny>) -> i64 {
+pub extern "C" fn componentize_py_to_canon_i64(py: &Python, value: &PyAny) -> i64 {
+    let value = unsafe { Bound::from_borrowed_ptr(*py, value.as_ptr()) };
     value.extract().unwrap()
 }
 
 #[export_name = "componentize-py#ToCanonF32"]
-pub extern "C" fn componentize_py_to_canon_f32(_py: &Python, value: &Bound<PyAny>) -> f32 {
+pub extern "C" fn componentize_py_to_canon_f32(py: &Python, value: &PyAny) -> f32 {
+    let value = unsafe { Bound::from_borrowed_ptr(*py, value.as_ptr()) };
     value.extract().unwrap()
 }
 
 #[export_name = "componentize-py#ToCanonF64"]
-pub extern "C" fn componentize_py_to_canon_f64(_py: &Python, value: &Bound<PyAny>) -> f64 {
+pub extern "C" fn componentize_py_to_canon_f64(py: &Python, value: &PyAny) -> f64 {
+    let value = unsafe { Bound::from_borrowed_ptr(*py, value.as_ptr()) };
     value.extract().unwrap()
 }
 
 #[export_name = "componentize-py#ToCanonChar"]
-pub extern "C" fn componentize_py_to_canon_char(_py: &Python, value: &Bound<PyAny>) -> u32 {
+pub extern "C" fn componentize_py_to_canon_char(py: &Python, value: &PyAny) -> u32 {
+    let value = unsafe { Bound::from_borrowed_ptr(*py, value.as_ptr()) };
     let value = value.extract::<String>().unwrap();
     assert!(value.chars().count() == 1);
     value.chars().next().unwrap() as u32
@@ -555,10 +561,11 @@ pub extern "C" fn componentize_py_to_canon_char(_py: &Python, value: &Bound<PyAn
 /// TODO
 #[export_name = "componentize-py#ToCanonString"]
 pub unsafe extern "C" fn componentize_py_to_canon_string(
-    _py: &Python,
-    value: &Bound<PyAny>,
+    py: &Python,
+    value: &PyAny,
     destination: *mut (*const u8, usize),
 ) {
+    let value = unsafe { Bound::from_borrowed_ptr(*py, value.as_ptr()) };
     let value = value.extract::<String>().unwrap().into_bytes();
     unsafe {
         let result = alloc::alloc(Layout::from_size_align(value.len(), 1).unwrap());
@@ -570,10 +577,11 @@ pub unsafe extern "C" fn componentize_py_to_canon_string(
 #[export_name = "componentize-py#GetField"]
 pub extern "C" fn componentize_py_get_field<'a>(
     py: &'a Python,
-    value: Bound<'a, PyAny>,
+    value: &'a PyAny,
     ty: usize,
     field: usize,
 ) -> Bound<'a, PyAny> {
+    let value = unsafe { Bound::from_borrowed_ptr(*py, value.as_ptr()) };
     match &TYPES.get().unwrap()[ty] {
         Type::Record { fields, .. } => value.getattr(fields[field].as_str()).unwrap(),
         Type::Variant {
@@ -581,7 +589,7 @@ pub extern "C" fn componentize_py_get_field<'a>(
             cases,
         } => {
             let discriminant = types_to_discriminants
-                .bind(*py)
+                .bind_borrowed(*py)
                 .get_item(value.get_type())
                 .unwrap();
 
@@ -647,7 +655,7 @@ pub extern "C" fn componentize_py_get_field<'a>(
             DISCRIMINANT_FIELD_INDEX => if OK_CONSTRUCTOR
                 .get()
                 .unwrap()
-                .bind(*py)
+                .bind_borrowed(*py)
                 .eq(value.get_type())
                 .unwrap()
             {
@@ -655,7 +663,7 @@ pub extern "C" fn componentize_py_get_field<'a>(
             } else if ERR_CONSTRUCTOR
                 .get()
                 .unwrap()
-                .bind(*py)
+                .bind_borrowed(*py)
                 .eq(value.get_type())
                 .unwrap()
             {
@@ -681,7 +689,8 @@ pub extern "C" fn componentize_py_get_field<'a>(
 }
 
 #[export_name = "componentize-py#GetListLength"]
-pub extern "C" fn componentize_py_get_list_length(_py: &Python, value: &Bound<PyAny>) -> usize {
+pub extern "C" fn componentize_py_get_list_length(py: &Python, value: &PyAny) -> usize {
+    let value = unsafe { Bound::from_borrowed_ptr(*py, value.as_ptr()) };
     if let Ok(bytes) = value.downcast::<PyBytes>() {
         bytes.len().unwrap()
     } else {
@@ -691,19 +700,20 @@ pub extern "C" fn componentize_py_get_list_length(_py: &Python, value: &Bound<Py
 
 #[export_name = "componentize-py#GetListElement"]
 pub extern "C" fn componentize_py_get_list_element<'a>(
-    _py: &'a Python,
-    value: &Bound<'a, PyAny>,
+    py: &'a Python,
+    value: &'a PyAny,
     index: usize,
 ) -> Bound<'a, PyAny> {
+    let value = unsafe { Bound::from_borrowed_ptr(*py, value.as_ptr()) };
     value.downcast::<PyList>().unwrap().get_item(index).unwrap()
 }
 
 #[export_name = "componentize-py#FromCanonBool"]
-pub extern "C" fn componentize_py_from_canon_bool<'a, 'py>(
-    py: &'a Python<'py>,
+pub extern "C" fn componentize_py_from_canon_bool<'a>(
+    py: &'a Python,
     value: u32,
-) -> Borrowed<'a, 'py, PyBool> {
-    PyBool::new_bound(*py, value != 0)
+) -> Bound<'a, PyAny> {
+    PyBool::new_bound(*py, value != 0).to_owned().into_any()
 }
 
 #[export_name = "componentize-py#FromCanonI32"]
@@ -771,23 +781,27 @@ pub unsafe extern "C" fn componentize_py_from_canon_string<'a>(
 pub unsafe extern "C" fn componentize_py_init<'a>(
     py: &'a Python<'a>,
     ty: usize,
-    data: *const Bound<'a, PyAny>,
+    data: *const &'a PyAny,
     len: usize,
 ) -> Bound<'a, PyAny> {
     match &TYPES.get().unwrap()[ty] {
-        Type::Record { constructor, .. } => constructor
-            .call1(
-                *py,
-                PyTuple::new_bound(*py, slice::from_raw_parts(data, len)),
-            )
-            .unwrap()
-            .into_bound(*py),
+        Type::Record { constructor, .. } => {
+            let elements = slice::from_raw_parts(data, len)
+                .iter()
+                .map(|e| Bound::from_borrowed_ptr(*py, e.as_ptr()));
+            constructor
+                .call1(*py, PyTuple::new_bound(*py, elements))
+                .unwrap()
+                .into_bound(*py)
+        }
         Type::Variant { cases, .. } => {
             assert!(len == 2);
-            let discriminant =
-                ptr::read(data.offset(isize::try_from(DISCRIMINANT_FIELD_INDEX).unwrap()))
-                    .extract::<u32>()
-                    .unwrap();
+            let discriminant = Bound::from_borrowed_ptr(
+                *py,
+                ptr::read(data.offset(isize::try_from(DISCRIMINANT_FIELD_INDEX).unwrap())).as_ptr(),
+            )
+            .extract::<u32>()
+            .unwrap();
             let case = &cases[usize::try_from(discriminant).unwrap()];
             if case.has_payload {
                 case.constructor.call1(
@@ -804,10 +818,12 @@ pub unsafe extern "C" fn componentize_py_init<'a>(
         }
         Type::Enum { constructor, count } => {
             assert!(len == 2);
-            let discriminant =
-                ptr::read(data.offset(isize::try_from(DISCRIMINANT_FIELD_INDEX).unwrap()))
-                    .extract::<usize>()
-                    .unwrap();
+            let discriminant = Bound::from_borrowed_ptr(
+                *py,
+                ptr::read(data.offset(isize::try_from(DISCRIMINANT_FIELD_INDEX).unwrap())).as_ptr(),
+            )
+            .extract::<usize>()
+            .unwrap();
             assert!(discriminant < *count);
             constructor
                 .call1(
@@ -830,7 +846,11 @@ pub unsafe extern "C" fn componentize_py_init<'a>(
                     (BigUint::new(
                         slice::from_raw_parts(data, len)
                             .iter()
-                            .map(|v| mem::transmute::<i32, u32>(v.extract().unwrap()))
+                            .map(|v| {
+                                mem::transmute::<i32, u32>(
+                                    Bound::from_borrowed_ptr(*py, v.as_ptr()).extract().unwrap(),
+                                )
+                            })
                             .collect(),
                     ),),
                 )
@@ -839,24 +859,30 @@ pub unsafe extern "C" fn componentize_py_init<'a>(
         }
         Type::Option => {
             assert!(len == 2);
-            let discriminant =
-                ptr::read(data.offset(isize::try_from(DISCRIMINANT_FIELD_INDEX).unwrap()))
-                    .extract::<u32>()
-                    .unwrap();
+            let discriminant = Bound::from_borrowed_ptr(
+                *py,
+                ptr::read(data.offset(isize::try_from(DISCRIMINANT_FIELD_INDEX).unwrap())).as_ptr(),
+            )
+            .extract::<u32>()
+            .unwrap();
 
             match discriminant {
                 0 => py.None().into_bound(*py),
-                1 => ptr::read(data.offset(isize::try_from(PAYLOAD_FIELD_INDEX).unwrap())),
-
+                1 => Bound::from_borrowed_ptr(
+                    *py,
+                    ptr::read(data.offset(isize::try_from(PAYLOAD_FIELD_INDEX).unwrap())).as_ptr(),
+                ),
                 _ => unreachable!(),
             }
         }
         Type::NestingOption => {
             assert!(len == 2);
-            let discriminant =
-                ptr::read(data.offset(isize::try_from(DISCRIMINANT_FIELD_INDEX).unwrap()))
-                    .extract::<u32>()
-                    .unwrap();
+            let discriminant = Bound::from_borrowed_ptr(
+                *py,
+                ptr::read(data.offset(isize::try_from(DISCRIMINANT_FIELD_INDEX).unwrap())).as_ptr(),
+            )
+            .extract::<u32>()
+            .unwrap();
 
             match discriminant {
                 0 => py.None().into_bound(*py),
@@ -878,10 +904,12 @@ pub unsafe extern "C" fn componentize_py_init<'a>(
         }
         Type::Result => {
             assert!(len == 2);
-            let discriminant =
-                ptr::read(data.offset(isize::try_from(DISCRIMINANT_FIELD_INDEX).unwrap()))
-                    .extract::<u32>()
-                    .unwrap();
+            let discriminant = Bound::from_borrowed_ptr(
+                *py,
+                ptr::read(data.offset(isize::try_from(DISCRIMINANT_FIELD_INDEX).unwrap())).as_ptr(),
+            )
+            .extract::<u32>()
+            .unwrap();
 
             match discriminant {
                 0 => OK_CONSTRUCTOR.get().unwrap(),
@@ -899,7 +927,10 @@ pub unsafe extern "C" fn componentize_py_init<'a>(
         }
         Type::Tuple(length) => {
             assert!(*length == len);
-            PyTuple::new_bound(*py, slice::from_raw_parts(data, len)).into_any()
+            let elements = slice::from_raw_parts(data, len)
+                .iter()
+                .map(|e| Bound::from_borrowed_ptr(*py, e.as_ptr()));
+            PyTuple::new_bound(*py, elements).into_any()
         }
         Type::Handle | Type::Resource { .. } => unreachable!(),
     }
@@ -911,12 +942,10 @@ pub extern "C" fn componentize_py_make_list<'a>(py: &'a Python) -> Bound<'a, PyL
 }
 
 #[export_name = "componentize-py#ListAppend"]
-pub extern "C" fn componentize_py_list_append(
-    _py: &Python,
-    list: &Bound<PyList>,
-    element: &Bound<PyAny>,
-) {
-    list.append(element).unwrap();
+pub extern "C" fn componentize_py_list_append(py: &Python, list: &PyList, element: &PyAny) {
+    let list = unsafe { Bound::from_borrowed_ptr(*py, list.as_ptr()) };
+    let element = unsafe { Bound::from_borrowed_ptr(*py, element.as_ptr()) };
+    list.downcast::<PyList>().unwrap().append(element).unwrap();
 }
 
 #[export_name = "componentize-py#None"]
@@ -928,13 +957,15 @@ pub extern "C" fn componentize_py_none<'a>(py: &'a Python) -> Bound<'a, PyAny> {
 /// TODO
 #[export_name = "componentize-py#GetBytes"]
 pub unsafe extern "C" fn componentize_py_get_bytes(
-    _py: &Python,
-    src: &Bound<PyBytes>,
+    py: &Python,
+    src: &PyBytes,
     dst: *mut u8,
     len: usize,
 ) {
+    let src = unsafe { Bound::from_borrowed_ptr(*py, src.as_ptr()) };
     assert_eq!(len, src.len().unwrap());
-    slice::from_raw_parts_mut(dst, len).copy_from_slice(src.as_bytes())
+    slice::from_raw_parts_mut(dst, len)
+        .copy_from_slice(src.downcast::<PyBytes>().unwrap().as_bytes())
 }
 
 /// # Safety

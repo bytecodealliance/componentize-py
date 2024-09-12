@@ -26,10 +26,10 @@ fn python_componentize(
         Runtime::new()?.block_on(crate::componentize(
             wit_path.as_deref(),
             world,
-            &python_path.iter().map(|s| &**s).collect::<Vec<_>>(),
+            &python_path.iter().map(|s| s.as_ref()).collect::<Vec<_>>(),
             &module_worlds
                 .iter()
-                .map(|(a, b)| (&**a, &**b))
+                .map(|(a, b)| (a.as_ref(), b.as_ref()))
                 .collect::<Vec<_>>(),
             app_name,
             &output_path,
