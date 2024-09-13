@@ -152,7 +152,10 @@ fn call_import<'a>(
             index,
         );
 
-        Ok(results.into_iter().map(|r| r.assume_init()).collect())
+        // todo: is this sound, or do we need to `.into_iter().map(MaybeUninit::assume_init).collect()` instead?
+        Ok(mem::transmute::<Vec<MaybeUninit<&PyAny>>, Vec<&PyAny>>(
+            results,
+        ))
     }
 }
 
@@ -452,9 +455,10 @@ pub unsafe extern "C" fn componentize_py_dispatch(
 
         let export = &EXPORTS.get().unwrap()[export];
 
-        let mut params_py = params_py
+        // todo: is this sound, or do we need to `.into_iter().map(MaybeUninit::assume_init).collect()` instead?
+        let mut params_py = mem::transmute::<Vec<MaybeUninit<&PyAny>>, Vec<&PyAny>>(params_py)
             .into_iter()
-            .map(|p| Bound::from_borrowed_ptr(py, p.assume_init().as_ptr()));
+            .map(|p| Bound::from_borrowed_ptr(py, p.as_ptr()));
         let result = match export {
             Export::Freestanding { instance, name } => {
                 instance.call_method1(py, name.bind(py), PyTuple::new_bound(py, params_py))
