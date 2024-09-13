@@ -445,7 +445,9 @@ pub async fn componentize(
     }
 
     // Link all the libraries (including any native extensions) into a single component.
-    let mut linker = wit_component::Linker::default().validate(true);
+    let mut linker = wit_component::Linker::default()
+        .validate(true)
+        .use_built_in_libdl(true);
 
     let mut wasi_imports = HashMap::new();
     for Library {
