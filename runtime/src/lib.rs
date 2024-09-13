@@ -22,8 +22,9 @@ use {
         alloc::{self, Layout},
         ffi::c_void,
         mem::{self, MaybeUninit},
+        ops::DerefMut,
         ptr, slice, str,
-        sync::Once,
+        sync::{Mutex, Once},
     },
     wasi::cli::environment,
 };
@@ -47,6 +48,13 @@ static FINALIZE: OnceCell<PyObject> = OnceCell::new();
 static DROP_RESOURCE: OnceCell<PyObject> = OnceCell::new();
 static SEED: OnceCell<PyObject> = OnceCell::new();
 static ARGV: OnceCell<Py<PyList>> = OnceCell::new();
+
+struct Borrow {
+    handle: i32,
+    drop: u32,
+}
+
+static BORROWS: Mutex<Vec<Borrow>> = Mutex::new(Vec::new());
 
 const DISCRIMINANT_FIELD_INDEX: i32 = 0;
 const PAYLOAD_FIELD_INDEX: i32 = 1;
@@ -499,6 +507,19 @@ pub unsafe extern "C" fn componentize_py_dispatch(
             results_canon,
             to_canon,
         );
+
+        let borrows = mem::take(BORROWS.lock().unwrap().deref_mut());
+        for Borrow { handle, drop } in borrows {
+            let params = [handle];
+            unsafe {
+                componentize_py_call_indirect(
+                    &py as *const _ as _,
+                    params.as_ptr() as _,
+                    ptr::null_mut(),
+                    drop,
+                );
+            }
+        }
     });
 }
 
@@ -1035,6 +1056,13 @@ pub extern "C" fn componentize_py_from_canon_handle<'a>(
             panic!("expected remote resource, found {ty:?}");
         };
 
+        if borrow != 0 {
+            BORROWS.lock().unwrap().push(Borrow {
+                handle: value,
+                drop: *drop,
+            });
+        }
+
         let instance = constructor
             .call_method1(
                 *py,
@@ -1074,11 +1102,12 @@ pub extern "C" fn componentize_py_from_canon_handle<'a>(
 #[export_name = "componentize-py#ToCanonHandle"]
 pub extern "C" fn componentize_py_to_canon_handle(
     py: &Python,
-    value: Bound<PyAny>,
+    value: &PyAny,
     borrow: i32,
     local: i32,
     resource: i32,
 ) -> u32 {
+    let value = unsafe { Bound::from_borrowed_ptr(*py, value.as_ptr()) };
     if local != 0 {
         let ty = &TYPES.get().unwrap()[usize::try_from(resource).unwrap()];
         let Type::Resource {
