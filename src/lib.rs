@@ -200,12 +200,6 @@ pub async fn componentize(
     let embedded_python_standard_lib = embedded_python_standard_library();
     let embedded_helper_utils = embedded_helper_utils();
 
-    // Remove non-existent elements from `python_path` so we don't choke on them later
-    let python_path = &python_path
-    .iter()
-    .filter_map(|&s| Path::new(s).exists().then_some(s))
-    .collect::<Vec<_>>();
-
     // Search `python_path` for native extension libraries and/or componentize-py.toml files.  Packages containing
     // the latter may contain their own WIT files defining their own worlds (in addition to what the caller
     // specified as paramters), which we'll try to match up with `module_worlds` in the next step.
@@ -549,7 +543,6 @@ pub async fn componentize(
     let engine = Engine::new(&config)?;
 
     let mut linker = Linker::new(&engine);
-
     let added_to_linker = if let Some(add_to_linker) = add_to_linker {
         add_to_linker(&mut linker)?;
         true
