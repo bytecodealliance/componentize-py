@@ -410,7 +410,7 @@ pub async fn componentize(
     // application's first and only chance to load any standard or third-party modules since we do not yet include
     // a virtual filesystem in the component to make those modules available at runtime.
 
-    let stdout: MemoryOutputPipe = MemoryOutputPipe::new(10000);
+    let stdout = MemoryOutputPipe::new(10000);
     let stderr = MemoryOutputPipe::new(10000);
 
     let mut wasi = WasiCtxBuilder::new();
@@ -550,9 +550,6 @@ pub async fn componentize(
 
     let mut linker = Linker::new(&engine);
 
-    //whenever the guest adds to fulfil x or y, 
-    //add to linker is giving access to wasi so it can access the host file system
-
     let added_to_linker = if let Some(add_to_linker) = add_to_linker {
         add_to_linker(&mut linker)?;
         true
@@ -562,9 +559,6 @@ pub async fn componentize(
 
     let mut store = Store::new(&engine, Ctx { wasi, table });
 
-    //can stub out wasi, if does try to access file system then trap it
-    //there are no env variables etc
-    
     let app_name = app_name.to_owned();
     let component = component_init::initialize_staged(
         &component,
