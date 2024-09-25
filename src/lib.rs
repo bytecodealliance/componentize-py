@@ -1,15 +1,7 @@
 #![deny(warnings)]
 
 use {
-    anyhow::{anyhow, bail, ensure, Context, Error, Result},
-    async_trait::async_trait,
-    bytes::Bytes,
-    component_init::Invoker,
-    futures::future::FutureExt,
-    heck::ToSnakeCase,
-    indexmap::{IndexMap, IndexSet},
-    serde::Deserialize,
-    std::{
+    anyhow::{anyhow, bail, ensure, Context, Error, Result}, async_trait::async_trait, bytes::Bytes, component_init::Invoker, futures::future::FutureExt, heck::ToSnakeCase, indexmap::{IndexMap, IndexSet}, prelink::{embedded_helper_utils, embedded_python_standard_library}, serde::Deserialize, std::{
         collections::{HashMap, HashSet},
         env, fs,
         io::Cursor,
@@ -17,25 +9,16 @@ use {
         ops::Deref,
         path::{Path, PathBuf},
         str,
-    },
-    summary::{Escape, Locations, Summary},
-    tar::Archive,
-    wasm_convert::IntoValType,
-    wasm_encoder::{
+    }, summary::{Escape, Locations, Summary}, wasm_convert::IntoValType, wasm_encoder::{
         CodeSection, ExportKind, ExportSection, Function, FunctionSection, Instruction, Module,
         TypeSection,
-    },
-    wasmparser::{FuncType, Parser, Payload, TypeRef},
-    wasmtime::{
+    }, wasmparser::{FuncType, Parser, Payload, TypeRef}, wasmtime::{
         component::{Component, Instance, Linker, ResourceTable, ResourceType},
         Config, Engine, Store,
-    },
-    wasmtime_wasi::{
+    }, wasmtime_wasi::{
         pipe::{MemoryInputPipe, MemoryOutputPipe},
         DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, WasiView,
-    },
-    wit_parser::{Resolve, TypeDefKind, UnresolvedPackageGroup, WorldId, WorldItem, WorldKey},
-    zstd::Decoder,
+    }, wit_parser::{Resolve, TypeDefKind, UnresolvedPackageGroup, WorldId, WorldItem, WorldKey}
 };
 
 mod abi;
@@ -48,6 +31,7 @@ mod summary;
 #[cfg(test)]
 mod test;
 mod util;
+mod prelink;
 
 static NATIVE_EXTENSION_SUFFIX: &str = ".cpython-312-wasm32-wasi.so";
 
@@ -60,6 +44,12 @@ wasmtime::component::bindgen!({
 pub struct Ctx {
     wasi: WasiCtx,
     table: ResourceTable,
+}
+
+pub struct Library {
+    name: String,
+    module: Vec<u8>,
+    dl_openable: bool,
 }
 
 impl WasiView for Ctx {
@@ -104,7 +94,7 @@ impl TryFrom<(&Path, RawComponentizePyConfig)> for ComponentizePyConfig {
 }
 
 #[derive(Debug)]
-struct ConfigContext<T> {
+pub struct ConfigContext<T> {
     module: String,
     root: PathBuf,
     path: PathBuf,
@@ -207,29 +197,20 @@ pub async fn componentize(
         .filter_map(|&s| Path::new(s).exists().then_some(s))
         .collect::<Vec<_>>();
 
-    // Untar the embedded copy of the Python standard library into a temporary directory
-    let stdlib = tempfile::tempdir()?;
+    let embedded_python_standard_lib = embedded_python_standard_library();
+    let embedded_helper_utils = embedded_helper_utils();
 
-    Archive::new(Decoder::new(Cursor::new(include_bytes!(concat!(
-        env!("OUT_DIR"),
-        "/python-lib.tar.zst"
-    ))))?)
-    .unpack(stdlib.path())?;
-
-    // Untar the embedded copy of helper utilities into a temporary directory
-    let bundled = tempfile::tempdir()?;
-
-    Archive::new(Decoder::new(Cursor::new(include_bytes!(concat!(
-        env!("OUT_DIR"),
-        "/bundled.tar.zst"
-    ))))?)
-    .unpack(bundled.path())?;
+    // Remove non-existent elements from `python_path` so we don't choke on them later
+    let python_path = &python_path
+    .iter()
+    .filter_map(|&s| Path::new(s).exists().then_some(s))
+    .collect::<Vec<_>>();
 
     // Search `python_path` for native extension libraries and/or componentize-py.toml files.  Packages containing
     // the latter may contain their own WIT files defining their own worlds (in addition to what the caller
     // specified as paramters), which we'll try to match up with `module_worlds` in the next step.
-    let mut raw_configs = Vec::new();
-    let mut library_path = Vec::with_capacity(python_path.len());
+    let mut raw_configs: Vec<crate::ConfigContext<crate::RawComponentizePyConfig>> = Vec::new();
+    let mut library_path: Vec<(&str, Vec<std::path::PathBuf>)> = Vec::with_capacity(python_path.len());
     for path in python_path {
         let mut libraries = Vec::new();
         search_directory(
@@ -238,9 +219,11 @@ pub async fn componentize(
             &mut libraries,
             &mut raw_configs,
             &mut HashSet::new(),
-        )?;
+        ).unwrap();
         library_path.push((*path, libraries));
     }
+
+    let mut libraries = prelink::bundle_libraries(library_path);
 
     // Validate the paths parsed from any componentize-py.toml files discovered above and match them up with
     // `module_worlds` entries.  Note that we use an `IndexMap` to preserve the order specified in `module_worlds`,
@@ -341,108 +324,11 @@ pub async fn componentize(
 
     let summary = Summary::try_new(&resolve, &worlds)?;
 
-    struct Library {
-        name: String,
-        module: Vec<u8>,
-        dl_openable: bool,
-    }
-
-    let mut libraries = vec![
-        Library {
-            name: "libcomponentize_py_runtime.so".into(),
-            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
-                env!("OUT_DIR"),
-                "/libcomponentize_py_runtime.so.zst"
-            ))))?,
-            dl_openable: false,
-        },
-        Library {
-            name: "libpython3.12.so".into(),
-            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
-                env!("OUT_DIR"),
-                "/libpython3.12.so.zst"
-            ))))?,
-            dl_openable: false,
-        },
-        Library {
-            name: "libc.so".into(),
-            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
-                env!("OUT_DIR"),
-                "/libc.so.zst"
-            ))))?,
-            dl_openable: false,
-        },
-        Library {
-            name: "libwasi-emulated-mman.so".into(),
-            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
-                env!("OUT_DIR"),
-                "/libwasi-emulated-mman.so.zst"
-            ))))?,
-            dl_openable: false,
-        },
-        Library {
-            name: "libwasi-emulated-process-clocks.so".into(),
-            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
-                env!("OUT_DIR"),
-                "/libwasi-emulated-process-clocks.so.zst"
-            ))))?,
-            dl_openable: false,
-        },
-        Library {
-            name: "libwasi-emulated-getpid.so".into(),
-            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
-                env!("OUT_DIR"),
-                "/libwasi-emulated-getpid.so.zst"
-            ))))?,
-            dl_openable: false,
-        },
-        Library {
-            name: "libwasi-emulated-signal.so".into(),
-            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
-                env!("OUT_DIR"),
-                "/libwasi-emulated-signal.so.zst"
-            ))))?,
-            dl_openable: false,
-        },
-        Library {
-            name: "libc++.so".into(),
-            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
-                env!("OUT_DIR"),
-                "/libc++.so.zst"
-            ))))?,
-            dl_openable: false,
-        },
-        Library {
-            name: "libc++abi.so".into(),
-            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
-                env!("OUT_DIR"),
-                "/libc++abi.so.zst"
-            ))))?,
-            dl_openable: false,
-        },
-        Library {
-            name: "libcomponentize_py_bindings.so".into(),
-            module: bindings::make_bindings(&resolve, &worlds, &summary)?,
-            dl_openable: false,
-        },
-    ];
-
-    for (index, (path, libs)) in library_path.iter().enumerate() {
-        for library in libs {
-            let path = library
-                .strip_prefix(path)
-                .unwrap()
-                .to_str()
-                .context("non-UTF-8 path")?
-                .replace('\\', "/");
-
-            libraries.push(Library {
-                name: format!("/{index}/{path}"),
-                module: fs::read(library)?,
-                dl_openable: true,
-            });
-        }
-    }
+    libraries.push(Library {
+        name: "libcomponentize_py_bindings.so".into(),
+        module: bindings::make_bindings(&resolve, &worlds, &summary)?,
+        dl_openable: false,
+    });
 
     // Link all the libraries (including any native extensions) into a single component.
     let mut linker = wit_component::Linker::default().validate(true);
@@ -524,7 +410,7 @@ pub async fn componentize(
     // application's first and only chance to load any standard or third-party modules since we do not yet include
     // a virtual filesystem in the component to make those modules available at runtime.
 
-    let stdout = MemoryOutputPipe::new(10000);
+    let stdout: MemoryOutputPipe = MemoryOutputPipe::new(10000);
     let stderr = MemoryOutputPipe::new(10000);
 
     let mut wasi = WasiCtxBuilder::new();
@@ -534,8 +420,8 @@ pub async fn componentize(
         .env("PYTHONUNBUFFERED", "1")
         .env("COMPONENTIZE_PY_APP_NAME", app_name)
         .env("PYTHONHOME", "/python")
-        .preopened_dir(stdlib.path(), "python", DirPerms::all(), FilePerms::all())?
-        .preopened_dir(bundled.path(), "bundled", DirPerms::all(), FilePerms::all())?;
+        .preopened_dir(embedded_python_standard_lib.path(), "python", DirPerms::all(), FilePerms::all())?
+        .preopened_dir(embedded_helper_utils.path(), "bundled", DirPerms::all(), FilePerms::all())?;
 
     // Generate guest mounts for each host directory in `python_path`.
     for (index, path) in python_path.iter().enumerate() {
@@ -628,7 +514,7 @@ pub async fn componentize(
 
             Ok(())
         }
-        replace(bundled.path(), "proxy", &module)?;
+        replace(embedded_helper_utils.path(), "proxy", &module)?;
     };
 
     for (mounts, world_dir) in world_dir_mounts.iter() {
@@ -663,6 +549,10 @@ pub async fn componentize(
     let engine = Engine::new(&config)?;
 
     let mut linker = Linker::new(&engine);
+
+    //whenever the guest adds to fulfil x or y, 
+    //add to linker is giving access to wasi so it can access the host file system
+
     let added_to_linker = if let Some(add_to_linker) = add_to_linker {
         add_to_linker(&mut linker)?;
         true
@@ -672,6 +562,9 @@ pub async fn componentize(
 
     let mut store = Store::new(&engine, Ctx { wasi, table });
 
+    //can stub out wasi, if does try to access file system then trap it
+    //there are no env variables etc
+    
     let app_name = app_name.to_owned();
     let component = component_init::initialize_staged(
         &component,
