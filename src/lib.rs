@@ -197,8 +197,8 @@ pub async fn componentize(
         .filter_map(|&s| Path::new(s).exists().then_some(s))
         .collect::<Vec<_>>();
 
-    let embedded_python_standard_lib = embedded_python_standard_library();
-    let embedded_helper_utils = embedded_helper_utils();
+    let embedded_python_standard_lib = embedded_python_standard_library().unwrap();
+    let embedded_helper_utils = embedded_helper_utils().unwrap();
 
     // Search `python_path` for native extension libraries and/or componentize-py.toml files.  Packages containing
     // the latter may contain their own WIT files defining their own worlds (in addition to what the caller
@@ -213,11 +213,11 @@ pub async fn componentize(
             &mut libraries,
             &mut raw_configs,
             &mut HashSet::new(),
-        ).unwrap();
+        )?;
         library_path.push((*path, libraries));
     }
 
-    let mut libraries = prelink::bundle_libraries(library_path);
+    let mut libraries = prelink::bundle_libraries(library_path).unwrap();
 
     // Validate the paths parsed from any componentize-py.toml files discovered above and match them up with
     // `module_worlds` entries.  Note that we use an `IndexMap` to preserve the order specified in `module_worlds`,
