@@ -1,7 +1,16 @@
 #![deny(warnings)]
 
 use {
-    anyhow::{anyhow, bail, ensure, Context, Error, Result}, async_trait::async_trait, bytes::Bytes, component_init::Invoker, futures::future::FutureExt, heck::ToSnakeCase, indexmap::{IndexMap, IndexSet}, prelink::{embedded_helper_utils, embedded_python_standard_library}, serde::Deserialize, std::{
+    anyhow::{anyhow, bail, ensure, Context, Error, Result},
+    async_trait::async_trait,
+    bytes::Bytes,
+    component_init::Invoker,
+    futures::future::FutureExt,
+    heck::ToSnakeCase,
+    indexmap::{IndexMap, IndexSet},
+    prelink::{embedded_helper_utils, embedded_python_standard_library},
+    serde::Deserialize,
+    std::{
         collections::{HashMap, HashSet},
         env, fs,
         io::Cursor,
@@ -9,29 +18,36 @@ use {
         ops::Deref,
         path::{Path, PathBuf},
         str,
-    }, summary::{Escape, Locations, Summary}, wasm_convert::IntoValType, wasm_encoder::{
+    },
+    summary::{Escape, Locations, Summary},
+    wasm_convert::IntoValType,
+    wasm_encoder::{
         CodeSection, ExportKind, ExportSection, Function, FunctionSection, Instruction, Module,
         TypeSection,
-    }, wasmparser::{FuncType, Parser, Payload, TypeRef}, wasmtime::{
+    },
+    wasmparser::{FuncType, Parser, Payload, TypeRef},
+    wasmtime::{
         component::{Component, Instance, Linker, ResourceTable, ResourceType},
         Config, Engine, Store,
-    }, wasmtime_wasi::{
+    },
+    wasmtime_wasi::{
         pipe::{MemoryInputPipe, MemoryOutputPipe},
         DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, WasiView,
-    }, wit_parser::{Resolve, TypeDefKind, UnresolvedPackageGroup, WorldId, WorldItem, WorldKey}
+    },
+    wit_parser::{Resolve, TypeDefKind, UnresolvedPackageGroup, WorldId, WorldItem, WorldKey},
 };
 
 mod abi;
 mod bindgen;
 mod bindings;
 pub mod command;
+mod prelink;
 #[cfg(feature = "pyo3")]
 mod python;
 mod summary;
 #[cfg(test)]
 mod test;
 mod util;
-mod prelink;
 
 static NATIVE_EXTENSION_SUFFIX: &str = ".cpython-312-wasm32-wasi.so";
 
@@ -204,7 +220,8 @@ pub async fn componentize(
     // the latter may contain their own WIT files defining their own worlds (in addition to what the caller
     // specified as paramters), which we'll try to match up with `module_worlds` in the next step.
     let mut raw_configs: Vec<crate::ConfigContext<crate::RawComponentizePyConfig>> = Vec::new();
-    let mut library_path: Vec<(&str, Vec<std::path::PathBuf>)> = Vec::with_capacity(python_path.len());
+    let mut library_path: Vec<(&str, Vec<std::path::PathBuf>)> =
+        Vec::with_capacity(python_path.len());
     for path in python_path {
         let mut libraries = Vec::new();
         search_directory(
@@ -414,8 +431,18 @@ pub async fn componentize(
         .env("PYTHONUNBUFFERED", "1")
         .env("COMPONENTIZE_PY_APP_NAME", app_name)
         .env("PYTHONHOME", "/python")
-        .preopened_dir(embedded_python_standard_lib.path(), "python", DirPerms::all(), FilePerms::all())?
-        .preopened_dir(embedded_helper_utils.path(), "bundled", DirPerms::all(), FilePerms::all())?;
+        .preopened_dir(
+            embedded_python_standard_lib.path(),
+            "python",
+            DirPerms::all(),
+            FilePerms::all(),
+        )?
+        .preopened_dir(
+            embedded_helper_utils.path(),
+            "bundled",
+            DirPerms::all(),
+            FilePerms::all(),
+        )?;
 
     // Generate guest mounts for each host directory in `python_path`.
     for (index, path) in python_path.iter().enumerate() {

@@ -1,6 +1,9 @@
 #![deny(warnings)]
 
-use std::{fs, io::{self, Cursor}};
+use std::{
+    fs,
+    io::{self, Cursor},
+};
 
 use anyhow::Context;
 use tar::Archive;
@@ -10,16 +13,17 @@ use zstd::Decoder;
 use crate::Library;
 
 pub fn embedded_python_standard_library() -> Result<TempDir, io::Error> {
-        // Untar the embedded copy of the Python standard library into a temporary directory
-        let stdlib = tempfile::tempdir().expect("could not create temp dirfor python stnadard lib");
+    // Untar the embedded copy of the Python standard library into a temporary directory
+    let stdlib = tempfile::tempdir().expect("could not create temp dirfor python stnadard lib");
 
-        Archive::new(Decoder::new(Cursor::new(include_bytes!(concat!(
-            env!("OUT_DIR"),
-            "/python-lib.tar.zst"
-        ))))?)
-        .unpack(stdlib.path()).unwrap();
+    Archive::new(Decoder::new(Cursor::new(include_bytes!(concat!(
+        env!("OUT_DIR"),
+        "/python-lib.tar.zst"
+    ))))?)
+    .unpack(stdlib.path())
+    .unwrap();
 
-        return Ok(stdlib);
+    return Ok(stdlib);
 }
 
 pub fn embedded_helper_utils() -> Result<TempDir, io::Error> {
@@ -30,13 +34,15 @@ pub fn embedded_helper_utils() -> Result<TempDir, io::Error> {
         env!("OUT_DIR"),
         "/bundled.tar.zst"
     ))))?)
-    .unpack(bundled.path()).unwrap();
+    .unpack(bundled.path())
+    .unwrap();
 
     return Ok(bundled);
 }
 
-pub fn bundle_libraries(library_path: Vec<(&str, Vec<std::path::PathBuf>)>) -> Result<Vec<Library>, io::Error> {
-
+pub fn bundle_libraries(
+    library_path: Vec<(&str, Vec<std::path::PathBuf>)>,
+) -> Result<Vec<Library>, io::Error> {
     let mut libraries = vec![
         Library {
             name: "libcomponentize_py_runtime.so".into(),
@@ -109,7 +115,7 @@ pub fn bundle_libraries(library_path: Vec<(&str, Vec<std::path::PathBuf>)>) -> R
                 "/libc++abi.so.zst"
             ))))?,
             dl_openable: false,
-        }
+        },
     ];
 
     for (index, (path, libs)) in library_path.iter().enumerate() {
