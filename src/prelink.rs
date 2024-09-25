@@ -23,7 +23,7 @@ pub fn embedded_python_standard_library() -> Result<TempDir, io::Error> {
     .unpack(stdlib.path())
     .unwrap();
 
-    return Ok(stdlib);
+    Ok(stdlib);
 }
 
 pub fn embedded_helper_utils() -> Result<TempDir, io::Error> {
@@ -37,7 +37,7 @@ pub fn embedded_helper_utils() -> Result<TempDir, io::Error> {
     .unpack(bundled.path())
     .unwrap();
 
-    return Ok(bundled);
+    Ok(bundled);
 }
 
 pub fn bundle_libraries(
@@ -136,5 +136,5 @@ pub fn bundle_libraries(
         }
     }
 
-    return Ok(libraries);
+    Ok(libraries);
 }
