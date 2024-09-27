@@ -8,9 +8,10 @@ use {
     futures::future::FutureExt,
     heck::ToSnakeCase,
     indexmap::{IndexMap, IndexSet},
+    prelink::{embedded_helper_utils, embedded_python_standard_library},
     serde::Deserialize,
     std::{
-        collections::{HashMap, HashSet},
+        collections::HashMap,
         env, fs,
         io::Cursor,
         iter,
@@ -19,7 +20,6 @@ use {
         str,
     },
     summary::{Escape, Locations, Summary},
-    tar::Archive,
     wasm_convert::IntoValType,
     wasm_encoder::{
         CodeSection, ExportKind, ExportSection, Function, FunctionSection, Instruction, Module,
@@ -35,21 +35,19 @@ use {
         DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, WasiView,
     },
     wit_parser::{Resolve, TypeDefKind, UnresolvedPackageGroup, WorldId, WorldItem, WorldKey},
-    zstd::Decoder,
 };
 
 mod abi;
 mod bindgen;
 mod bindings;
 pub mod command;
+mod prelink;
 #[cfg(feature = "pyo3")]
 mod python;
 mod summary;
 #[cfg(test)]
 mod test;
 mod util;
-
-static NATIVE_EXTENSION_SUFFIX: &str = ".cpython-312-wasm32-wasi.so";
 
 wasmtime::component::bindgen!({
     path: "wit",
@@ -60,6 +58,12 @@ wasmtime::component::bindgen!({
 pub struct Ctx {
     wasi: WasiCtx,
     table: ResourceTable,
+}
+
+pub struct Library {
+    name: String,
+    module: Vec<u8>,
+    dl_openable: bool,
 }
 
 impl WasiView for Ctx {
@@ -104,7 +108,7 @@ impl TryFrom<(&Path, RawComponentizePyConfig)> for ComponentizePyConfig {
 }
 
 #[derive(Debug)]
-struct ConfigContext<T> {
+pub struct ConfigContext<T> {
     module: String,
     root: PathBuf,
     path: PathBuf,
@@ -207,85 +211,14 @@ pub async fn componentize(
         .filter_map(|&s| Path::new(s).exists().then_some(s))
         .collect::<Vec<_>>();
 
-    // Untar the embedded copy of the Python standard library into a temporary directory
-    let stdlib = tempfile::tempdir()?;
+    let embedded_python_standard_lib = embedded_python_standard_library()?;
+    let embedded_helper_utils = embedded_helper_utils()?;
 
-    Archive::new(Decoder::new(Cursor::new(include_bytes!(concat!(
-        env!("OUT_DIR"),
-        "/python-lib.tar.zst"
-    ))))?)
-    .unpack(stdlib.path())?;
-
-    // Untar the embedded copy of helper utilities into a temporary directory
-    let bundled = tempfile::tempdir()?;
-
-    Archive::new(Decoder::new(Cursor::new(include_bytes!(concat!(
-        env!("OUT_DIR"),
-        "/bundled.tar.zst"
-    ))))?)
-    .unpack(bundled.path())?;
-
-    // Search `python_path` for native extension libraries and/or componentize-py.toml files.  Packages containing
-    // the latter may contain their own WIT files defining their own worlds (in addition to what the caller
-    // specified as paramters), which we'll try to match up with `module_worlds` in the next step.
-    let mut raw_configs = Vec::new();
-    let mut library_path = Vec::with_capacity(python_path.len());
-    for path in python_path {
-        let mut libraries = Vec::new();
-        search_directory(
-            Path::new(path),
-            Path::new(path),
-            &mut libraries,
-            &mut raw_configs,
-            &mut HashSet::new(),
-        )?;
-        library_path.push((*path, libraries));
-    }
-
-    // Validate the paths parsed from any componentize-py.toml files discovered above and match them up with
-    // `module_worlds` entries.  Note that we use an `IndexMap` to preserve the order specified in `module_worlds`,
-    // which is required to be topologically sorted with respect to package dependencies.
-    //
-    // For any packages which contain componentize-py.toml files but no corresponding `module_worlds` entry, we use
-    // the `world` parameter as a default.
-    let configs = {
-        let mut configs = raw_configs
-            .into_iter()
-            .map(|raw_config| {
-                let config =
-                    ComponentizePyConfig::try_from((raw_config.path.deref(), raw_config.config))?;
-
-                Ok((
-                    raw_config.module.clone(),
-                    ConfigContext {
-                        module: raw_config.module,
-                        root: raw_config.root,
-                        path: raw_config.path,
-                        config,
-                    },
-                ))
-            })
-            .collect::<Result<HashMap<_, _>>>()?;
-
-        let mut ordered = IndexMap::new();
-        for (module, world) in module_worlds {
-            if let Some(config) = configs.remove(*module) {
-                ordered.insert((*module).to_owned(), (config, Some(*world)));
-            } else {
-                bail!("no `componentize-py.toml` file found for module `{module}`");
-            }
-        }
-
-        for (module, config) in configs {
-            ordered.insert(module, (config, world));
-        }
-
-        ordered
-    };
+    let (configs, mut libraries) =
+        prelink::search_for_libraries_and_configs(python_path, module_worlds, world)?;
 
     // Next, iterate over all the WIT directories, merging them into a single `Resolve`, and matching Python
     // packages to `WorldId`s.
-
     let (mut resolve, mut main_world) = if let Some(path) = wit_path {
         let (resolve, world) = parse_wit(path, world)?;
         (Some(resolve), Some(world))
@@ -341,108 +274,11 @@ pub async fn componentize(
 
     let summary = Summary::try_new(&resolve, &worlds)?;
 
-    struct Library {
-        name: String,
-        module: Vec<u8>,
-        dl_openable: bool,
-    }
-
-    let mut libraries = vec![
-        Library {
-            name: "libcomponentize_py_runtime.so".into(),
-            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
-                env!("OUT_DIR"),
-                "/libcomponentize_py_runtime.so.zst"
-            ))))?,
-            dl_openable: false,
-        },
-        Library {
-            name: "libpython3.12.so".into(),
-            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
-                env!("OUT_DIR"),
-                "/libpython3.12.so.zst"
-            ))))?,
-            dl_openable: false,
-        },
-        Library {
-            name: "libc.so".into(),
-            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
-                env!("OUT_DIR"),
-                "/libc.so.zst"
-            ))))?,
-            dl_openable: false,
-        },
-        Library {
-            name: "libwasi-emulated-mman.so".into(),
-            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
-                env!("OUT_DIR"),
-                "/libwasi-emulated-mman.so.zst"
-            ))))?,
-            dl_openable: false,
-        },
-        Library {
-            name: "libwasi-emulated-process-clocks.so".into(),
-            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
-                env!("OUT_DIR"),
-                "/libwasi-emulated-process-clocks.so.zst"
-            ))))?,
-            dl_openable: false,
-        },
-        Library {
-            name: "libwasi-emulated-getpid.so".into(),
-            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
-                env!("OUT_DIR"),
-                "/libwasi-emulated-getpid.so.zst"
-            ))))?,
-            dl_openable: false,
-        },
-        Library {
-            name: "libwasi-emulated-signal.so".into(),
-            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
-                env!("OUT_DIR"),
-                "/libwasi-emulated-signal.so.zst"
-            ))))?,
-            dl_openable: false,
-        },
-        Library {
-            name: "libc++.so".into(),
-            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
-                env!("OUT_DIR"),
-                "/libc++.so.zst"
-            ))))?,
-            dl_openable: false,
-        },
-        Library {
-            name: "libc++abi.so".into(),
-            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
-                env!("OUT_DIR"),
-                "/libc++abi.so.zst"
-            ))))?,
-            dl_openable: false,
-        },
-        Library {
-            name: "libcomponentize_py_bindings.so".into(),
-            module: bindings::make_bindings(&resolve, &worlds, &summary)?,
-            dl_openable: false,
-        },
-    ];
-
-    for (index, (path, libs)) in library_path.iter().enumerate() {
-        for library in libs {
-            let path = library
-                .strip_prefix(path)
-                .unwrap()
-                .to_str()
-                .context("non-UTF-8 path")?
-                .replace('\\', "/");
-
-            libraries.push(Library {
-                name: format!("/{index}/{path}"),
-                module: fs::read(library)?,
-                dl_openable: true,
-            });
-        }
-    }
+    libraries.push(Library {
+        name: "libcomponentize_py_bindings.so".into(),
+        module: bindings::make_bindings(&resolve, &worlds, &summary)?,
+        dl_openable: false,
+    });
 
     // Link all the libraries (including any native extensions) into a single component.
     let mut linker = wit_component::Linker::default().validate(true);
@@ -534,8 +370,18 @@ pub async fn componentize(
         .env("PYTHONUNBUFFERED", "1")
         .env("COMPONENTIZE_PY_APP_NAME", app_name)
         .env("PYTHONHOME", "/python")
-        .preopened_dir(stdlib.path(), "python", DirPerms::all(), FilePerms::all())?
-        .preopened_dir(bundled.path(), "bundled", DirPerms::all(), FilePerms::all())?;
+        .preopened_dir(
+            embedded_python_standard_lib.path(),
+            "python",
+            DirPerms::all(),
+            FilePerms::all(),
+        )?
+        .preopened_dir(
+            embedded_helper_utils.path(),
+            "bundled",
+            DirPerms::all(),
+            FilePerms::all(),
+        )?;
 
     // Generate guest mounts for each host directory in `python_path`.
     for (index, path) in python_path.iter().enumerate() {
@@ -628,7 +474,7 @@ pub async fn componentize(
 
             Ok(())
         }
-        replace(bundled.path(), "proxy", &module)?;
+        replace(embedded_helper_utils.path(), "proxy", &module)?;
     };
 
     for (mounts, world_dir) in world_dir_mounts.iter() {
@@ -826,84 +672,6 @@ fn add_wasi_and_stubs(
     }
 
     Ok(())
-}
-
-fn search_directory(
-    root: &Path,
-    path: &Path,
-    libraries: &mut Vec<PathBuf>,
-    configs: &mut Vec<ConfigContext<RawComponentizePyConfig>>,
-    modules_seen: &mut HashSet<String>,
-) -> Result<()> {
-    if path.is_dir() {
-        for entry in fs::read_dir(path)? {
-            search_directory(root, &entry?.path(), libraries, configs, modules_seen)?;
-        }
-    } else if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
-        if name.ends_with(NATIVE_EXTENSION_SUFFIX) {
-            libraries.push(path.to_owned());
-        } else if name == "componentize-py.toml" {
-            let root = root.canonicalize()?;
-            let path = path.canonicalize()?;
-
-            let module = module_name(&root, &path)
-                .ok_or_else(|| anyhow!("unable to determine module name for {}", path.display()))?;
-
-            let mut push = true;
-            for existing in &mut *configs {
-                if path == existing.path.join("componentize-py.toml") {
-                    // When one directory in `PYTHON_PATH` is a subdirectory of the other, we consider the
-                    // subdirectory to be the true owner of the file.  This is important later, when we derive a
-                    // package name by stripping the root directory from the file path.
-                    if root > existing.root {
-                        module.clone_into(&mut existing.module);
-                        root.clone_into(&mut existing.root);
-                        path.parent().unwrap().clone_into(&mut existing.path);
-                    }
-                    push = false;
-                    break;
-                } else {
-                    // If we find a componentize-py.toml file under a Python module which will not be used because
-                    // we already found a version of that module in an earlier `PYTHON_PATH` directory, we'll
-                    // ignore the latest one.
-                    //
-                    // For example, if the module `foo_sdk` appears twice in `PYTHON_PATH`, and both versions have
-                    // a componentize-py.toml file, we'll ignore the second one just as Python will ignore the
-                    // second module.
-
-                    if modules_seen.contains(&module) {
-                        bail!("multiple `componentize-py.toml` files found in module `{module}`");
-                    }
-
-                    modules_seen.insert(module.clone());
-
-                    if module == existing.module {
-                        push = false;
-                        break;
-                    }
-                }
-            }
-
-            if push {
-                configs.push(ConfigContext {
-                    module,
-                    root: root.to_owned(),
-                    path: path.parent().unwrap().to_owned(),
-                    config: toml::from_str::<RawComponentizePyConfig>(&fs::read_to_string(path)?)?,
-                });
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn module_name(root: &Path, path: &Path) -> Option<String> {
-    if let [first, _, ..] = &path.strip_prefix(root).ok()?.iter().collect::<Vec<_>>()[..] {
-        first.to_str().map(|s| s.to_owned())
-    } else {
-        None
-    }
 }
 
 fn add_wasi_imports<'a>(
