@@ -8,7 +8,6 @@ use {
     futures::future::FutureExt,
     heck::ToSnakeCase,
     indexmap::{IndexMap, IndexSet},
-    prelink::{embedded_helper_utils, embedded_python_standard_library},
     serde::Deserialize,
     std::{
         collections::HashMap,
@@ -211,8 +210,8 @@ pub async fn componentize(
         .filter_map(|&s| Path::new(s).exists().then_some(s))
         .collect::<Vec<_>>();
 
-    let embedded_python_standard_lib = embedded_python_standard_library()?;
-    let embedded_helper_utils = embedded_helper_utils()?;
+    let embedded_python_standard_lib = prelink::embedded_python_standard_library()?;
+    let embedded_helper_utils = prelink::embedded_helper_utils()?;
 
     let (configs, mut libraries) =
         prelink::search_for_libraries_and_configs(python_path, module_worlds, world)?;
