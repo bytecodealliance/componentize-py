@@ -139,7 +139,7 @@ impl Invoker for MyInvoker {
         Ok(result)
     }
 
-    async fn call_float32(&mut self, function: &str) -> Result<f32> {
+    async fn call_f32(&mut self, function: &str) -> Result<f32> {
         let func = self
             .instance
             .get_typed_func::<(), (f32,)>(&mut self.store, function)?;
@@ -148,7 +148,7 @@ impl Invoker for MyInvoker {
         Ok(result)
     }
 
-    async fn call_float64(&mut self, function: &str) -> Result<f64> {
+    async fn call_f64(&mut self, function: &str) -> Result<f64> {
         let func = self
             .instance
             .get_typed_func::<(), (f64,)>(&mut self.store, function)?;
@@ -532,7 +532,7 @@ pub async fn componentize(
 
                 let pre = InitPre::new(linker.instantiate_pre(component)?)?;
                 let instance = pre.instance_pre.instantiate_async(&mut store).await?;
-                let guest = pre.interface0.load(&mut store, &instance)?;
+                let guest = pre.indices.interface0.load(&mut store, &instance)?;
 
                 guest
                     .call_init(&mut store, &app_name, &symbols, stub_wasi)
@@ -721,7 +721,7 @@ fn make_stub_adapter(_module: &str, stubs: &HashMap<&str, FuncType>) -> Vec<u8> 
 
     for (index, (name, ty)) in stubs.iter().enumerate() {
         let index = u32::try_from(index).unwrap();
-        types.function(
+        types.ty().function(
             ty.params().iter().map(|&v| IntoValType(v).into()),
             ty.results().iter().map(|&v| IntoValType(v).into()),
         );

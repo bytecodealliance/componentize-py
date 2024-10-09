@@ -9,52 +9,51 @@ name = "componentize_py"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-anyhow = { version = "1.0.86", features = ["backtrace"] }
-clap = { version = "4.5.17", features = ["derive"] }
-tar = "0.4.41"
-tempfile = "3.12.0"
+anyhow = { version = "1.0.89", features = ["backtrace"] }
+clap = { version = "4.5.20", features = ["derive"] }
+tar = "0.4.42"
+tempfile = "3.13.0"
 zstd = "0.13.2"
 componentize-py-shared = { path = "shared" }
-wasm-encoder = "0.216.0"
-wit-parser = "0.216.0"
-wit-component = "0.216.0"
-wasmparser = "0.216.0"
-indexmap = "2.5.0"
+wasm-encoder = "0.219.0"
+wit-parser = "0.219.0"
+wit-component = "0.219.0"
+wasmparser = "0.219.0"
+indexmap = "2.6.0"
 bincode = "1.3.3"
 heck = "0.5.0"
 pyo3 = { version = "0.20.0", features = [
     "abi3-py37",
     "extension-module",
 ], optional = true }
-wasmtime = "24.0.0"
-wasmtime-wasi = "24.0.0"
-wasi-common = "24.0.0"
-once_cell = "1.19.0"
-component-init = { git = "https://github.com/dicej/component-init", rev = "bc276826" }
-wasm-convert = { git = "https://github.com/dicej/wasm-convert", rev = "afbec48b" }
-async-trait = "0.1.82"
-futures = "0.3.30"
+wasmtime = "25.0.1"
+wasmtime-wasi = "25.0.1"
+wasi-common = "25.0.1"
+once_cell = "1.20.2"
+component-init = { git = "https://github.com/benbrandt/component-init", rev = "01e18e7" }
+wasm-convert = { git = "https://github.com/benbrandt/wasm-convert", rev = "afa8d0d" }
+async-trait = "0.1.83"
+futures = "0.3.31"
 tokio = { version = "1.40.0", features = [
     "macros",
     "rt",
     "rt-multi-thread",
     "fs",
 ] }
-bytes = "1.7.1"
+bytes = "1.7.2"
 pretty_env_logger = "0.5.0"
-cap-std = "3.2.0"
+cap-std = "3.3.0"
 im-rc = "15.1.0"
-serde = { version = "1.0.209", features = ["derive"] }
+serde = { version = "1.0.210", features = ["derive"] }
 toml = "0.8.19"
 semver = "1.0.23"
 
 [dev-dependencies]
-async-trait = "0.1.82"
 proptest = "1.5.0"
 hex = "0.4.3"
 
 [build-dependencies]
-anyhow = "1.0.86"
+anyhow = "1.0.89"
 tar = "0.4.41"
 zstd = "0.13.2"
 test-generator = { path = "test-generator" }
