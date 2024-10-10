@@ -379,7 +379,7 @@ checksum = "d3fd119d74b830634cea2a0f58bbd0d54540518a14397557951e79340abc28c0"
 [[package]]
 name = "component-init"
 version = "0.1.0"
-source = "git+https://github.com/benbrandt/component-init?rev=01e18e7#01e18e79772dcd0aafa8bcc96ee56bae50857165"
+source = "git+https://github.com/benbrandt/component-init?rev=d1f3df3#d1f3df311b253c6b4ed1aa4601cacc860dc859b9"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2274,7 +2274,7 @@ checksum = "c62a0a307cb4a311d3a07867860911ca130c3494e8c2719593806c08bc5d0484"
 [[package]]
 name = "wasm-convert"
 version = "0.1.0"
-source = "git+https://github.com/benbrandt/wasm-convert?rev=afa8d0d#afa8d0df32e98219a9bd7be9adaddb74fb215569"
+source = "git+https://github.com/dicej/wasm-convert?rev=a42b419#a42b419ecee68ed24b06b77cee95d55183846e37"
 dependencies = [
  "wasm-encoder 0.219.0",
  "wasmparser 0.219.0",

@@ -30,8 +30,8 @@ wasmtime = "25.0.1"
 wasmtime-wasi = "25.0.1"
 wasi-common = "25.0.1"
 once_cell = "1.20.2"
-component-init = { git = "https://github.com/benbrandt/component-init", rev = "01e18e7" }
-wasm-convert = { git = "https://github.com/benbrandt/wasm-convert", rev = "afa8d0d" }
+component-init = { git = "https://github.com/benbrandt/component-init", rev = "d1f3df3" }
+wasm-convert = { git = "https://github.com/dicej/wasm-convert", rev = "a42b419" }
 async-trait = "0.1.83"
 futures = "0.3.31"
 tokio = { version = "1.40.0", features = [
