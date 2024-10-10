@@ -1,5 +1,5 @@
 use {
-    super::{Ctx, MyFloat32, MyFloat64, Tester, SEED},
+    super::{Ctx, MyF32, MyF64, Tester, SEED},
     anyhow::Result,
     async_trait::async_trait,
     once_cell::sync::Lazy,
@@ -63,11 +63,11 @@ impl componentize_py::test::echoes::Host for Ctx {
         Ok(v)
     }
 
-    async fn echo_float32(&mut self, v: f32) -> Result<f32> {
+    async fn echo_f32(&mut self, v: f32) -> Result<f32> {
         Ok(v)
     }
 
-    async fn echo_float64(&mut self, v: f64) -> Result<f64> {
+    async fn echo_f64(&mut self, v: f64) -> Result<f64> {
         Ok(v)
     }
 
@@ -115,11 +115,11 @@ impl componentize_py::test::echoes::Host for Ctx {
         Ok(v)
     }
 
-    async fn echo_list_float32(&mut self, v: Vec<f32>) -> Result<Vec<f32>> {
+    async fn echo_list_f32(&mut self, v: Vec<f32>) -> Result<Vec<f32>> {
         Ok(v)
     }
 
-    async fn echo_list_float64(&mut self, v: Vec<f64>) -> Result<Vec<f64>> {
+    async fn echo_list_f64(&mut self, v: Vec<f64>) -> Result<Vec<f64>> {
         Ok(v)
     }
 
@@ -242,11 +242,11 @@ class Echoes(exports.Echoes):
     def echo_s64(self, v):
         return echoes.echo_s64(v)
 
-    def echo_float32(self, v):
-        return echoes.echo_float32(v)
+    def echo_f32(self, v):
+        return echoes.echo_f32(v)
 
-    def echo_float64(self, v):
-        return echoes.echo_float64(v)
+    def echo_f64(self, v):
+        return echoes.echo_f64(v)
 
     def echo_string(self, v):
         return echoes.echo_string(v)
@@ -281,11 +281,11 @@ class Echoes(exports.Echoes):
     def echo_list_s64(self, v):
         return echoes.echo_list_s64(v)
 
-    def echo_list_float32(self, v):
-        return echoes.echo_list_float32(v)
+    def echo_list_f32(self, v):
+        return echoes.echo_list_f32(v)
 
-    def echo_list_float64(self, v):
-        return echoes.echo_list_float64(v)
+    def echo_list_f64(self, v):
+        return echoes.echo_list_f64(v)
 
     def echo_list_string(self, v):
         return echoes.echo_list_string(v)
@@ -433,15 +433,15 @@ fn chars() -> Result<()> {
 }
 
 #[test]
-fn float32s() -> Result<()> {
+fn f32s() -> Result<()> {
     TESTER.all_eq(
-        &proptest::num::f32::ANY.prop_map(MyFloat32),
+        &proptest::num::f32::ANY.prop_map(MyF32),
         |v, instance, store, runtime| {
-            Ok(MyFloat32(
+            Ok(MyF32(
                 runtime.block_on(
                     instance
                         .componentize_py_test_echoes()
-                        .call_echo_float32(store, v.0),
+                        .call_echo_f32(store, v.0),
                 )?,
             ))
         },
@@ -449,15 +449,15 @@ fn float32s() -> Result<()> {
 }
 
 #[test]
-fn float64s() -> Result<()> {
+fn f64s() -> Result<()> {
     TESTER.all_eq(
-        &proptest::num::f64::ANY.prop_map(MyFloat64),
+        &proptest::num::f64::ANY.prop_map(MyF64),
         |v, instance, store, runtime| {
-            Ok(MyFloat64(
+            Ok(MyF64(
                 runtime.block_on(
                     instance
                         .componentize_py_test_echoes()
-                        .call_echo_float64(store, v.0),
+                        .call_echo_f64(store, v.0),
                 )?,
             ))
         },
@@ -686,42 +686,36 @@ fn list_chars() -> Result<()> {
 }
 
 #[test]
-fn list_float32s() -> Result<()> {
+fn list_f32s() -> Result<()> {
     TESTER.all_eq(
-        &proptest::collection::vec(proptest::num::f32::ANY.prop_map(MyFloat32), 0..MAX_SIZE),
+        &proptest::collection::vec(proptest::num::f32::ANY.prop_map(MyF32), 0..MAX_SIZE),
         |v, instance, store, runtime| {
             Ok(runtime
                 .block_on(
                     instance
                         .componentize_py_test_echoes()
-                        .call_echo_list_float32(
-                            store,
-                            &v.into_iter().map(|v| v.0).collect::<Vec<_>>(),
-                        ),
+                        .call_echo_list_f32(store, &v.into_iter().map(|v| v.0).collect::<Vec<_>>()),
                 )?
                 .into_iter()
-                .map(MyFloat32)
+                .map(MyF32)
                 .collect())
         },
     )
 }
 
 #[test]
-fn list_float64s() -> Result<()> {
+fn list_f64s() -> Result<()> {
     TESTER.all_eq(
-        &proptest::collection::vec(proptest::num::f64::ANY.prop_map(MyFloat64), 0..MAX_SIZE),
+        &proptest::collection::vec(proptest::num::f64::ANY.prop_map(MyF64), 0..MAX_SIZE),
         |v, instance, store, runtime| {
             Ok(runtime
                 .block_on(
                     instance
                         .componentize_py_test_echoes()
-                        .call_echo_list_float64(
-                            store,
-                            &v.into_iter().map(|v| v.0).collect::<Vec<_>>(),
-                        ),
+                        .call_echo_list_f64(store, &v.into_iter().map(|v| v.0).collect::<Vec<_>>()),
                 )?
                 .into_iter()
-                .map(MyFloat64)
+                .map(MyF64)
                 .collect())
         },
     )
@@ -743,8 +737,8 @@ fn many() -> Result<()> {
             ),
             (
                 proptest::num::i64::ANY,
-                proptest::num::f32::ANY.prop_map(MyFloat32),
-                proptest::num::f64::ANY.prop_map(MyFloat64),
+                proptest::num::f32::ANY.prop_map(MyF32),
+                proptest::num::f64::ANY.prop_map(MyF64),
                 proptest::char::any(),
                 proptest::string::string_regex(".*")?,
                 proptest::collection::vec(proptest::bool::ANY, 0..MAX_SIZE),
@@ -764,7 +758,7 @@ fn many() -> Result<()> {
 
             Ok((
                 (v1, v2, v3, v4, v5, v6, v7, v8),
-                (v9, MyFloat32(v10), MyFloat64(v11), v12, v13, v14, v15, v16),
+                (v9, MyF32(v10), MyF64(v11), v12, v13, v14, v15, v16),
             ))
         },
     )

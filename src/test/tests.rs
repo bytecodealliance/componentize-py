@@ -208,7 +208,7 @@ fn resource_import_and_export() -> Result<()> {
             Ok(self.table().push(ThingU32(a + b + 6))?)
         }
 
-        fn drop(&mut self, this: Resource<ThingU32>) -> Result<()> {
+        async fn drop(&mut self, this: Resource<ThingU32>) -> Result<()> {
             Ok(self.table().delete(this).map(|_| ())?)
         }
     }
@@ -257,7 +257,7 @@ fn resource_borrow_import() -> Result<()> {
             Ok(self.table().push(ThingU32(v + 2))?)
         }
 
-        fn drop(&mut self, this: Resource<ThingU32>) -> Result<()> {
+        async fn drop(&mut self, this: Resource<ThingU32>) -> Result<()> {
             Ok(self.table().delete(this).map(|_| ())?)
         }
     }
@@ -322,7 +322,7 @@ fn resource_with_lists() -> Result<()> {
             Ok(v)
         }
 
-        fn drop(&mut self, this: Resource<ThingList>) -> Result<()> {
+        async fn drop(&mut self, this: Resource<ThingList>) -> Result<()> {
             Ok(self.table().delete(this).map(|_| ())?)
         }
     }
@@ -370,7 +370,7 @@ fn resource_aggregates() -> Result<()> {
                 Ok(self.table().push(ThingU32(v + 2))?)
             }
 
-            fn drop(&mut self, this: Resource<ThingU32>) -> Result<()> {
+            async fn drop(&mut self, this: Resource<ThingU32>) -> Result<()> {
                 Ok(self.table().delete(this).map(|_| ())?)
             }
         }
@@ -480,7 +480,7 @@ fn resource_alias() -> Result<()> {
                 Ok(format!("{} HostThing.get", self.table().get(&this)?.0))
             }
 
-            fn drop(&mut self, this: Resource<ThingString>) -> Result<()> {
+            async fn drop(&mut self, this: Resource<ThingString>) -> Result<()> {
                 Ok(self.table().delete(this).map(|_| ())?)
             }
         }
@@ -605,7 +605,7 @@ fn resource_floats() -> Result<()> {
                 Ok(self.table().push(MyFloat(a + b + 6_f64))?)
             }
 
-            fn drop(&mut self, this: Resource<MyFloat>) -> Result<()> {
+            async fn drop(&mut self, this: Resource<MyFloat>) -> Result<()> {
                 Ok(self.table().delete(this).map(|_| ())?)
             }
         }
@@ -626,7 +626,7 @@ fn resource_floats() -> Result<()> {
                 Ok(self.table().get(&this)?.0 + 3_f64)
             }
 
-            fn drop(&mut self, this: Resource<MyFloat>) -> Result<()> {
+            async fn drop(&mut self, this: Resource<MyFloat>) -> Result<()> {
                 Ok(self.table().delete(this).map(|_| ())?)
             }
         }
@@ -691,7 +691,7 @@ fn resource_borrow_in_record() -> Result<()> {
                 Ok(format!("{} HostThing.get", self.table().get(&this)?.0))
             }
 
-            fn drop(&mut self, this: Resource<ThingString>) -> Result<()> {
+            async fn drop(&mut self, this: Resource<ThingString>) -> Result<()> {
                 Ok(self.table().delete(this).map(|_| ())?)
             }
         }

@@ -82,18 +82,18 @@ async fn make_component(
 }
 
 #[derive(Debug, Copy, Clone)]
-struct MyFloat32(f32);
+struct MyF32(f32);
 
-impl PartialEq<MyFloat32> for MyFloat32 {
+impl PartialEq<MyF32> for MyF32 {
     fn eq(&self, other: &Self) -> bool {
         (self.0.is_nan() && other.0.is_nan()) || (self.0 == other.0)
     }
 }
 
 #[derive(Debug, Copy, Clone)]
-struct MyFloat64(f64);
+struct MyF64(f64);
 
-impl PartialEq<MyFloat64> for MyFloat64 {
+impl PartialEq<MyF64> for MyF64 {
     fn eq(&self, other: &Self) -> bool {
         (self.0.is_nan() && other.0.is_nan()) || (self.0 == other.0)
     }

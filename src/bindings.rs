@@ -44,7 +44,9 @@ pub fn make_bindings(
 
     for (name, params, results) in IMPORT_SIGNATURES {
         let offset = types.len();
-        types.function(params.iter().copied(), results.iter().copied());
+        types
+            .ty()
+            .function(params.iter().copied(), results.iter().copied());
         imports.import("env", name, EntityType::Function(offset));
         function_names.push((offset, (*name).to_owned()));
     }
@@ -95,7 +97,7 @@ pub fn make_bindings(
         let (params, results) = function.core_import_type(resolve);
         let offset = types.len();
 
-        types.function(params, results);
+        types.ty().function(params, results);
         imports.import(module, name, EntityType::Function(offset));
         function_names.push((
             offset,
@@ -176,7 +178,7 @@ pub fn make_bindings(
     for (index, function) in summary.functions.iter().enumerate() {
         let offset = types.len();
         let (params, results) = function.core_export_type(resolve);
-        types.function(params, results);
+        types.ty().function(params, results);
         functions.function(offset);
         function_names.push((offset, function.internal_name(resolve)));
         let mut gen = FunctionBindgen::new(summary, function, stack_pointer);
@@ -259,9 +261,13 @@ pub fn make_bindings(
 
     {
         let dispatch_offset = types.len();
-        types.function([ValType::I32; DISPATCH_CORE_PARAM_COUNT], []);
+        types
+            .ty()
+            .function([ValType::I32; DISPATCH_CORE_PARAM_COUNT], []);
         let dispatchable_offset = types.len();
-        types.function([ValType::I32; DISPATCHABLE_CORE_PARAM_COUNT], []);
+        types
+            .ty()
+            .function([ValType::I32; DISPATCHABLE_CORE_PARAM_COUNT], []);
         functions.function(dispatch_offset);
         let name = "componentize-py#CallIndirect";
         function_names.push((dispatch_offset, name.to_owned()));
@@ -300,7 +306,7 @@ pub fn make_bindings(
         Some(0),
         &ConstExpr::global_get(table_base),
         Elements::Functions(
-            &summary
+            summary
                 .functions
                 .iter()
                 .enumerate()
@@ -309,7 +315,8 @@ pub fn make_bindings(
                         .is_dispatchable()
                         .then_some(import_function_count + u32::try_from(index).unwrap())
                 })
-                .collect::<Vec<_>>(),
+                .collect::<Vec<_>>()
+                .into(),
         ),
     );
 

@@ -32,8 +32,8 @@ enum Type {
     S32,
     U64,
     S64,
-    Float32,
-    Float64,
+    F32,
+    F64,
     Char,
     String,
     Record {
@@ -72,8 +72,8 @@ fn any_type(max_size: usize, next_id: Rc<Cell<usize>>) -> impl Strategy<Value = 
         6 => Just(Type::S32).boxed(),
         7 => Just(Type::U64).boxed(),
         8 => Just(Type::S64).boxed(),
-        9 => Just(Type::Float32).boxed(),
-        10 => Just(Type::Float64).boxed(),
+        9 => Just(Type::F32).boxed(),
+        10 => Just(Type::F64).boxed(),
         11 => Just(Type::Char).boxed(),
         12 => Just(Type::String).boxed(),
         13 => {
@@ -156,8 +156,8 @@ fn wit_type_name(wit: &mut String, ty: &Type) -> String {
         Type::S32 => "s32".into(),
         Type::U64 => "u64".into(),
         Type::S64 => "s64".into(),
-        Type::Float32 => "float32".into(),
-        Type::Float64 => "float64".into(),
+        Type::F32 => "f32".into(),
+        Type::F64 => "f64".into(),
         Type::Char => "char".into(),
         Type::String => "string".into(),
         Type::Record { id, fields } => {
@@ -284,8 +284,8 @@ fn rust_type_name(ty: &Type) -> String {
         Type::S32 => "i32".into(),
         Type::U64 => "u64".into(),
         Type::S64 => "i64".into(),
-        Type::Float32 => "f32".into(),
-        Type::Float64 => "f64".into(),
+        Type::F32 => "f32".into(),
+        Type::F64 => "f64".into(),
         Type::Char => "char".into(),
         Type::String => "String".into(),
         Type::Record { id, .. } => {
@@ -343,7 +343,7 @@ fn equality(a: &str, b: &str, ty: &Type) -> String {
         | Type::String
         | Type::Flags { .. }
         | Type::Enum { .. } => format!("({a} == {b})"),
-        Type::Float32 | Type::Float64 => format!("(({a}.is_nan() && {b}.is_nan()) || {a} == {b})"),
+        Type::F32 | Type::F64 => format!("(({a}.is_nan() && {b}.is_nan()) || {a} == {b})"),
         Type::Record { fields, .. } => {
             if fields.is_empty() {
                 "true".into()
@@ -427,8 +427,8 @@ fn strategy(ty: &Type, max_list_size: usize) -> String {
         Type::S32 => "proptest::num::i32::ANY".into(),
         Type::U64 => "proptest::num::u64::ANY".into(),
         Type::S64 => "proptest::num::i64::ANY".into(),
-        Type::Float32 => "proptest::num::f32::ANY".into(),
-        Type::Float64 => "proptest::num::f64::ANY".into(),
+        Type::F32 => "proptest::num::f32::ANY".into(),
+        Type::F64 => "proptest::num::f64::ANY".into(),
         Type::Char => "proptest::char::any()".into(),
         Type::String => r#"proptest::string::string_regex(".*").unwrap()"#.into(),
         Type::Record { id, fields } => {
