@@ -51,6 +51,7 @@ semver = "1.0.23"
 [dev-dependencies]
 proptest = "1.5.0"
 hex = "0.4.3"
+tempfile = "3.13.0"
 
 [build-dependencies]
 anyhow = "1.0.89"

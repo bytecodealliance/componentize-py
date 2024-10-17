@@ -35,6 +35,19 @@ pub struct Common {
     /// Disable non-error output
     #[arg(short = 'q', long)]
     pub quiet: bool,
+
+    /// Comma-separated list of features that should be enabled when processing
+    /// WIT files.
+    ///
+    /// This enables using `@unstable` annotations in WIT files.
+    #[clap(long)]
+    features: Vec<String>,
+
+    /// Whether or not to activate all WIT features when processing WIT files.
+    ///
+    /// This enables using `@unstable` annotations in WIT files.
+    #[clap(long)]
+    all_features: bool,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -240,4 +253,63 @@ fn find_dir(name: &str, path: &Path) -> Result<Option<PathBuf>> {
     }
 
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use super::*;
+
+    /// Generates a WIT file which has unstable feature "x"
+    fn gated_x_wit_file() -> Result<tempfile::NamedTempFile, anyhow::Error> {
+        let mut wit = tempfile::Builder::new()
+            .prefix("gated")
+            .suffix(".wit")
+            .tempfile()?;
+        write!(
+            wit,
+            r#"
+            package foo:bar@1.2.3;
+
+            world bindings {{
+                @unstable(feature = x)
+                import x: func();
+                @since(version = 1.2.3)
+                import y: func();
+            }}
+        "#,
+        )?;
+        Ok(wit)
+    }
+
+    #[test]
+    fn unstable_bindings_not_generated() -> Result<()> {
+        // Given a WIT file with gated features
+        let wit = gated_x_wit_file()?;
+        let out_dir = tempfile::tempdir()?;
+
+        // When generating the bindings for this WIT world
+        let common = Common {
+            wit_path: Some(wit.path().into()),
+            world: None,
+            quiet: false,
+            features: vec![],
+            all_features: false,
+        };
+        let bindings = Bindings {
+            output_dir: out_dir.path().into(),
+            world_module: None,
+        };
+        generate_bindings(common, bindings)?;
+
+        // Then the gated feature doesn't appear
+        let generated =
+            fs::read_to_string(out_dir.path().to_path_buf().join("bindings/__init__.py"))?;
+
+        assert!(!generated.contains("def x() -> None:"));
+        assert!(generated.contains("def y() -> None:"));
+
+        Ok(())
+    }
 }
