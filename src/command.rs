@@ -133,6 +133,8 @@ fn generate_bindings(common: Common, bindings: Bindings) -> Result<()> {
             .wit_path
             .unwrap_or_else(|| Path::new("wit").to_owned()),
         common.world.as_deref(),
+        &common.features,
+        common.all_features,
         bindings.world_module.as_deref(),
         &bindings.output_dir,
     )
@@ -153,6 +155,8 @@ fn componentize(common: Common, componentize: Componentize) -> Result<()> {
     Runtime::new()?.block_on(crate::componentize(
         common.wit_path.as_deref(),
         common.world.as_deref(),
+        &common.features,
+        common.all_features,
         &python_path.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
         &componentize
             .module_worlds
@@ -309,6 +313,64 @@ mod tests {
 
         assert!(!generated.contains("def x() -> None:"));
         assert!(generated.contains("def y() -> None:"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn unstable_bindings_generated_with_feature_flag() -> Result<()> {
+        // Given a WIT file with gated features
+        let wit = gated_x_wit_file()?;
+        let out_dir = tempfile::tempdir()?;
+
+        // When generating the bindings for this WIT world
+        let common = Common {
+            wit_path: Some(wit.path().into()),
+            world: None,
+            quiet: false,
+            features: vec!["x".to_owned()],
+            all_features: false,
+        };
+        let bindings = Bindings {
+            output_dir: out_dir.path().into(),
+            world_module: None,
+        };
+        generate_bindings(common, bindings)?;
+
+        // Then the gated feature doesn't appear
+        let generated =
+            fs::read_to_string(out_dir.path().to_path_buf().join("bindings/__init__.py"))?;
+
+        assert!(generated.contains("def x() -> None:"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn unstable_bindings_generated_for_all_features() -> Result<()> {
+        // Given a WIT file with gated features
+        let wit = gated_x_wit_file()?;
+        let out_dir = tempfile::tempdir()?;
+
+        // When generating the bindings for this WIT world
+        let common = Common {
+            wit_path: Some(wit.path().into()),
+            world: None,
+            quiet: false,
+            features: vec![],
+            all_features: true,
+        };
+        let bindings = Bindings {
+            output_dir: out_dir.path().into(),
+            world_module: None,
+        };
+        generate_bindings(common, bindings)?;
+
+        // Then the gated feature doesn't appear
+        let generated =
+            fs::read_to_string(out_dir.path().to_path_buf().join("bindings/__init__.py"))?;
+
+        assert!(generated.contains("def x() -> None:"));
 
         Ok(())
     }
