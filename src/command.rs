@@ -22,7 +22,7 @@ pub struct Options {
     pub command: Command,
 }
 
-#[derive(clap::Args, Debug)]
+#[derive(clap::Args, Clone, Debug)]
 pub struct Common {
     /// File or directory containing WIT document(s)
     #[arg(short = 'd', long)]
@@ -280,7 +280,7 @@ mod tests {
                 @unstable(feature = x)
                 import x: func();
                 @since(version = 1.2.3)
-                import y: func();
+                export y: func();
             }}
         "#,
         )?;
@@ -308,11 +308,9 @@ mod tests {
         generate_bindings(common, bindings)?;
 
         // Then the gated feature doesn't appear
-        let generated =
-            fs::read_to_string(out_dir.path().to_path_buf().join("bindings/__init__.py"))?;
+        let generated = fs::read_to_string(out_dir.path().join("bindings/__init__.py"))?;
 
         assert!(!generated.contains("def x() -> None:"));
-        assert!(generated.contains("def y() -> None:"));
 
         Ok(())
     }
@@ -338,8 +336,7 @@ mod tests {
         generate_bindings(common, bindings)?;
 
         // Then the gated feature doesn't appear
-        let generated =
-            fs::read_to_string(out_dir.path().to_path_buf().join("bindings/__init__.py"))?;
+        let generated = fs::read_to_string(out_dir.path().join("bindings/__init__.py"))?;
 
         assert!(generated.contains("def x() -> None:"));
 
@@ -367,11 +364,50 @@ mod tests {
         generate_bindings(common, bindings)?;
 
         // Then the gated feature doesn't appear
-        let generated =
-            fs::read_to_string(out_dir.path().to_path_buf().join("bindings/__init__.py"))?;
+        let generated = fs::read_to_string(out_dir.path().join("bindings/__init__.py"))?;
 
         assert!(generated.contains("def x() -> None:"));
 
         Ok(())
+    }
+
+    #[test]
+    fn unstable_features_used_in_componentize() -> Result<()> {
+        // Given bindings to a WIT file with gated features and a Python file that uses them
+        let wit = gated_x_wit_file()?;
+        let out_dir = tempfile::tempdir()?;
+        let common = Common {
+            wit_path: Some(wit.path().into()),
+            world: None,
+            quiet: false,
+            features: vec!["x".to_owned()],
+            all_features: false,
+        };
+        let bindings = Bindings {
+            output_dir: out_dir.path().into(),
+            world_module: None,
+        };
+        generate_bindings(common.clone(), bindings)?;
+        fs::write(
+            out_dir.path().join("app.py"),
+            r#"
+import bindings
+from bindings import x
+
+class Bindings(bindings.Bindings):
+    def y(self) -> None:
+        x()
+"#,
+        )?;
+
+        // Building the component succeeds
+        let componentize_opts = Componentize {
+            app_name: "app".to_owned(),
+            python_path: vec![out_dir.path().to_string_lossy().into()],
+            module_worlds: vec![],
+            output: out_dir.path().join("app.wasm"),
+            stub_wasi: false,
+        };
+        componentize(common, componentize_opts)
     }
 }
