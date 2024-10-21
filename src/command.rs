@@ -22,7 +22,7 @@ pub struct Options {
     pub command: Command,
 }
 
-#[derive(clap::Args, Debug)]
+#[derive(clap::Args, Clone, Debug)]
 pub struct Common {
     /// File or directory containing WIT document(s)
     #[arg(short = 'd', long)]
@@ -35,6 +35,19 @@ pub struct Common {
     /// Disable non-error output
     #[arg(short = 'q', long)]
     pub quiet: bool,
+
+    /// Comma-separated list of features that should be enabled when processing
+    /// WIT files.
+    ///
+    /// This enables using `@unstable` annotations in WIT files.
+    #[clap(long)]
+    features: Vec<String>,
+
+    /// Whether or not to activate all WIT features when processing WIT files.
+    ///
+    /// This enables using `@unstable` annotations in WIT files.
+    #[clap(long)]
+    all_features: bool,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -120,6 +133,8 @@ fn generate_bindings(common: Common, bindings: Bindings) -> Result<()> {
             .wit_path
             .unwrap_or_else(|| Path::new("wit").to_owned()),
         common.world.as_deref(),
+        &common.features,
+        common.all_features,
         bindings.world_module.as_deref(),
         &bindings.output_dir,
     )
@@ -140,6 +155,8 @@ fn componentize(common: Common, componentize: Componentize) -> Result<()> {
     Runtime::new()?.block_on(crate::componentize(
         common.wit_path.as_deref(),
         common.world.as_deref(),
+        &common.features,
+        common.all_features,
         &python_path.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
         &componentize
             .module_worlds
@@ -240,4 +257,157 @@ fn find_dir(name: &str, path: &Path) -> Result<Option<PathBuf>> {
     }
 
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use super::*;
+
+    /// Generates a WIT file which has unstable feature "x"
+    fn gated_x_wit_file() -> Result<tempfile::NamedTempFile, anyhow::Error> {
+        let mut wit = tempfile::Builder::new()
+            .prefix("gated")
+            .suffix(".wit")
+            .tempfile()?;
+        write!(
+            wit,
+            r#"
+            package foo:bar@1.2.3;
+
+            world bindings {{
+                @unstable(feature = x)
+                import x: func();
+                @since(version = 1.2.3)
+                export y: func();
+            }}
+        "#,
+        )?;
+        Ok(wit)
+    }
+
+    #[test]
+    fn unstable_bindings_not_generated() -> Result<()> {
+        // Given a WIT file with gated features
+        let wit = gated_x_wit_file()?;
+        let out_dir = tempfile::tempdir()?;
+
+        // When generating the bindings for this WIT world
+        let common = Common {
+            wit_path: Some(wit.path().into()),
+            world: None,
+            quiet: false,
+            features: vec![],
+            all_features: false,
+        };
+        let bindings = Bindings {
+            output_dir: out_dir.path().into(),
+            world_module: None,
+        };
+        generate_bindings(common, bindings)?;
+
+        // Then the gated feature doesn't appear
+        let generated = fs::read_to_string(out_dir.path().join("bindings/__init__.py"))?;
+
+        assert!(!generated.contains("def x() -> None:"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn unstable_bindings_generated_with_feature_flag() -> Result<()> {
+        // Given a WIT file with gated features
+        let wit = gated_x_wit_file()?;
+        let out_dir = tempfile::tempdir()?;
+
+        // When generating the bindings for this WIT world
+        let common = Common {
+            wit_path: Some(wit.path().into()),
+            world: None,
+            quiet: false,
+            features: vec!["x".to_owned()],
+            all_features: false,
+        };
+        let bindings = Bindings {
+            output_dir: out_dir.path().into(),
+            world_module: None,
+        };
+        generate_bindings(common, bindings)?;
+
+        // Then the gated feature doesn't appear
+        let generated = fs::read_to_string(out_dir.path().join("bindings/__init__.py"))?;
+
+        assert!(generated.contains("def x() -> None:"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn unstable_bindings_generated_for_all_features() -> Result<()> {
+        // Given a WIT file with gated features
+        let wit = gated_x_wit_file()?;
+        let out_dir = tempfile::tempdir()?;
+
+        // When generating the bindings for this WIT world
+        let common = Common {
+            wit_path: Some(wit.path().into()),
+            world: None,
+            quiet: false,
+            features: vec![],
+            all_features: true,
+        };
+        let bindings = Bindings {
+            output_dir: out_dir.path().into(),
+            world_module: None,
+        };
+        generate_bindings(common, bindings)?;
+
+        // Then the gated feature doesn't appear
+        let generated = fs::read_to_string(out_dir.path().join("bindings/__init__.py"))?;
+
+        assert!(generated.contains("def x() -> None:"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn unstable_features_used_in_componentize() -> Result<()> {
+        // Given bindings to a WIT file with gated features and a Python file that uses them
+        let wit = gated_x_wit_file()?;
+        let out_dir = tempfile::tempdir()?;
+        let common = Common {
+            wit_path: Some(wit.path().into()),
+            world: None,
+            quiet: false,
+            features: vec!["x".to_owned()],
+            all_features: false,
+        };
+        let bindings = Bindings {
+            output_dir: out_dir.path().into(),
+            world_module: None,
+        };
+        generate_bindings(common.clone(), bindings)?;
+        fs::write(
+            out_dir.path().join("app.py"),
+            r#"
+import bindings
+from bindings import x
+
+class Bindings(bindings.Bindings):
+    def y(self) -> None:
+        x()
+"#,
+        )?;
+
+        // Building the component succeeds
+        let componentize_opts = Componentize {
+            app_name: "app".to_owned(),
+            python_path: vec![out_dir.path().to_string_lossy().into()],
+            module_worlds: vec![],
+            output: out_dir.path().join("app.wasm"),
+            stub_wasi: false,
+        };
+        componentize(common, componentize_opts)
+    }
 }

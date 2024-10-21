@@ -170,13 +170,15 @@ impl Invoker for MyInvoker {
 pub fn generate_bindings(
     wit_path: &Path,
     world: Option<&str>,
+    features: &[String],
+    all_features: bool,
     world_module: Option<&str>,
     output_dir: &Path,
 ) -> Result<()> {
     // TODO: Split out and reuse the code responsible for finding and using componentize-py.toml files in the
     // `componentize` function below, since that can affect the bindings we should be generating.
 
-    let (resolve, world) = parse_wit(wit_path, world)?;
+    let (resolve, world) = parse_wit(wit_path, world, features, all_features)?;
     let summary = Summary::try_new(&resolve, &iter::once(world).collect())?;
     let world_name = resolve.worlds[world].name.to_snake_case().escape();
     let world_module = world_module.unwrap_or(&world_name);
@@ -197,6 +199,8 @@ pub fn generate_bindings(
 pub async fn componentize(
     wit_path: Option<&Path>,
     world: Option<&str>,
+    features: &[String],
+    all_features: bool,
     python_path: &[&str],
     module_worlds: &[(&str, &str)],
     app_name: &str,
@@ -219,7 +223,7 @@ pub async fn componentize(
     // Next, iterate over all the WIT directories, merging them into a single `Resolve`, and matching Python
     // packages to `WorldId`s.
     let (mut resolve, mut main_world) = if let Some(path) = wit_path {
-        let (resolve, world) = parse_wit(path, world)?;
+        let (resolve, world) = parse_wit(path, world, features, all_features)?;
         (Some(resolve), Some(world))
     } else {
         (None, None)
@@ -230,7 +234,7 @@ pub async fn componentize(
         .map(|(module, (config, world))| {
             Ok((module, match (world, config.config.wit_directory.as_deref()) {
                 (_, Some(wit_path)) => {
-                    let (my_resolve, mut world) = parse_wit(&config.path.join(wit_path), *world)?;
+                    let (my_resolve, mut world) = parse_wit(&config.path.join(wit_path), *world, features, all_features)?;
 
                     if let Some(resolve) = &mut resolve {
                         let remap = resolve.merge(my_resolve)?;
@@ -254,10 +258,11 @@ pub async fn componentize(
     } else {
         // If no WIT directory was provided as a parameter and none were referenced by Python packages, use ./wit
         // by default.
-        let (my_resolve, world) = parse_wit(Path::new("wit"), world).context(
-            "no WIT files found; please specify the directory or file \
+        let (my_resolve, world) = parse_wit(Path::new("wit"), world, features, all_features)
+            .context(
+                "no WIT files found; please specify the directory or file \
              containing the WIT world you wish to target",
-        )?;
+            )?;
         main_world = Some(world);
         my_resolve
     };
@@ -558,8 +563,25 @@ pub async fn componentize(
     Ok(())
 }
 
-fn parse_wit(path: &Path, world: Option<&str>) -> Result<(Resolve, WorldId)> {
-    let mut resolve = Resolve::default();
+fn parse_wit(
+    path: &Path,
+    world: Option<&str>,
+    features: &[String],
+    all_features: bool,
+) -> Result<(Resolve, WorldId)> {
+    let mut resolve = Resolve {
+        all_features,
+        ..Default::default()
+    };
+    for features in features {
+        for feature in features
+            .split(',')
+            .flat_map(|s| s.split_whitespace())
+            .filter(|f| !f.is_empty())
+        {
+            resolve.features.insert(feature.to_string());
+        }
+    }
     let pkg = if path.is_dir() {
         resolve.push_dir(path)?.0
     } else {
