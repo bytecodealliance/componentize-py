@@ -19,12 +19,6 @@ use {
         str,
     },
     summary::{Escape, Locations, Summary},
-    wasm_convert::IntoValType,
-    wasm_encoder::{
-        CodeSection, ExportKind, ExportSection, Function, FunctionSection, Instruction, Module,
-        TypeSection,
-    },
-    wasmparser::{FuncType, Parser, Payload, TypeRef},
     wasmtime::{
         component::{Component, Instance, Linker, ResourceTable, ResourceType},
         Config, Engine, Store,
@@ -43,6 +37,7 @@ pub mod command;
 mod prelink;
 #[cfg(feature = "pyo3")]
 mod python;
+mod stubwasi;
 mod summary;
 #[cfg(test)]
 mod test;
@@ -282,16 +277,12 @@ pub async fn componentize(
     // Link all the libraries (including any native extensions) into a single component.
     let mut linker = wit_component::Linker::default().validate(true);
 
-    let mut wasi_imports = HashMap::new();
     for Library {
         name,
         module,
         dl_openable,
     } in &libraries
     {
-        if stub_wasi {
-            add_wasi_imports(module, &mut wasi_imports)?;
-        }
         linker = linker.library(name, module, *dl_openable)?;
     }
 
@@ -306,51 +297,7 @@ pub async fn componentize(
     let component = linker.encode()?;
 
     let stubbed_component = if stub_wasi {
-        // When `stub_wasi` is `true`, we apply the pre-initialization snapshot to an alternate version of the
-        // component -- one where the WASI imports have been stubbed out.
-
-        let mut linker = wit_component::Linker::default().validate(true);
-
-        for Library {
-            name,
-            module,
-            dl_openable,
-        } in &libraries
-        {
-            linker = linker.library(name, module, *dl_openable)?;
-        }
-
-        for (module, imports) in &wasi_imports {
-            linker = linker.adapter(module, &make_stub_adapter(module, imports))?;
-        }
-
-        let component = linker.encode()?;
-
-        // As of this writing, `wit_component::Linker` generates a component such that the first module is the
-        // `main` one, followed by any adapters, followed by any libraries, followed by the `init` module, which is
-        // finally followed by any shim modules.  Given that the stubbed component may contain more adapters than
-        // the non-stubbed version, we need to tell `component-init` how to translate module indexes from the
-        // former to the latter.
-        //
-        // TODO: this is pretty fragile in that it could silently break if `wit_component::Linker`'s implementation
-        // changes.  Can we make it more robust?
-
-        let old_adapter_count = 1;
-        let new_adapter_count = u32::try_from(wasi_imports.len()).unwrap();
-        assert!(new_adapter_count >= old_adapter_count);
-
-        Some((component, move |index: u32| {
-            if index == 0 {
-                // `main` module
-                0
-            } else if index <= new_adapter_count {
-                // adapter module
-                old_adapter_count
-            } else {
-                // one of the other kinds of module
-                index + old_adapter_count - new_adapter_count
-            }
-        }))
+        stubwasi::link_stub_modules(libraries)
     } else {
         None
     };
@@ -671,73 +618,4 @@ fn add_wasi_and_stubs(
     }
 
     Ok(())
-}
-
-fn add_wasi_imports<'a>(
-    module: &'a [u8],
-    imports: &mut HashMap<&'a str, HashMap<&'a str, FuncType>>,
-) -> Result<()> {
-    let mut types = Vec::new();
-    for payload in Parser::new(0).parse_all(module) {
-        match payload? {
-            Payload::TypeSection(reader) => {
-                types = reader
-                    .into_iter_err_on_gc_types()
-                    .collect::<Result<Vec<_>, _>>()?;
-            }
-
-            Payload::ImportSection(reader) => {
-                for import in reader {
-                    let import = import?;
-
-                    if import.module == "wasi_snapshot_preview1"
-                        || import.module.starts_with("wasi:")
-                    {
-                        if let TypeRef::Func(ty) = import.ty {
-                            imports
-                                .entry(import.module)
-                                .or_default()
-                                .insert(import.name, types[usize::try_from(ty).unwrap()].clone());
-                        } else {
-                            bail!("encountered non-function import from WASI namespace")
-                        }
-                    }
-                }
-                break;
-            }
-
-            _ => {}
-        }
-    }
-
-    Ok(())
-}
-
-fn make_stub_adapter(_module: &str, stubs: &HashMap<&str, FuncType>) -> Vec<u8> {
-    let mut types = TypeSection::new();
-    let mut functions = FunctionSection::new();
-    let mut exports = ExportSection::new();
-    let mut code = CodeSection::new();
-
-    for (index, (name, ty)) in stubs.iter().enumerate() {
-        let index = u32::try_from(index).unwrap();
-        types.ty().function(
-            ty.params().iter().map(|&v| IntoValType(v).into()),
-            ty.results().iter().map(|&v| IntoValType(v).into()),
-        );
-        functions.function(index);
-        exports.export(name, ExportKind::Func, index);
-        let mut function = Function::new([]);
-        function.instruction(&Instruction::Unreachable);
-        function.instruction(&Instruction::End);
-        code.function(&function);
-    }
-
-    let mut module = Module::new();
-    module.section(&types);
-    module.section(&functions);
-    module.section(&exports);
-    module.section(&code);
-
-    module.finish()
 }
