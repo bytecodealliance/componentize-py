@@ -16,12 +16,18 @@ env:
 jobs:
   test:
     name: Test
-    runs-on: "ubuntu-latest"
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - { os: "ubuntu-latest", wasiSDK: "linux" }
+          - { os: "macos-latest", wasiSDK: "macos" }
+    runs-on: ${{ matrix.config.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v3
         with:
-          submodules: 'recursive'
+          submodules: "recursive"
 
       - name: Install latest Rust stable toolchain
         uses: actions-rs/toolchain@v1
@@ -53,9 +59,9 @@ jobs:
         shell: bash
         run: |
           cd /tmp
-          curl -LO https://github.com/dicej/wasi-sdk/releases/download/${WASI_SDK_RELEASE}/wasi-sdk-${WASI_SDK_VERSION}-linux.tar.gz
-          tar xf wasi-sdk-${WASI_SDK_VERSION}-linux.tar.gz
-          mv wasi-sdk-${WASI_SDK_VERSION} /opt/wasi-sdk
+          curl -LO https://github.com/dicej/wasi-sdk/releases/download/${WASI_SDK_RELEASE}/wasi-sdk-${WASI_SDK_VERSION}-${{ matrix.config.wasiSDK }}.tar.gz
+          tar xf wasi-sdk-${WASI_SDK_VERSION}-${{ matrix.config.wasiSDK }}.tar.gz
+          sudo mv wasi-sdk-${WASI_SDK_VERSION} /opt/wasi-sdk
 
       - name: Cache CPython
         id: cache-cpython-wasi
