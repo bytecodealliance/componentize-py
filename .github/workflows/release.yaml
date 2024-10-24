@@ -125,7 +125,7 @@ jobs:
               os: "windows-latest",
               arch: "amd64",
               maturin_target: "x64",
-              wasiSDK: "",
+              wasiSDK: "mingw",
               extension: ".exe",
               buildArgs: "",
               target: "",
@@ -240,13 +240,13 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: componentize-py
+          name: componentize-py-${{ matrix.config.wasiSDK }}-${{ matrix.config.arch }}
           path: dist
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: componentize-py
+          name: componentize-py-${{ matrix.config.wasiSDK }}-${{ matrix.config.arch }}-tar
           path: _dist/componentize-py-${{ env.RELEASE_VERSION }}-${{ env.RUNNER_OS }}-${{ matrix.config.arch }}.tar.gz
 
       - name: Upload binary to Github release (tag)
@@ -283,7 +283,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: componentize-py
+          name: componentize-py-checksums
           path: checksums-${{ env.RELEASE_VERSION }}.txt
 
       - name: Upload checksums to Github release (tag)
@@ -311,7 +311,7 @@ jobs:
       - name: Upload sdist
         uses: actions/upload-artifact@v4
         with:
-          name: componentize-py
+          name: componentize-py-sdist
           path: dist
 
   update_canary_release:
@@ -323,7 +323,8 @@ jobs:
       - name: Download release assets
         uses: actions/download-artifact@v4
         with:
-          name: componentize-py
+          pattern: componentize-py-*
+          merge-multiple: true
 
       - name: Delete canary tag
         run: gh release delete --cleanup-tag -y
