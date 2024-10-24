@@ -25,35 +25,29 @@ jobs:
     runs-on: ${{ matrix.config.os }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           submodules: "recursive"
 
-      - name: Install latest Rust stable toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          default: true
-          components: clippy, rustfmt
-
       - name: Install latest Rust nightly toolchain
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@nightly
         with:
-          toolchain: nightly
-          default: false
+          targets: wasm32-wasi wasm32-unknown-unknown
+
+      - name: Install latest Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasi wasm32-unknown-unknown
+          components: clippy, rustfmt
 
       - name: Install Rust std source
         shell: bash
         run: rustup component add rust-src --toolchain nightly
 
-      - name: Install Wasm Rust targets
-        shell: bash
-        run: rustup target add wasm32-wasi wasm32-unknown-unknown
-
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "rust-cache-${{ hashFiles('./Cargo.lock') }}"
-          cache-on-failure: "false"
+          cache-on-failure: false
 
       - name: Install WASI-SDK
         shell: bash
@@ -65,7 +59,7 @@ jobs:
 
       - name: Cache CPython
         id: cache-cpython-wasi
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: cpython/builddir/wasi
           key: cpython-wasi

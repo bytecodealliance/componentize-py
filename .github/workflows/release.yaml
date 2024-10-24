@@ -25,34 +25,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
-          submodules: 'recursive'
+          submodules: "recursive"
 
       - uses: actions/setup-python@v4
         with:
-          python-version: '3.12'
-
-      - name: Install latest Rust stable toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          default: true
-          components: clippy, rustfmt
+          python-version: "3.12"
 
       - name: Install latest Rust nightly toolchain
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@nightly
         with:
-          toolchain: nightly
-          default: false
+          targets: wasm32-wasi wasm32-unknown-unknown
+
+      - name: Install latest Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasi wasm32-unknown-unknown
+          components: clippy, rustfmt
 
       - name: Install Rust std source
         shell: bash
         run: rustup component add rust-src --toolchain nightly
-
-      - name: Install Wasm Rust targets
-        shell: bash
-        run: rustup target add wasm32-wasi wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -69,7 +63,7 @@ jobs:
 
       - name: Cache CPython
         id: cache-cpython-wasi
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: cpython/builddir/wasi
           key: cpython-wasi
@@ -106,7 +100,7 @@ jobs:
               buildArgs: "--target aarch64-unknown-linux-gnu",
               target: "aarch64-unknown-linux-gnu",
               targetDir: "target/aarch64-unknown-linux-gnu/release",
-          }
+            }
           - {
               os: "macos-latest",
               arch: "amd64",
@@ -139,35 +133,27 @@ jobs:
             }
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
-          submodules: 'recursive'
+          submodules: "recursive"
 
       - uses: actions/setup-python@v4
         with:
-          python-version: '3.12'
-
-      - name: Install latest Rust stable toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          default: true
-          target: ${{ matrix.config.target }}
+          python-version: "3.12"
 
       - name: Install latest Rust nightly toolchain
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@nightly
         with:
-          toolchain: nightly
-          default: false
-          target: ${{ matrix.config.target }}
+          targets: ${{ matrix.config.target }}
+
+      - name: Install latest Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.config.target }}
 
       - name: Install Rust std source
         shell: bash
         run: rustup component add rust-src --toolchain nightly
-
-      - name: Install Wasm Rust targets
-        shell: bash
-        run: rustup target add wasm32-wasi wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@v2
         if: matrix.config.os == 'ubuntu-latest' && matrix.config.arch == 'amd64'
@@ -211,7 +197,7 @@ jobs:
 
       - name: Restore CPython
         id: cache-cpython-wasi
-        uses: actions/cache/restore@v3
+        uses: actions/cache/restore@v4
         with:
           path: cpython/builddir/wasi
           key: cpython-wasi
@@ -252,16 +238,16 @@ jobs:
               componentize-py${{ matrix.config.extension }}
 
       - name: Upload wheels
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: componentize-py
           path: dist
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-            name: componentize-py
-            path: _dist/componentize-py-${{ env.RELEASE_VERSION }}-${{ env.RUNNER_OS }}-${{ matrix.config.arch }}.tar.gz
+          name: componentize-py
+          path: _dist/componentize-py-${{ env.RELEASE_VERSION }}-${{ env.RUNNER_OS }}-${{ matrix.config.arch }}.tar.gz
 
       - name: Upload binary to Github release (tag)
         if: startsWith(github.ref, 'refs/tags/v')
@@ -287,15 +273,15 @@ jobs:
         run: echo "RELEASE_VERSION=canary" >> $GITHUB_ENV
 
       - name: Download release assets
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
-            name: componentize-py
+          name: componentize-py
 
       - name: Generate checksums
         run: |
           sha256sum componentize-py-${{ env.RELEASE_VERSION }}*.tar.gz > checksums-${{ env.RELEASE_VERSION }}.txt
 
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: componentize-py
           path: checksums-${{ env.RELEASE_VERSION }}.txt
@@ -313,17 +299,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
-          submodules: 'recursive'
-          
+          submodules: "recursive"
+
       - name: Build sdist
         uses: PyO3/maturin-action@v1
         with:
           command: sdist
           args: --out dist
       - name: Upload sdist
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: componentize-py
           path: dist
@@ -335,19 +321,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download release assets
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
-            name: componentize-py
+          name: componentize-py
 
       - name: Delete canary tag
-        uses: dev-drprasad/delete-tag-and-release@v0.2.1
+        run: gh release delete --cleanup-tag -y
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: canary
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Recreate canary tag and release
-        uses: ncipollo/release-action@v1.10.0
+        uses: ncipollo/release-action@v1
         with:
           tag: canary
           allowUpdates: true
