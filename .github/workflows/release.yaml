@@ -178,22 +178,22 @@ jobs:
           OS=$(echo "${{ runner.os }}" | tr '[:upper:]' '[:lower:]')
           echo "RUNNER_OS=$OS" >> $GITHUB_ENV
 
-      - name: Install WASI-SDK
-        if: runner.os != 'Windows'
+      - name: Download WASI-SDK
         shell: bash
         run: |
           cd /tmp
           curl -LO https://github.com/dicej/wasi-sdk/releases/download/${WASI_SDK_RELEASE}/wasi-sdk-${WASI_SDK_VERSION}-${{ matrix.config.wasiSDK }}.tar.gz
           tar xf wasi-sdk-${WASI_SDK_VERSION}-${{ matrix.config.wasiSDK }}.tar.gz
-          sudo mv wasi-sdk-${WASI_SDK_VERSION} /opt/wasi-sdk
+
+      - name: Install WASI-SDK
+        if: runner.os != 'Windows'
+        shell: bash
+        run: sudo mv /tmp/wasi-sdk-${WASI_SDK_VERSION} /opt/wasi-sdk
 
       - name: Install WASI-SDK on Windows
         if: runner.os == 'Windows'
         shell: bash
-        run: |
-          curl -LO https://github.com/dicej/wasi-sdk/releases/download/${WASI_SDK_RELEASE}/wasi-sdk-${WASI_SDK_VERSION}-mingw.tar.gz
-          tar xf wasi-sdk-${WASI_SDK_VERSION}-mingw.tar.gz
-          echo "WASI_SDK_PATH=$(cygpath -m $(pwd)/wasi-sdk-${WASI_SDK_VERSION})" >> ${GITHUB_ENV}
+        run: echo "WASI_SDK_PATH=$(cygpath -m /tmp/wasi-sdk-${WASI_SDK_VERSION})" >> ${GITHUB_ENV}
 
       - name: Restore CPython
         id: cache-cpython-wasi
