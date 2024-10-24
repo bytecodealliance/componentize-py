@@ -11,7 +11,7 @@ making an outbound TCP request using `wasi-sockets`.
 ## Prerequisites
 
 * `Wasmtime` 18.0.0 or later
-* `componentize-py` 0.14.0
+* `componentize-py` 0.15.0
 
 Below, we use [Rust](https://rustup.rs/)'s `cargo` to install `Wasmtime`.  If
 you don't have `cargo`, you can download and install from
@@ -19,7 +19,7 @@ https://github.com/bytecodealliance/wasmtime/releases/tag/v18.0.0.
 
 ```
 cargo install --version 18.0.0 wasmtime-cli
-pip install componentize-py==0.14.0
+pip install componentize-py==0.15.0
 ```
 
 ## Running the demo
