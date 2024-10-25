@@ -29,7 +29,7 @@ jobs:
         with:
           submodules: "recursive"
 
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
@@ -137,7 +137,7 @@ jobs:
         with:
           submodules: "recursive"
 
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
@@ -275,7 +275,8 @@ jobs:
       - name: Download release assets
         uses: actions/download-artifact@v4
         with:
-          name: componentize-py
+          pattern: componentize-py-*
+          merge-multiple: true
 
       - name: Generate checksums
         run: |
@@ -320,6 +321,11 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: "recursive"
+
       - name: Download release assets
         uses: actions/download-artifact@v4
         with:
@@ -327,7 +333,7 @@ jobs:
           merge-multiple: true
 
       - name: Delete canary tag
-        run: gh release delete --cleanup-tag -y
+        run: gh release delete canary --cleanup-tag -y
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
