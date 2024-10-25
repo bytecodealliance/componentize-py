@@ -328,7 +328,7 @@ jobs:
           merge-multiple: true
 
       - name: Delete canary tag
-        run: gh release delete --cleanup-tag -y
+        run: gh release delete canary --cleanup-tag -y
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
