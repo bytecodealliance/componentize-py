@@ -275,7 +275,8 @@ jobs:
       - name: Download release assets
         uses: actions/download-artifact@v4
         with:
-          name: componentize-py
+          pattern: componentize-py-*
+          merge-multiple: true
 
       - name: Generate checksums
         run: |
