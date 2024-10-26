@@ -9,7 +9,7 @@ name = "componentize_py"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-anyhow = { version = "1.0.89", features = ["backtrace"] }
+anyhow = { version = "1.0.91", features = ["backtrace"] }
 clap = { version = "4.5.20", features = ["derive"] }
 tar = "0.4.42"
 tempfile = "3.13.0"
@@ -34,17 +34,17 @@ component-init = { git = "https://github.com/dicej/component-init", rev = "6964d
 wasm-convert = { git = "https://github.com/dicej/wasm-convert", rev = "a42b419" }
 async-trait = "0.1.83"
 futures = "0.3.31"
-tokio = { version = "1.40.0", features = [
+tokio = { version = "1.41.0", features = [
     "macros",
     "rt",
     "rt-multi-thread",
     "fs",
 ] }
-bytes = "1.7.2"
+bytes = "1.8.0"
 pretty_env_logger = "0.5.0"
 cap-std = "3.3.0"
 im-rc = "15.1.0"
-serde = { version = "1.0.210", features = ["derive"] }
+serde = { version = "1.0.213", features = ["derive"] }
 toml = "0.8.19"
 semver = "1.0.23"
 
