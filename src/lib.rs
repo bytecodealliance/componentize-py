@@ -601,25 +601,32 @@ fn add_wasi_and_stubs(
 
     for (interface_name, stubs) in stubs {
         if let Some(interface_name) = interface_name {
-            if let Ok(mut instance) = linker.instance(&interface_name) {
-                for stub in stubs {
-                    let interface_name = interface_name.clone();
-                    match stub {
-                        Stub::Function(name) => instance.func_new(name, {
-                            let name = name.clone();
-                            move |_, _, _| {
-                                Err(anyhow!("called trapping stub: {interface_name}#{name}"))
-                            }
-                        }),
-                        Stub::Resource(name) => instance
-                            .resource(name, ResourceType::host::<()>(), {
+            // Note that we do _not_ stub interfaces which appear to be part of WASIp2 since those should be
+            // provided by the `wasmtime_wasi::add_to_linker_async` call above, and adding stubs to those same
+            // interfaces would just cause trouble.
+            if !is_wasip2_cli(&interface_name) {
+                if let Ok(mut instance) = linker.instance(&interface_name) {
+                    for stub in stubs {
+                        let interface_name = interface_name.clone();
+                        match stub {
+                            Stub::Function(name) => instance.func_new(name, {
                                 let name = name.clone();
-                                move |_, _| {
+                                move |_, _, _| {
                                     Err(anyhow!("called trapping stub: {interface_name}#{name}"))
                                 }
-                            })
-                            .map(drop),
-                    }?;
+                            }),
+                            Stub::Resource(name) => instance
+                                .resource(name, ResourceType::host::<()>(), {
+                                    let name = name.clone();
+                                    move |_, _| {
+                                        Err(anyhow!(
+                                            "called trapping stub: {interface_name}#{name}"
+                                        ))
+                                    }
+                                })
+                                .map(drop),
+                        }?;
+                    }
                 }
             }
         } else {
@@ -642,4 +649,14 @@ fn add_wasi_and_stubs(
     }
 
     Ok(())
+}
+
+fn is_wasip2_cli(interface_name: &str) -> bool {
+    (interface_name.starts_with("wasi:cli/")
+        || interface_name.starts_with("wasi:clocks/")
+        || interface_name.starts_with("wasi:random/")
+        || interface_name.starts_with("wasi:io/")
+        || interface_name.starts_with("wasi:filesystem/")
+        || interface_name.starts_with("wasi:sockets/"))
+        && interface_name.contains("@0.2.")
 }
