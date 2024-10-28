@@ -297,7 +297,7 @@ pub async fn componentize(
     let component = linker.encode()?;
 
     let stubbed_component = if stub_wasi {
-        stubwasi::link_stub_modules(libraries)
+        stubwasi::link_stub_modules(libraries)?
     } else {
         None
     };
