@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::bail;
+use anyhow::{bail, Error};
 use wasm_convert::IntoValType;
 use wasm_encoder::{
     CodeSection, ExportKind, ExportSection, Function, FunctionSection, Instruction as Ins, Module,
@@ -10,7 +10,9 @@ use wasmparser::{FuncType, Parser, Payload, TypeRef};
 
 use crate::Library;
 
-pub fn link_stub_modules(libraries: Vec<Library>) -> Option<(Vec<u8>, impl Fn(u32) -> u32)> {
+pub fn link_stub_modules(
+    libraries: Vec<Library>,
+) -> Result<Option<(Vec<u8>, impl Fn(u32) -> u32)>, Error> {
     let mut wasi_imports = HashMap::new();
     let mut linker = wit_component::Linker::default().validate(true);
 
@@ -20,17 +22,15 @@ pub fn link_stub_modules(libraries: Vec<Library>) -> Option<(Vec<u8>, impl Fn(u3
         dl_openable,
     } in &libraries
     {
-        add_wasi_imports(module, &mut wasi_imports).unwrap();
-        linker = linker.library(name, module, *dl_openable).unwrap();
+        add_wasi_imports(module, &mut wasi_imports)?;
+        linker = linker.library(name, module, *dl_openable)?;
     }
 
     for (module, imports) in &wasi_imports {
-        linker = linker
-            .adapter(module, &make_stub_adapter(module, imports))
-            .unwrap();
+        linker = linker.adapter(module, &make_stub_adapter(module, imports))?;
     }
 
-    let component = linker.encode().unwrap();
+    let component = linker.encode()?;
 
     // As of this writing, `wit_component::Linker` generates a component such that the first module is the
     // `main` one, followed by any adapters, followed by any libraries, followed by the `init` module, which is
@@ -42,10 +42,10 @@ pub fn link_stub_modules(libraries: Vec<Library>) -> Option<(Vec<u8>, impl Fn(u3
     // changes.  Can we make it more robust?
 
     let old_adapter_count = 1;
-    let new_adapter_count = u32::try_from(wasi_imports.len()).unwrap();
+    let new_adapter_count = u32::try_from(wasi_imports.len())?;
     assert!(new_adapter_count >= old_adapter_count);
 
-    Some((component, move |index: u32| {
+    Ok(Some((component, move |index: u32| {
         if index == 0 {
             // `main` module
             0
@@ -56,21 +56,20 @@ pub fn link_stub_modules(libraries: Vec<Library>) -> Option<(Vec<u8>, impl Fn(u3
             // one of the other kinds of module
             index + old_adapter_count - new_adapter_count
         }
-    }))
+    })))
 }
 
 fn add_wasi_imports<'a>(
     module: &'a [u8],
     imports: &mut HashMap<&'a str, HashMap<&'a str, FuncType>>,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), Error> {
     let mut types = Vec::new();
     for payload in Parser::new(0).parse_all(module) {
         match payload? {
             Payload::TypeSection(reader) => {
                 types = reader
                     .into_iter_err_on_gc_types()
-                    .collect::<Result<Vec<_>, _>>()
-                    .unwrap();
+                    .collect::<Result<Vec<_>, _>>()?;
             }
 
             Payload::ImportSection(reader) => {
