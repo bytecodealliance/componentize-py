@@ -51,17 +51,80 @@ pub fn embedded_helper_utils() -> Result<TempDir, io::Error> {
 
 pub fn bundle_libraries(
     library_path: Vec<(&str, Vec<std::path::PathBuf>)>,
-) -> Result<Vec<Library>, io::Error> {
+) -> Result<Vec<Library>, anyhow::Error> {
     let mut libraries = vec![
-        library_from_so("libcomponentize_py_runtime.so")?,
-        library_from_so("libpython3.12.so")?,
-        library_from_so("libc.so")?,
-        library_from_so("libwasi-emulated-mman.so")?,
-        library_from_so("libwasi-emulated-process-clocks.so")?,
-        library_from_so("libwasi-emulated-getpid.so")?,
-        library_from_so("libwasi-emulated-signal.so")?,
-        library_from_so("libc++.so")?,
-        library_from_so("libc++abi.so")?,
+        Library {
+            name: "libcomponentize_py_runtime.so".into(),
+            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/libcomponentize_py_runtime.so.zst"
+            ))))?,
+            dl_openable: false,
+        },
+        Library {
+            name: "libpython3.12.so".into(),
+            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/libpython3.12.so.zst"
+            ))))?,
+            dl_openable: false,
+        },
+        Library {
+            name: "libc.so".into(),
+            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/libc.so.zst"
+            ))))?,
+            dl_openable: false,
+        },
+        Library {
+            name: "libwasi-emulated-mman.so".into(),
+            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/libwasi-emulated-mman.so.zst"
+            ))))?,
+            dl_openable: false,
+        },
+        Library {
+            name: "libwasi-emulated-process-clocks.so".into(),
+            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/libwasi-emulated-process-clocks.so.zst"
+            ))))?,
+            dl_openable: false,
+        },
+        Library {
+            name: "libwasi-emulated-getpid.so".into(),
+            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/libwasi-emulated-getpid.so.zst"
+            ))))?,
+            dl_openable: false,
+        },
+        Library {
+            name: "libwasi-emulated-signal.so".into(),
+            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/libwasi-emulated-signal.so.zst"
+            ))))?,
+            dl_openable: false,
+        },
+        Library {
+            name: "libc++.so".into(),
+            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/libc++.so.zst"
+            ))))?,
+            dl_openable: false,
+        },
+        Library {
+            name: "libc++abi.so".into(),
+            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/libc++abi.so.zst"
+            ))))?,
+            dl_openable: false,
+        },
     ];
 
     for (index, (path, libs)) in library_path.iter().enumerate() {
@@ -76,25 +139,13 @@ pub fn bundle_libraries(
 
             libraries.push(Library {
                 name: format!("/{index}/{path}"),
-                module: fs::read(library).unwrap(),
+                module: fs::read(library).with_context(|| library.display().to_string())?,
                 dl_openable: true,
             });
         }
     }
 
     Ok(libraries)
-}
-
-fn library_from_so(library_name: &str) -> Result<Library, io::Error> {
-    let path = env!("OUT_DIR").to_owned();
-    let filepath = path + "/" + library_name + ".zst";
-    let bytes = fs::read(filepath)?;
-
-    Ok(Library {
-        name: library_name.into(),
-        module: zstd::decode_all(Cursor::new(bytes))?,
-        dl_openable: false,
-    })
 }
 
 pub fn search_for_libraries_and_configs<'a>(
@@ -171,15 +222,19 @@ fn search_directory(
     modules_seen: &mut HashSet<String>,
 ) -> Result<(), anyhow::Error> {
     if path.is_dir() {
-        for entry in fs::read_dir(path)? {
+        for entry in fs::read_dir(path).with_context(|| path.display().to_string())? {
             search_directory(root, &entry?.path(), libraries, configs, modules_seen)?;
         }
     } else if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
         if name.ends_with(NATIVE_EXTENSION_SUFFIX) {
             libraries.push(path.to_owned());
         } else if name == "componentize-py.toml" {
-            let root = root.canonicalize()?;
-            let path = path.canonicalize()?;
+            let root = root
+                .canonicalize()
+                .with_context(|| root.display().to_string())?;
+            let path = path
+                .canonicalize()
+                .with_context(|| path.display().to_string())?;
 
             let module = module_name(&root, &path)
                 .ok_or_else(|| anyhow!("unable to determine module name for {}", path.display()))?;
@@ -224,7 +279,9 @@ fn search_directory(
                     module,
                     root: root.to_owned(),
                     path: path.parent().unwrap().to_owned(),
-                    config: toml::from_str::<RawComponentizePyConfig>(&fs::read_to_string(path)?)?,
+                    config: toml::from_str::<RawComponentizePyConfig>(
+                        &fs::read_to_string(&path).with_context(|| path.display().to_string())?,
+                    )?,
                 });
             }
         }
