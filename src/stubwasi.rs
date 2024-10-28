@@ -14,7 +14,9 @@ pub fn link_stub_modules(
     libraries: Vec<Library>,
 ) -> Result<Option<(Vec<u8>, impl Fn(u32) -> u32)>, Error> {
     let mut wasi_imports = HashMap::new();
-    let mut linker = wit_component::Linker::default().validate(true);
+    let mut linker = wit_component::Linker::default()
+        .validate(true)
+        .use_built_in_libdl(true);
 
     for Library {
         name,

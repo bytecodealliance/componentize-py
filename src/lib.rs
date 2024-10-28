@@ -256,7 +256,7 @@ pub async fn componentize(
         let (my_resolve, world) = parse_wit(Path::new("wit"), world, features, all_features)
             .context(
                 "no WIT files found; please specify the directory or file \
-             containing the WIT world you wish to target",
+                 containing the WIT world you wish to target",
             )?;
         main_world = Some(world);
         my_resolve
