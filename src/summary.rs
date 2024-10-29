@@ -1348,14 +1348,14 @@ class {camel}(Flag):
                                     if stub_runtime_calls {
                                         format!(
                                             "
-    def {snake}({params}):
+    def {snake}({params}){return_type}:
         {docs}{NOT_IMPLEMENTED}
 "
                                         )
                                     } else {
                                         format!(
                                             "
-    def {snake}({params}):
+    def {snake}({params}){return_type}:
         {docs}tmp = componentize_py_runtime.call_import({index}, [{args}], {result_count})[0]
         (_, func, args, _) = tmp.finalizer.detach()
         self.handle = tmp.handle
@@ -1403,21 +1403,21 @@ class {camel}(Flag):
                                 let docs =
                                     format!(r#""""{newline}{indent}{doc}{newline}{indent}"""{newline}{indent}"#);
                                 let enter = r#"
-    def __enter__(self):
+    def __enter__(self) -> Self:
         """Returns self"""
         return self
                                 "#;
                                 if stub_runtime_calls {
                                     format!(
                                         "{enter}
-    def __exit__(self, *args):
+    def __exit__(self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None) -> bool | None:
         {docs}{NOT_IMPLEMENTED}
 "
                                     )
                                 } else {
                                     format!(
                                         "{enter}
-    def __exit__(self, *args):
+    def __exit__(self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None) -> bool | None:
         {docs}(_, func, args, _) = self.finalizer.detach()
         self.handle = None
         func(args[0], args[1])
@@ -1746,6 +1746,7 @@ def {snake}({params}){return_type}:
 
         let python_imports =
             "from typing import TypeVar, Generic, Union, Optional, Protocol, Tuple, List, Any, Self
+from types import TracebackType
 from enum import Flag, Enum, auto
 from dataclasses import dataclass
 from abc import abstractmethod

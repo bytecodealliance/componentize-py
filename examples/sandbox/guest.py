@@ -2,22 +2,24 @@ import sandbox
 from sandbox.types import Err
 import json
 
-def handle(e: Exception):
+
+def handle(e: Exception) -> Err[str]:
     message = str(e)
-    if message == '':
-        raise Err(f"{type(e).__name__}")
+    if message == "":
+        return Err(f"{type(e).__name__}")
     else:
-        raise Err(f"{type(e).__name__}: {message}")
+        return Err(f"{type(e).__name__}: {message}")
+
 
 class Sandbox(sandbox.Sandbox):
     def eval(self, expression: str) -> str:
         try:
             return json.dumps(eval(expression))
         except Exception as e:
-            handle(e)
+            raise handle(e)
 
-    def exec(self, statements: str):
+    def exec(self, statements: str) -> None:
         try:
             exec(statements)
         except Exception as e:
-            handle(e)
+            raise handle(e)

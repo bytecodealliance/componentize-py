@@ -89,7 +89,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install wasmtime
+      - run: pip install wasmtime mypy
       - name: Test examples
         shell: bash
         run: bash .github/workflows/test_examples.sh
+      - name: Lint examples
+        shell: bash
+        run: bash .github/workflows/lint_examples.sh
