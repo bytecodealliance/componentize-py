@@ -13,27 +13,39 @@ from proxy import exports
 from proxy.types import Ok
 from proxy.imports import types
 from proxy.imports.types import (
-    Method_Get, Method_Post, Scheme, Scheme_Http, Scheme_Https, Scheme_Other, IncomingRequest, ResponseOutparam,
-    OutgoingResponse, Fields, OutgoingBody, OutgoingRequest
+    Method_Get,
+    Method_Post,
+    Scheme,
+    Scheme_Http,
+    Scheme_Https,
+    Scheme_Other,
+    IncomingRequest,
+    ResponseOutparam,
+    OutgoingResponse,
+    Fields,
+    OutgoingBody,
+    OutgoingRequest,
 )
 from poll_loop import Stream, Sink, PollLoop
 from typing import Tuple
 from urllib import parse
 
+
 class IncomingHandler(exports.IncomingHandler):
     """Implements the `export`ed portion of the `wasi-http` `proxy` world."""
 
-    def handle(self, request: IncomingRequest, response_out: ResponseOutparam):
-        """Handle the specified `request`, sending the response to `response_out`.
-
-        """
+    def handle(self, request: IncomingRequest, response_out: ResponseOutparam) -> None:
+        """Handle the specified `request`, sending the response to `response_out`."""
         # Dispatch the request using `asyncio`, backed by a custom event loop
         # based on WASI's `poll_oneoff` function.
         loop = PollLoop()
         asyncio.set_event_loop(loop)
         loop.run_until_complete(handle_async(request, response_out))
 
-async def handle_async(request: IncomingRequest, response_out: ResponseOutparam):
+
+async def handle_async(
+    request: IncomingRequest, response_out: ResponseOutparam
+) -> None:
     """Handle the specified `request`, sending the response to `response_out`."""
 
     method = request.method()
@@ -46,7 +58,10 @@ async def handle_async(request: IncomingRequest, response_out: ResponseOutparam)
         # buffering the response bodies), and stream the results back to the
         # client as they become available.
 
-        urls = map(lambda pair: str(pair[1], "utf-8"), filter(lambda pair: pair[0] == "url", headers))
+        urls = map(
+            lambda pair: str(pair[1], "utf-8"),
+            filter(lambda pair: pair[0] == "url", headers),
+        )
 
         response = OutgoingResponse(Fields.from_list([("content-type", b"text/plain")]))
 
@@ -64,7 +79,11 @@ async def handle_async(request: IncomingRequest, response_out: ResponseOutparam)
     elif isinstance(method, Method_Post) and path == "/echo":
         # Echo the request body back to the client without buffering.
 
-        response = OutgoingResponse(Fields.from_list(list(filter(lambda pair: pair[0] == "content-type", headers))))
+        response = OutgoingResponse(
+            Fields.from_list(
+                list(filter(lambda pair: pair[0] == "content-type", headers))
+            )
+        )
 
         response_body = response.body()
 
@@ -86,6 +105,7 @@ async def handle_async(request: IncomingRequest, response_out: ResponseOutparam)
         body = response.body()
         ResponseOutparam.set(response_out, Ok(response))
         OutgoingBody.finish(body, None)
+
 
 async def sha256(url: str) -> Tuple[str, str]:
     """Download the contents of the specified URL, computing the SHA-256

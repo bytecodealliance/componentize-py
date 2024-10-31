@@ -7,17 +7,18 @@ import matrix_math
 from matrix_math import exports
 from matrix_math.types import Err
 
+
 class MatrixMath(matrix_math.MatrixMath):
     def multiply(self, a: list[list[float]], b: list[list[float]]) -> list[list[float]]:
         print(f"matrix_multiply received arguments {a} and {b}")
-        return numpy.matmul(a, b).tolist()
+        return numpy.matmul(a, b).tolist()  # type: ignore
+
 
 class Run(exports.Run):
-    def run(self):
+    def run(self) -> None:
         args = sys.argv[1:]
         if len(args) != 2:
-            print(f"usage: matrix-math <matrix> <matrix>", file=sys.stderr)
+            print("usage: matrix-math <matrix> <matrix>", file=sys.stderr)
             exit(-1)
 
         print(MatrixMath().multiply(eval(args[0]), eval(args[1])))
-
