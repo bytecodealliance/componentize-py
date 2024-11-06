@@ -1,5 +1,6 @@
 use assert_cmd::Command;
 use fs_extra::dir::CopyOptions;
+use predicates::prelude::predicate;
 
 #[test]
 fn cli_example() -> anyhow::Result<()> {
@@ -33,6 +34,66 @@ fn cli_example() -> anyhow::Result<()> {
         .assert()
         .success()
         .stdout("Hello, world!\n");
+
+    Ok(())
+}
+
+#[test]
+fn http_example() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    fs_extra::copy_items(
+        &["./examples/http", "./wit"],
+        dir.path(),
+        &CopyOptions::new(),
+    )?;
+    let path = dir.path().join("http");
+
+    Command::cargo_bin("componentize-py")?
+        .current_dir(&path)
+        .args([
+            "-d",
+            "../wit",
+            "-w",
+            "wasi:http/proxy@0.2.0",
+            "componentize",
+            "app",
+            "-o",
+            "http.wasm",
+        ])
+        .assert()
+        .success()
+        .stdout("Component built successfully\n");
+
+    let mut handle = std::process::Command::new("wasmtime")
+        .current_dir(&path)
+        .args(["serve", "--wasi", "common", "http.wasm"])
+        .spawn()?;
+
+    let content = "’Twas brillig, and the slithy toves
+        Did gyre and gimble in the wabe:
+All mimsy were the borogoves,
+        And the mome raths outgrabe.
+";
+
+    Command::new("curl")
+        .current_dir(&path)
+        .args([
+            "-i",
+            "-H",
+            "content-type: text/plain",
+            "--retry-connrefused",
+            "--retry",
+            "5",
+            "--data-binary",
+            "@-",
+            "http://127.0.0.1:8080/echo",
+        ])
+        .write_stdin(content)
+        .assert()
+        .success()
+        .stdout(predicate::str::ends_with(content));
+
+    handle.kill()?;
 
     Ok(())
 }

@@ -8,12 +8,6 @@ export WASMTIME_BACKTRACE_DETAILS=1
 
 cargo build --release
 
-
-# HTTP
-# Just compiling for now
-(cd examples/http \
-    && ../../target/release/componentize-py -d ../../wit -w wasi:http/proxy@0.2.0 componentize app -o http.wasm)
-
 # TCP
 # Just compiling for now
 (cd examples/tcp \
