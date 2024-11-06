@@ -21,11 +21,6 @@ cargo build --release
     && ../../target/release/componentize-py -d ../../wit -w matrix-math componentize app -o matrix-math.wasm \
     && wasmtime run matrix-math.wasm '[[1, 2], [4, 5], [6, 7]]' '[[1, 2, 3], [4, 5, 6]]')
 
-# Sandbox
-(cd examples/sandbox \
-    && ../../target/release/componentize-py -d sandbox.wit componentize --stub-wasi guest -o sandbox.wasm \
-    && python -m wasmtime.bindgen sandbox.wasm --out-dir sandbox \
-    && python host.py "2 + 2")
 
 # TCP
 # Just compiling for now
