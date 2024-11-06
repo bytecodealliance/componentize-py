@@ -93,6 +93,29 @@ All mimsy were the borogoves,
         .success()
         .stdout(predicate::str::ends_with(content));
 
+    Command::new("curl")
+        .current_dir(&path)
+        .args([
+            "-i",
+            "-H",
+            "url: https://webassembly.github.io/spec/core/",
+            "-H",
+            "url: https://www.w3.org/groups/wg/wasm/",
+            "-H",
+            "url: https://bytecodealliance.org/",
+            "--retry-connrefused",
+            "--retry",
+            "5",
+            "http://127.0.0.1:8080/hash-all",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::ends_with("
+https://webassembly.github.io/spec/core/: d08394b6dfa544179f7e438c54b690ee1ac120572267175d986f128025b92792
+https://bytecodealliance.org/: c79c3ab89afdc9d8027626ca87457ccba7700aa963df8d3a5ce8c5daa92a830b
+https://www.w3.org/groups/wg/wasm/: b9cd0d52238845d0e90120828ec66ac2de67ed008975696f31bd1b49af21200d
+"));
+
     handle.kill()?;
 
     Ok(())
