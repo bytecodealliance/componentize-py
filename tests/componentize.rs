@@ -1,3 +1,5 @@
+use std::{io::Write, process::Stdio};
+
 use assert_cmd::Command;
 use fs_extra::dir::CopyOptions;
 use predicates::prelude::predicate;
@@ -228,6 +230,65 @@ fn sandbox_example() -> anyhow::Result<()> {
         .assert()
         .success()
         .stdout("result: 4\n");
+
+    Ok(())
+}
+
+#[test]
+fn tcp_example() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    fs_extra::copy_items(
+        &["./examples/tcp", "./wit"],
+        dir.path(),
+        &CopyOptions::new(),
+    )?;
+    let path = dir.path().join("tcp");
+
+    Command::cargo_bin("componentize-py")?
+        .current_dir(&path)
+        .args([
+            "-d",
+            "../wit",
+            "-w",
+            "wasi:cli/command@0.2.0",
+            "componentize",
+            "app",
+            "-o",
+            "tcp.wasm",
+        ])
+        .assert()
+        .success()
+        .stdout("Component built successfully\n");
+
+    let mut nc_handle = std::process::Command::new("nc")
+        .current_dir(&path)
+        .args(["-l", "127.0.0.1", "3456"])
+        .stdin(Stdio::piped())
+        .spawn()?;
+
+    let tcp_handle = std::process::Command::new("wasmtime")
+        .current_dir(&path)
+        .args([
+            "run",
+            "--wasi",
+            "inherit-network",
+            "tcp.wasm",
+            "127.0.0.1:3456",
+        ])
+        .stdout(Stdio::piped())
+        .spawn()?;
+
+    let mut nc_std_in = nc_handle.stdin.take().unwrap();
+
+    nc_std_in.write_all(b"hello")?;
+
+    let output = tcp_handle.wait_with_output()?;
+    nc_handle.kill()?;
+
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "received: b'hello'\n"
+    );
 
     Ok(())
 }
