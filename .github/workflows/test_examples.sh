@@ -8,10 +8,6 @@ export WASMTIME_BACKTRACE_DETAILS=1
 
 cargo build --release
 
-# CLI
-(cd examples/cli \
-    && ../../target/release/componentize-py -d ../../wit -w wasi:cli/command@0.2.0 componentize app -o cli.wasm \
-    && wasmtime run cli.wasm)
 
 # HTTP
 # Just compiling for now
