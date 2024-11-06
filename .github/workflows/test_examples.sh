@@ -14,14 +14,6 @@ cargo build --release
 (cd examples/http \
     && ../../target/release/componentize-py -d ../../wit -w wasi:http/proxy@0.2.0 componentize app -o http.wasm)
 
-# Matrix Math
-(cd examples/matrix-math \
-    && curl -OL https://github.com/dicej/wasi-wheels/releases/download/v0.0.1/numpy-wasi.tar.gz \
-    && tar xf numpy-wasi.tar.gz \
-    && ../../target/release/componentize-py -d ../../wit -w matrix-math componentize app -o matrix-math.wasm \
-    && wasmtime run matrix-math.wasm '[[1, 2], [4, 5], [6, 7]]' '[[1, 2, 3], [4, 5, 6]]')
-
-
 # TCP
 # Just compiling for now
 (cd examples/tcp \
