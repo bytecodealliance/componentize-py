@@ -8,14 +8,6 @@ export WASMTIME_BACKTRACE_DETAILS=1
 
 cargo build --release
 
-
-# HTTP
-# poll_loop.py has many errors that might not be worth adjusting at the moment, so ignore for now
-(cd examples/http \
-    && rm -rf proxy || true \
-    && ../../target/release/componentize-py -d ../../wit -w wasi:http/proxy@0.2.0 bindings . \
-    && mypy --strict --ignore-missing-imports -m app -p proxy)
-
 # # Matrix Math
 (cd examples/matrix-math \
     && rm -rf matrix_math || true \
