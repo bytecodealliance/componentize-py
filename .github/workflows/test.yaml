@@ -79,17 +79,20 @@ jobs:
         shell: bash
         run: bash .github/workflows/lint.sh
 
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasmtime-cli
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install mypy
+
       - name: Test
         shell: bash
         run: COMPONENTIZE_PY_TEST_COUNT=20 PROPTEST_MAX_SHRINK_ITERS=0 cargo test --release
 
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: wasmtime-cli
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: pip install mypy
       - name: Lint examples
         shell: bash
         run: bash .github/workflows/lint_examples.sh
