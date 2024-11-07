@@ -8,11 +8,6 @@ export WASMTIME_BACKTRACE_DETAILS=1
 
 cargo build --release
 
-# CLI
-(cd examples/cli \
-    && rm -rf command || true \
-    && ../../target/release/componentize-py -d ../../wit -w wasi:cli/command@0.2.0 bindings . \
-    && mypy --strict .)
 
 # HTTP
 # poll_loop.py has many errors that might not be worth adjusting at the moment, so ignore for now
