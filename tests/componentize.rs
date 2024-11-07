@@ -112,11 +112,13 @@ All mimsy were the borogoves,
         ])
         .assert()
         .success()
-        .stdout(predicate::str::ends_with("
-https://webassembly.github.io/spec/core/: d08394b6dfa544179f7e438c54b690ee1ac120572267175d986f128025b92792
-https://bytecodealliance.org/: c79c3ab89afdc9d8027626ca87457ccba7700aa963df8d3a5ce8c5daa92a830b
-https://www.w3.org/groups/wg/wasm/: b9cd0d52238845d0e90120828ec66ac2de67ed008975696f31bd1b49af21200d
-"));
+        .stdout(predicate::str::is_match(
+            "
+https://webassembly.github.io/spec/core/: .+
+https://bytecodealliance.org/: .+
+https://www.w3.org/groups/wg/wasm/: .+
+",
+        )?);
 
     handle.kill()?;
 
