@@ -143,13 +143,13 @@ where
         .assert()
         .success();
 
-    Command::new(path.join(".venv/bin/pip"))
+    Command::new(path.join(".venv").join("bin").join("pip"))
         .current_dir(path)
         .args(["install", "mypy"])
         .assert()
         .success();
 
-    Command::new(path.join(".venv/bin/mypy"))
+    Command::new(path.join(".venv").join("bin").join("mypy"))
         .current_dir(path)
         .args(args)
         .assert()

@@ -195,13 +195,13 @@ fn sandbox_example() -> anyhow::Result<()> {
         .assert()
         .success();
 
-    Command::new(path.join(".venv/bin/pip"))
+    Command::new(path.join(".venv").join("bin").join("pip"))
         .current_dir(&path)
         .args(["install", "wasmtime"])
         .assert()
         .success();
 
-    Command::new(path.join(".venv/bin/python"))
+    Command::new(path.join(".venv").join("bin").join("python"))
         .current_dir(&path)
         .args([
             "-m",
@@ -213,7 +213,7 @@ fn sandbox_example() -> anyhow::Result<()> {
         .assert()
         .success();
 
-    Command::new(path.join(".venv/bin/python"))
+    Command::new(path.join(".venv").join("bin").join("python"))
         .current_dir(&path)
         .args(["host.py", "2 + 2"])
         .assert()
