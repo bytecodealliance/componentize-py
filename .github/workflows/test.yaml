@@ -87,12 +87,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      - run: pip install mypy
-
       - name: Test
         shell: bash
         run: COMPONENTIZE_PY_TEST_COUNT=20 PROPTEST_MAX_SHRINK_ITERS=0 cargo test --release
-
-      - name: Lint examples
-        shell: bash
-        run: bash .github/workflows/lint_examples.sh

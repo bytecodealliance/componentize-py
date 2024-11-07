@@ -54,6 +54,39 @@ fn lint_http_bindings() -> anyhow::Result<()> {
 }
 
 #[test]
+fn lint_matrix_math_bindings() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    fs_extra::copy_items(
+        &["./examples/matrix-math", "./wit"],
+        dir.path(),
+        &CopyOptions::new(),
+    )?;
+    let path = dir.path().join("matrix-math");
+
+    install_numpy(&path);
+
+    generate_bindings(&path, "matrix-math")?;
+
+    assert!(predicate::path::is_dir().eval(&path.join("matrix_math")));
+
+    mypy_check(
+        &path,
+        [
+            "--strict",
+            // numpy doesn't pass
+            "--follow-imports",
+            "silent",
+            "-m",
+            "app",
+            "-p",
+            "matrix_math",
+        ],
+    );
+
+    Ok(())
+}
+
+#[test]
 fn lint_sandbox_bindings() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     fs_extra::copy_items(&["./examples/sandbox"], dir.path(), &CopyOptions::new())?;
@@ -124,4 +157,21 @@ where
         .stdout(
             predicate::str::is_match("^Success: no issues found in \\d+ source files\n$").unwrap(),
         )
+}
+
+fn install_numpy(path: &Path) {
+    Command::new("curl")
+        .current_dir(path)
+        .args([
+            "-OL",
+            "https://github.com/dicej/wasi-wheels/releases/download/v0.0.1/numpy-wasi.tar.gz",
+        ])
+        .assert()
+        .success();
+
+    Command::new("tar")
+        .current_dir(path)
+        .args(["xf", "numpy-wasi.tar.gz"])
+        .assert()
+        .success();
 }

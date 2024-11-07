@@ -1,4 +1,4 @@
-use std::{io::Write, process::Stdio};
+use std::{io::Write, path::Path, process::Stdio};
 
 use assert_cmd::Command;
 use fs_extra::dir::CopyOptions;
@@ -135,20 +135,7 @@ fn matrix_math_example() -> anyhow::Result<()> {
     )?;
     let path = dir.path().join("matrix-math");
 
-    Command::new("curl")
-        .current_dir(&path)
-        .args([
-            "-OL",
-            "https://github.com/dicej/wasi-wheels/releases/download/v0.0.1/numpy-wasi.tar.gz",
-        ])
-        .assert()
-        .success();
-
-    Command::new("tar")
-        .current_dir(&path)
-        .args(["xf", "numpy-wasi.tar.gz"])
-        .assert()
-        .success();
+    install_numpy(&path);
 
     Command::cargo_bin("componentize-py")?
         .current_dir(&path)
@@ -293,4 +280,21 @@ fn tcp_example() -> anyhow::Result<()> {
     );
 
     Ok(())
+}
+
+fn install_numpy(path: &Path) {
+    Command::new("curl")
+        .current_dir(path)
+        .args([
+            "-OL",
+            "https://github.com/dicej/wasi-wheels/releases/download/v0.0.1/numpy-wasi.tar.gz",
+        ])
+        .assert()
+        .success();
+
+    Command::new("tar")
+        .current_dir(path)
+        .args(["xf", "numpy-wasi.tar.gz"])
+        .assert()
+        .success();
 }
