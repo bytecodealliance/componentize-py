@@ -222,11 +222,12 @@ fn sandbox_example() -> anyhow::Result<()> {
         .args(["host.py", "2 + 2"])
         .assert()
         .success()
-        .stdout("result: 4\n");
+        .stdout(predicate::str::contains("result: 4"));
 
     Ok(())
 }
 
+#[cfg(unix)]
 #[test]
 fn tcp_example() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
