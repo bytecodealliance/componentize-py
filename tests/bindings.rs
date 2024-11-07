@@ -53,6 +53,25 @@ fn lint_http_bindings() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn lint_tcp_bindings() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    fs_extra::copy_items(
+        &["./examples/tcp", "./wit"],
+        dir.path(),
+        &CopyOptions::new(),
+    )?;
+    let path = dir.path().join("tcp");
+
+    generate_bindings(&path, "wasi:cli/command@0.2.0")?;
+
+    assert!(predicate::path::is_dir().eval(&path.join("command")));
+
+    mypy_check(&path, ["--strict", "."]);
+
+    Ok(())
+}
+
 fn generate_bindings(path: &Path, world: &str) -> Result<Assert, anyhow::Error> {
     Ok(Command::cargo_bin("componentize-py")?
         .current_dir(path)

@@ -21,9 +21,3 @@ cargo build --release
     && rm -rf sandbox || true \
     && ../../target/release/componentize-py -d sandbox.wit bindings . \
     && mypy --strict -m guest -p sandbox)
-
-# TCP
-(cd examples/tcp \
-    && rm -rf command || true \
-    && ../../target/release/componentize-py -d ../../wit -w wasi:cli/command@0.2.0 bindings . \
-    && mypy --strict .)
