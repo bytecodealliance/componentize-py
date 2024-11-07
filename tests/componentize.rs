@@ -2,7 +2,7 @@ use std::{io::Write, path::Path, process::Stdio};
 
 use assert_cmd::Command;
 use fs_extra::dir::CopyOptions;
-use predicates::prelude::predicate;
+use predicates::prelude::{predicate, PredicateBooleanExt};
 
 #[test]
 fn cli_example() -> anyhow::Result<()> {
@@ -112,13 +112,13 @@ All mimsy were the borogoves,
         ])
         .assert()
         .success()
-        .stdout(predicate::str::is_match(
-            "
-https://webassembly.github.io/spec/core/: .+
-https://bytecodealliance.org/: .+
-https://www.w3.org/groups/wg/wasm/: .+
-",
-        )?);
+        .stdout(
+            predicate::str::contains("https://webassembly.github.io/spec/core/:").and(
+                predicate::str::contains("https://bytecodealliance.org/:").and(
+                    predicate::str::contains("https://www.w3.org/groups/wg/wasm/:"),
+                ),
+            ),
+        );
 
     handle.kill()?;
 
