@@ -54,6 +54,25 @@ fn lint_http_bindings() -> anyhow::Result<()> {
 }
 
 #[test]
+fn lint_sandbox_bindings() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    fs_extra::copy_items(&["./examples/sandbox"], dir.path(), &CopyOptions::new())?;
+    let path = dir.path().join("sandbox");
+
+    Command::cargo_bin("componentize-py")?
+        .current_dir(&path)
+        .args(["-d", "sandbox.wit", "bindings", "."])
+        .assert()
+        .success();
+
+    assert!(predicate::path::is_dir().eval(&path.join("sandbox")));
+
+    mypy_check(&path, ["--strict", "-m", "guest", "-p", "sandbox"]);
+
+    Ok(())
+}
+
+#[test]
 fn lint_tcp_bindings() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     fs_extra::copy_items(

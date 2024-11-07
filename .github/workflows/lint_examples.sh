@@ -15,9 +15,3 @@ cargo build --release
     && tar xf numpy-wasi.tar.gz \
     && ../../target/release/componentize-py -d ../../wit -w matrix-math bindings . \
     && mypy --strict --follow-imports silent -m app -p matrix_math)
-
-# Sandbox
-(cd examples/sandbox \
-    && rm -rf sandbox || true \
-    && ../../target/release/componentize-py -d sandbox.wit bindings . \
-    && mypy --strict -m guest -p sandbox)
