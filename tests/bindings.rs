@@ -1,4 +1,7 @@
-use std::{ffi::OsStr, path::Path};
+use std::{
+    ffi::OsStr,
+    path::{Path, PathBuf},
+};
 
 use assert_cmd::{assert::Assert, Command};
 use fs_extra::dir::CopyOptions;
@@ -143,13 +146,13 @@ where
         .assert()
         .success();
 
-    Command::new(path.join(".venv").join("bin").join("pip"))
+    Command::new(venv_path(path).join("pip"))
         .current_dir(path)
         .args(["install", "mypy"])
         .assert()
         .success();
 
-    Command::new(path.join(".venv").join("bin").join("mypy"))
+    Command::new(venv_path(path).join("mypy"))
         .current_dir(path)
         .args(args)
         .assert()
@@ -157,6 +160,11 @@ where
         .stdout(
             predicate::str::is_match("^Success: no issues found in \\d+ source files\n$").unwrap(),
         )
+}
+
+fn venv_path(path: &Path) -> PathBuf {
+    path.join(".venv")
+        .join(if cfg!(windows) { "Scripts" } else { "bin" })
 }
 
 fn install_numpy(path: &Path) {

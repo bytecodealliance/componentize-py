@@ -1,4 +1,8 @@
-use std::{io::Write, path::Path, process::Stdio};
+use std::{
+    io::Write,
+    path::{Path, PathBuf},
+    process::Stdio,
+};
 
 use assert_cmd::Command;
 use fs_extra::dir::CopyOptions;
@@ -195,13 +199,13 @@ fn sandbox_example() -> anyhow::Result<()> {
         .assert()
         .success();
 
-    Command::new(path.join(".venv").join("bin").join("pip"))
+    Command::new(venv_path(&path).join("pip"))
         .current_dir(&path)
         .args(["install", "wasmtime"])
         .assert()
         .success();
 
-    Command::new(path.join(".venv").join("bin").join("python"))
+    Command::new(venv_path(&path).join("python"))
         .current_dir(&path)
         .args([
             "-m",
@@ -213,7 +217,7 @@ fn sandbox_example() -> anyhow::Result<()> {
         .assert()
         .success();
 
-    Command::new(path.join(".venv").join("bin").join("python"))
+    Command::new(venv_path(&path).join("python"))
         .current_dir(&path)
         .args(["host.py", "2 + 2"])
         .assert()
@@ -280,6 +284,11 @@ fn tcp_example() -> anyhow::Result<()> {
     );
 
     Ok(())
+}
+
+fn venv_path(path: &Path) -> PathBuf {
+    path.join(".venv")
+        .join(if cfg!(windows) { "Scripts" } else { "bin" })
 }
 
 fn install_numpy(path: &Path) {
