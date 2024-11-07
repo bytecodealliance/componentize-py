@@ -195,13 +195,13 @@ fn sandbox_example() -> anyhow::Result<()> {
         .assert()
         .success();
 
-    Command::new(venv_executable_path("pip"))
+    Command::new(path.join(".venv/bin/pip"))
         .current_dir(&path)
         .args(["install", "wasmtime"])
         .assert()
         .success();
 
-    Command::new(venv_executable_path("python"))
+    Command::new(path.join(".venv/bin/python"))
         .current_dir(&path)
         .args([
             "-m",
@@ -213,7 +213,7 @@ fn sandbox_example() -> anyhow::Result<()> {
         .assert()
         .success();
 
-    Command::new(venv_executable_path("python"))
+    Command::new(path.join(".venv/bin/python"))
         .current_dir(&path)
         .args(["host.py", "2 + 2"])
         .assert()
@@ -297,11 +297,4 @@ fn install_numpy(path: &Path) {
         .args(["xf", "numpy-wasi.tar.gz"])
         .assert()
         .success();
-}
-
-fn venv_executable_path(executable: &str) -> String {
-    format!(
-        "./.venv/bin/{executable}{}",
-        if cfg!(windows) { ".exe" } else { "" }
-    )
 }

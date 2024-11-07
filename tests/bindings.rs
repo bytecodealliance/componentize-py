@@ -143,13 +143,13 @@ where
         .assert()
         .success();
 
-    Command::new(venv_executable_path("pip"))
+    Command::new(path.join(".venv/bin/pip"))
         .current_dir(path)
         .args(["install", "mypy"])
         .assert()
         .success();
 
-    Command::new(venv_executable_path("mypy"))
+    Command::new(path.join(".venv/bin/mypy"))
         .current_dir(path)
         .args(args)
         .assert()
@@ -157,13 +157,6 @@ where
         .stdout(
             predicate::str::is_match("^Success: no issues found in \\d+ source files\n$").unwrap(),
         )
-}
-
-fn venv_executable_path(executable: &str) -> String {
-    format!(
-        "./.venv/bin/{executable}{}",
-        if cfg!(windows) { ".exe" } else { "" }
-    )
 }
 
 fn install_numpy(path: &Path) {
