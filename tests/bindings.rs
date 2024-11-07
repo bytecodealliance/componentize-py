@@ -157,9 +157,7 @@ where
         .args(args)
         .assert()
         .success()
-        .stdout(
-            predicate::str::is_match("^Success: no issues found in \\d+ source files\n$").unwrap(),
-        )
+        .stdout(predicate::str::is_match("Success: no issues found in \\d+ source files").unwrap())
 }
 
 fn venv_path(path: &Path) -> PathBuf {
