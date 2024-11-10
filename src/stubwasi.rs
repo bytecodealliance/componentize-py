@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::{bail, Error};
+use anyhow::{bail, Error, Result};
 use wasm_convert::IntoValType;
 use wasm_encoder::{
     CodeSection, ExportKind, ExportSection, Function, FunctionSection, Instruction as Ins, Module,
@@ -12,7 +12,7 @@ use crate::Library;
 
 pub fn link_stub_modules(
     libraries: Vec<Library>,
-) -> Result<Option<(Vec<u8>, impl Fn(u32) -> u32)>, Error> {
+) -> Result<Option<(Vec<u8>, impl Fn(u32) -> u32)>> {
     let mut wasi_imports = HashMap::new();
     let mut linker = wit_component::Linker::default()
         .validate(true)
@@ -64,7 +64,7 @@ pub fn link_stub_modules(
 fn add_wasi_imports<'a>(
     module: &'a [u8],
     imports: &mut HashMap<&'a str, HashMap<&'a str, FuncType>>,
-) -> Result<(), Error> {
+) -> Result<()> {
     let mut types = Vec::new();
     for payload in Parser::new(0).parse_all(module) {
         match payload? {

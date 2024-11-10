@@ -1,10 +1,10 @@
 use std::io::Cursor;
 
-use anyhow::{anyhow, Error};
+use anyhow::{anyhow, Result};
 
 use crate::Library;
 
-pub fn link_libraries(libraries: &[Library]) -> Result<Vec<u8>, Error> {
+pub fn link_libraries(libraries: &[Library]) -> Result<Vec<u8>> {
     let mut linker = wit_component::Linker::default()
         .validate(true)
         .use_built_in_libdl(true);
