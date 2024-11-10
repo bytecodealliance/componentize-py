@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::{bail, Error, Result};
+use anyhow::{bail, Result};
 use wasm_convert::IntoValType;
 use wasm_encoder::{
     CodeSection, ExportKind, ExportSection, Function, FunctionSection, Instruction as Ins, Module,
