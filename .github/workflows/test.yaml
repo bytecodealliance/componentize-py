@@ -74,7 +74,7 @@ jobs:
           path: cpython/builddir/wasi
           key: cpython-wasi
           enableCrossOsArchive: true
-          
+
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -85,7 +85,7 @@ jobs:
           before-script-linux: |
             rustup install nightly
             rustup component add rust-src --toolchain nightly
-            rustup target add wasm32-wasi wasm32-unknown-unknown
+            rustup target add wasm32-wasip1 wasm32-unknown-unknown
 
       - name: Lint
         shell: bash
