@@ -112,7 +112,7 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
         .arg("-Z")
         .arg("build-std=panic_abort,std")
         .arg("--release")
-        .arg("--target=wasm32-wasi");
+        .arg("--target=wasm32-wasip1");
 
     for (key, _) in env::vars_os() {
         if key
@@ -132,7 +132,7 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
     assert!(status.success());
     println!("cargo:rerun-if-changed=runtime");
 
-    let path = out_dir.join("wasm32-wasi/release/libcomponentize_py_runtime.a");
+    let path = out_dir.join("wasm32-wasip1/release/libcomponentize_py_runtime.a");
 
     if path.exists() {
         let clang = wasi_sdk.join(format!("bin/{CLANG_EXECUTABLE}"));
@@ -169,7 +169,7 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
 
     for library in libraries {
         compress(
-            &wasi_sdk.join("share/wasi-sysroot/lib/wasm32-wasi"),
+            &wasi_sdk.join("share/wasi-sysroot/lib/wasm32-wasip1"),
             library,
             out_dir,
             true,
@@ -285,7 +285,7 @@ fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
                 run(Command::new("../../config.guess").current_dir(&cpython_wasi_dir))?;
 
             run(Command::new("../../Tools/wasm/wasi-env")
-                .env("CONFIG_SITE", "../../Tools/wasm/config.site-wasm32-wasi")
+                .env("CONFIG_SITE", "../../Tools/wasm/config.site-wasm32-wasip1")
                 .env("CFLAGS", "-fPIC")
                 .current_dir(&cpython_wasi_dir)
                 .args([

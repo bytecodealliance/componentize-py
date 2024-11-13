@@ -33,12 +33,12 @@ jobs:
       - name: Install latest Rust nightly toolchain
         uses: dtolnay/rust-toolchain@nightly
         with:
-          targets: wasm32-wasi wasm32-unknown-unknown
+          targets: wasm32-wasip1 wasm32-unknown-unknown
 
       - name: Install latest Rust stable toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-wasi wasm32-unknown-unknown
+          targets: wasm32-wasip1 wasm32-unknown-unknown
           components: clippy, rustfmt
 
       - name: Install Rust std source
@@ -74,6 +74,18 @@ jobs:
           path: cpython/builddir/wasi
           key: cpython-wasi
           enableCrossOsArchive: true
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.config.maturin_target }}
+          args: --release --out dist --features pyo3
+          manylinux: 2_28
+          docker-options: -v /opt/wasi-sdk:/opt/wasi-sdk
+          before-script-linux: |
+            rustup install nightly
+            rustup component add rust-src --toolchain nightly
+            rustup target add wasm32-wasip1 wasm32-unknown-unknown
 
       - name: Lint
         shell: bash

@@ -21,8 +21,8 @@ switch.
 ### Prerequisites
 
 - Tools needed to build [CPython](https://github.com/python/cpython) (Make, Clang, etc.)
-- [Rust](https://rustup.rs/) stable 1.71 or later *and* nightly 2023-07-27 or later, including the `wasm32-wasi` and `wasm32-unknown-unknown` targets
-  - Note that we currently use the `-Z build-std` Cargo option to build the `componentize-py` runtime with position-independent code (which is not the default for `wasm32-wasi`) and this requires using a recent nightly build of Rust.
+- [Rust](https://rustup.rs/) stable 1.71 or later *and* nightly 2023-07-27 or later, including the `wasm32-wasip1` and `wasm32-unknown-unknown` targets
+  - Note that we currently use the `-Z build-std` Cargo option to build the `componentize-py` runtime with position-independent code (which is not the default for `wasm32-wasip1`) and this requires using a recent nightly build of Rust.
   
 For Rust, something like this should work once you have `rustup`:
 
@@ -30,7 +30,7 @@ For Rust, something like this should work once you have `rustup`:
 rustup update
 rustup install nightly
 rustup component add rust-src --toolchain nightly
-rustup target add wasm32-wasi wasm32-unknown-unknown
+rustup target add wasm32-wasip1 wasm32-unknown-unknown
 ```
 
 ### Building and Running

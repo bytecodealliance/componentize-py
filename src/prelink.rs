@@ -16,7 +16,7 @@ use zstd::Decoder;
 
 use crate::{ComponentizePyConfig, ConfigContext, Library, RawComponentizePyConfig};
 
-static NATIVE_EXTENSION_SUFFIX: &str = ".cpython-312-wasm32-wasi.so";
+static NATIVE_EXTENSION_SUFFIX: &str = ".cpython-312-wasm32-wasip1.so";
 
 type ConfigsMatchedWorlds<'a> =
     IndexMap<String, (ConfigContext<ComponentizePyConfig>, Option<&'a str>)>;
