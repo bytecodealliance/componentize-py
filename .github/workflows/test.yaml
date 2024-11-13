@@ -33,12 +33,12 @@ jobs:
       - name: Install latest Rust nightly toolchain
         uses: dtolnay/rust-toolchain@nightly
         with:
-          targets: wasm32-wasi wasm32-unknown-unknown
+          targets: wasm32-wasip1 wasm32-unknown-unknown
 
       - name: Install latest Rust stable toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-wasi wasm32-unknown-unknown
+          targets: wasm32-wasip1 wasm32-unknown-unknown
           components: clippy, rustfmt
 
       - name: Install Rust std source

@@ -112,7 +112,7 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
         .arg("-Z")
         .arg("build-std=panic_abort,std")
         .arg("--release")
-        .arg("--target=wasm32-wasi");
+        .arg("--target=wasm32-wasip1");
 
     for (key, _) in env::vars_os() {
         if key
@@ -132,7 +132,7 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
     assert!(status.success());
     println!("cargo:rerun-if-changed=runtime");
 
-    let path = out_dir.join("wasm32-wasi/release/libcomponentize_py_runtime.a");
+    let path = out_dir.join("wasm32-wasip1/release/libcomponentize_py_runtime.a");
 
     if path.exists() {
         let clang = wasi_sdk.join(format!("bin/{CLANG_EXECUTABLE}"));
