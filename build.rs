@@ -103,6 +103,12 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
 
     make_pyo3_config(&repo_dir)?;
 
+    let mut target_list_command = Command::new("rustc");
+    target_list_command.arg("--print")
+        .arg("target-list");
+    let status = target_list_command.status()?;
+    assert!(status.success());
+
     let mut cmd = Command::new("rustup");
     cmd.current_dir("runtime")
         .arg("run")
