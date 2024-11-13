@@ -118,7 +118,7 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
         .arg("-Z")
         .arg("build-std=panic_abort,std")
         .arg("--release")
-        .arg("--target=wasm32-wasip1");
+        .arg("--target=wasm32-wasi");
 
     for (key, _) in env::vars_os() {
         if key
