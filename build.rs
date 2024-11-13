@@ -32,64 +32,64 @@ fn main() -> Result<()> {
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
 
-    if matches!(env::var("CARGO_CFG_FEATURE").as_deref(), Ok("cargo-clippy"))
-        || env::var("CLIPPY_ARGS").is_ok()
-        || env::var("CARGO_EXPAND_NO_RUN_NIGHTLY").is_ok()
-    {
-        stubs_for_clippy(&out_dir)
-    } else {
-        package_all_the_things(&out_dir)
-    }?;
+    // if matches!(env::var("CARGO_CFG_FEATURE").as_deref(), Ok("cargo-clippy"))
+    //     || env::var("CLIPPY_ARGS").is_ok()
+    //     || env::var("CARGO_EXPAND_NO_RUN_NIGHTLY").is_ok()
+    // {
+    //     stubs_for_clippy(&out_dir)
+    // } else {
+    package_all_the_things(&out_dir)?;
+    // }?;
 
     // TODO: how can we detect `cargo test` and only run this in that case (or more specifically, run it so it
     // generates an empty file)?
     test_generator::generate()
 }
 
-fn stubs_for_clippy(out_dir: &Path) -> Result<()> {
-    println!(
-        "cargo:warning=using stubbed runtime, core library, and adapter for static analysis purposes..."
-    );
+// fn stubs_for_clippy(out_dir: &Path) -> Result<()> {
+//     println!(
+//         "cargo:warning=using stubbed runtime, core library, and adapter for static analysis purposes..."
+//     );
 
-    let files = [
-        "libcomponentize_py_runtime.so.zst",
-        "libpython3.12.so.zst",
-        "libc.so.zst",
-        "libwasi-emulated-mman.so.zst",
-        "libwasi-emulated-process-clocks.so.zst",
-        "libwasi-emulated-getpid.so.zst",
-        "libwasi-emulated-signal.so.zst",
-        "libc++.so.zst",
-        "libc++abi.so.zst",
-        "wasi_snapshot_preview1.reactor.wasm.zst",
-    ];
+//     let files = [
+//         "libcomponentize_py_runtime.so.zst",
+//         "libpython3.12.so.zst",
+//         "libc.so.zst",
+//         "libwasi-emulated-mman.so.zst",
+//         "libwasi-emulated-process-clocks.so.zst",
+//         "libwasi-emulated-getpid.so.zst",
+//         "libwasi-emulated-signal.so.zst",
+//         "libc++.so.zst",
+//         "libc++abi.so.zst",
+//         "wasi_snapshot_preview1.reactor.wasm.zst",
+//     ];
 
-    for file in files {
-        let path = out_dir.join(file);
+//     for file in files {
+//         let path = out_dir.join(file);
 
-        if !path.exists() {
-            Encoder::new(File::create(path)?, ZSTD_COMPRESSION_LEVEL)?.do_finish()?;
-        }
-    }
+//         if !path.exists() {
+//             Encoder::new(File::create(path)?, ZSTD_COMPRESSION_LEVEL)?.do_finish()?;
+//         }
+//     }
 
-    let path = out_dir.join("python-lib.tar.zst");
+//     let path = out_dir.join("python-lib.tar.zst");
 
-    if !path.exists() {
-        Builder::new(Encoder::new(File::create(path)?, ZSTD_COMPRESSION_LEVEL)?)
-            .into_inner()?
-            .do_finish()?;
-    }
+//     if !path.exists() {
+//         Builder::new(Encoder::new(File::create(path)?, ZSTD_COMPRESSION_LEVEL)?)
+//             .into_inner()?
+//             .do_finish()?;
+//     }
 
-    let path = out_dir.join("bundled.tar.zst");
+//     let path = out_dir.join("bundled.tar.zst");
 
-    if !path.exists() {
-        Builder::new(Encoder::new(File::create(path)?, ZSTD_COMPRESSION_LEVEL)?)
-            .into_inner()?
-            .do_finish()?;
-    }
+//     if !path.exists() {
+//         Builder::new(Encoder::new(File::create(path)?, ZSTD_COMPRESSION_LEVEL)?)
+//             .into_inner()?
+//             .do_finish()?;
+//     }
 
-    Ok(())
-}
+//     Ok(())
+// }
 
 fn package_all_the_things(out_dir: &Path) -> Result<()> {
     let repo_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
@@ -112,7 +112,7 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
         .arg("-Z")
         .arg("build-std=panic_abort,std")
         .arg("--release")
-        .arg("--target=wasm32-wasi");
+        .arg("--target=wasm32-wasip1");
 
     for (key, _) in env::vars_os() {
         if key
