@@ -554,8 +554,18 @@ pub extern "C" fn componentize_py_to_canon_i32(_py: &Python, value: Borrowed<PyA
     value.extract().unwrap()
 }
 
+#[export_name = "componentize-py#ToCanonU32"]
+pub extern "C" fn componentize_py_to_canon_u32(_py: &Python, value: Borrowed<PyAny>) -> u32 {
+    value.extract().unwrap()
+}
+
 #[export_name = "componentize-py#ToCanonI64"]
 pub extern "C" fn componentize_py_to_canon_i64(_py: &Python, value: Borrowed<PyAny>) -> i64 {
+    value.extract().unwrap()
+}
+
+#[export_name = "componentize-py#ToCanonU64"]
+pub extern "C" fn componentize_py_to_canon_u64(_py: &Python, value: Borrowed<PyAny>) -> u64 {
     value.extract().unwrap()
 }
 
@@ -730,8 +740,18 @@ pub extern "C" fn componentize_py_from_canon_i32(py: &Python, value: i32) -> Py<
     value.to_object(*py)
 }
 
+#[export_name = "componentize-py#FromCanonU32"]
+pub extern "C" fn componentize_py_from_canon_u32(py: &Python, value: u32) -> Py<PyAny> {
+    value.to_object(*py)
+}
+
 #[export_name = "componentize-py#FromCanonI64"]
 pub extern "C" fn componentize_py_from_canon_i64(py: &Python, value: i64) -> Py<PyAny> {
+    value.to_object(*py)
+}
+
+#[export_name = "componentize-py#FromCanonU64"]
+pub extern "C" fn componentize_py_from_canon_u64(py: &Python, value: u64) -> Py<PyAny> {
     value.to_object(*py)
 }
 

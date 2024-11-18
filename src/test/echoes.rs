@@ -216,18 +216,21 @@ class Echoes(exports.Echoes):
         return echoes.echo_bool(v)
 
     def echo_u8(self, v):
+        assert v >= 0
         return echoes.echo_u8(v)
 
     def echo_s8(self, v):
         return echoes.echo_s8(v)
 
     def echo_u16(self, v):
+        assert v >= 0
         return echoes.echo_u16(v)
 
     def echo_s16(self, v):
         return echoes.echo_s16(v)
 
     def echo_u32(self, v):
+        assert v >= 0
         return echoes.echo_u32(v)
 
     def echo_s32(self, v):
@@ -237,6 +240,7 @@ class Echoes(exports.Echoes):
         return echoes.echo_char(v)
 
     def echo_u64(self, v):
+        assert v >= 0
         return echoes.echo_u64(v)
 
     def echo_s64(self, v):
@@ -255,18 +259,21 @@ class Echoes(exports.Echoes):
         return echoes.echo_list_bool(v)
 
     def echo_list_u8(self, v):
+        assert all([n >= 0 for n in v])
         return echoes.echo_list_u8(v)
 
     def echo_list_s8(self, v):
         return echoes.echo_list_s8(v)
 
     def echo_list_u16(self, v):
+        assert all([n >= 0 for n in v])
         return echoes.echo_list_u16(v)
 
     def echo_list_s16(self, v):
         return echoes.echo_list_s16(v)
 
     def echo_list_u32(self, v):
+        assert all([n >= 0 for n in v])
         return echoes.echo_list_u32(v)
 
     def echo_list_s32(self, v):
@@ -276,6 +283,7 @@ class Echoes(exports.Echoes):
         return echoes.echo_list_char(v)
 
     def echo_list_u64(self, v):
+        assert all([n >= 0 for n in v])
         return echoes.echo_list_u64(v)
 
     def echo_list_s64(self, v):
