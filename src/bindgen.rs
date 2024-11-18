@@ -48,7 +48,17 @@ pub static IMPORT_SIGNATURES: &[(&str, &[ValType], &[ValType])] = &[
         &[ValType::I32],
     ),
     (
+        "componentize-py#ToCanonU32",
+        &[ValType::I32; 2],
+        &[ValType::I32],
+    ),
+    (
         "componentize-py#ToCanonI64",
+        &[ValType::I32; 2],
+        &[ValType::I64],
+    ),
+    (
+        "componentize-py#ToCanonU64",
         &[ValType::I32; 2],
         &[ValType::I64],
     ),
@@ -94,7 +104,17 @@ pub static IMPORT_SIGNATURES: &[(&str, &[ValType], &[ValType])] = &[
         &[ValType::I32],
     ),
     (
+        "componentize-py#FromCanonU32",
+        &[ValType::I32; 2],
+        &[ValType::I32],
+    ),
+    (
         "componentize-py#FromCanonI64",
+        &[ValType::I32, ValType::I64],
+        &[ValType::I32],
+    ),
+    (
+        "componentize-py#FromCanonU64",
         &[ValType::I32, ValType::I64],
         &[ValType::I32],
     ),
@@ -592,18 +612,32 @@ impl<'a> FunctionBindgen<'a> {
                     *IMPORTS.get("componentize-py#ToCanonBool").unwrap(),
                 ));
             }
-            Type::U8 | Type::U16 | Type::U32 | Type::S8 | Type::S16 | Type::S32 => {
+            Type::S8 | Type::S16 | Type::S32 => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value));
                 self.push(Ins::Call(
                     *IMPORTS.get("componentize-py#ToCanonI32").unwrap(),
                 ));
             }
-            Type::U64 | Type::S64 => {
+            Type::U8 | Type::U16 | Type::U32 => {
+                self.push(Ins::LocalGet(context));
+                self.push(Ins::LocalGet(value));
+                self.push(Ins::Call(
+                    *IMPORTS.get("componentize-py#ToCanonU32").unwrap(),
+                ));
+            }
+            Type::S64 => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value));
                 self.push(Ins::Call(
                     *IMPORTS.get("componentize-py#ToCanonI64").unwrap(),
+                ));
+            }
+            Type::U64 => {
+                self.push(Ins::LocalGet(context));
+                self.push(Ins::LocalGet(value));
+                self.push(Ins::Call(
+                    *IMPORTS.get("componentize-py#ToCanonU64").unwrap(),
                 ));
             }
             Type::F32 => {
@@ -1417,18 +1451,32 @@ impl<'a> FunctionBindgen<'a> {
                     *IMPORTS.get("componentize-py#FromCanonBool").unwrap(),
                 ));
             }
-            Type::U8 | Type::U16 | Type::U32 | Type::S8 | Type::S16 | Type::S32 => {
+            Type::S8 | Type::S16 | Type::S32 => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value[0]));
                 self.push(Ins::Call(
                     *IMPORTS.get("componentize-py#FromCanonI32").unwrap(),
                 ));
             }
-            Type::U64 | Type::S64 => {
+            Type::U8 | Type::U16 | Type::U32 => {
+                self.push(Ins::LocalGet(context));
+                self.push(Ins::LocalGet(value[0]));
+                self.push(Ins::Call(
+                    *IMPORTS.get("componentize-py#FromCanonU32").unwrap(),
+                ));
+            }
+            Type::S64 => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value[0]));
                 self.push(Ins::Call(
                     *IMPORTS.get("componentize-py#FromCanonI64").unwrap(),
+                ));
+            }
+            Type::U64 => {
+                self.push(Ins::LocalGet(context));
+                self.push(Ins::LocalGet(value[0]));
+                self.push(Ins::Call(
+                    *IMPORTS.get("componentize-py#FromCanonU64").unwrap(),
                 ));
             }
             Type::F32 => {
