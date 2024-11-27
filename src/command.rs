@@ -48,6 +48,24 @@ pub struct Common {
     /// This enables using `@unstable` annotations in WIT files.
     #[clap(long)]
     all_features: bool,
+
+    /// Specify names to use for imported interfaces.  May be specified more than once.
+    ///
+    /// By default, the python module name generated for a given interface will be the snake-case form of the WIT
+    /// interface name, possibly qualified with the package name and namespace and/or version if that name would
+    /// otherwise clash with another interface.  With this option, you may override that name with your own, unique
+    /// name.
+    #[arg(long, value_parser = parse_key_value)]
+    pub import_interface_name: Vec<(String, String)>,
+
+    /// Specify names to use for exported interfaces.  May be specified more than once.
+    ///
+    /// By default, the python module name generated for a given interface will be the snake-case form of the WIT
+    /// interface name, possibly qualified with the package name and namespace and/or version if that name would
+    /// otherwise clash with another interface.  With this option, you may override that name with your own, unique
+    /// name.
+    #[arg(long, value_parser = parse_key_value)]
+    pub export_interface_name: Vec<(String, String)>,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -82,7 +100,7 @@ pub struct Componentize {
     ///
     /// Note that these must be specified in topological order (i.e. if a module containing WIT files depends on
     /// other modules containing WIT files, it must be listed after all its dependencies).
-    #[arg(short = 'm', long, value_parser = parse_module_world)]
+    #[arg(short = 'm', long, value_parser = parse_key_value)]
     pub module_worlds: Vec<(String, String)>,
 
     /// Output file to which to write the resulting component
@@ -112,7 +130,7 @@ pub struct Bindings {
     pub world_module: Option<String>,
 }
 
-fn parse_module_world(s: &str) -> Result<(String, String), String> {
+fn parse_key_value(s: &str) -> Result<(String, String), String> {
     let (k, v) = s
         .split_once('=')
         .ok_or_else(|| format!("expected string of form `<key>=<value>`; got `{s}`"))?;
@@ -137,6 +155,16 @@ fn generate_bindings(common: Common, bindings: Bindings) -> Result<()> {
         common.all_features,
         bindings.world_module.as_deref(),
         &bindings.output_dir,
+        &common
+            .import_interface_name
+            .iter()
+            .map(|(a, b)| (a.as_str(), b.as_str()))
+            .collect(),
+        &common
+            .export_interface_name
+            .iter()
+            .map(|(a, b)| (a.as_str(), b.as_str()))
+            .collect(),
     )
 }
 
@@ -167,6 +195,16 @@ fn componentize(common: Common, componentize: Componentize) -> Result<()> {
         &componentize.output,
         None,
         componentize.stub_wasi,
+        &common
+            .import_interface_name
+            .iter()
+            .map(|(a, b)| (a.as_str(), b.as_str()))
+            .collect(),
+        &common
+            .export_interface_name
+            .iter()
+            .map(|(a, b)| (a.as_str(), b.as_str()))
+            .collect(),
     ))?;
 
     if !common.quiet {
@@ -300,6 +338,8 @@ mod tests {
             quiet: false,
             features: vec![],
             all_features: false,
+            import_interface_name: Vec::new(),
+            export_interface_name: Vec::new(),
         };
         let bindings = Bindings {
             output_dir: out_dir.path().into(),
@@ -328,6 +368,8 @@ mod tests {
             quiet: false,
             features: vec!["x".to_owned()],
             all_features: false,
+            import_interface_name: Vec::new(),
+            export_interface_name: Vec::new(),
         };
         let bindings = Bindings {
             output_dir: out_dir.path().into(),
@@ -356,6 +398,8 @@ mod tests {
             quiet: false,
             features: vec![],
             all_features: true,
+            import_interface_name: Vec::new(),
+            export_interface_name: Vec::new(),
         };
         let bindings = Bindings {
             output_dir: out_dir.path().into(),
@@ -382,6 +426,8 @@ mod tests {
             quiet: false,
             features: vec!["x".to_owned()],
             all_features: false,
+            import_interface_name: Vec::new(),
+            export_interface_name: Vec::new(),
         };
         let bindings = Bindings {
             output_dir: out_dir.path().into(),

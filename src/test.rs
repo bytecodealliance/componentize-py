@@ -9,7 +9,7 @@ use {
         prelude::Strategy,
         test_runner::{self, TestRng, TestRunner},
     },
-    std::{env, fs, iter, marker::PhantomData},
+    std::{collections::HashMap, env, fs, iter, marker::PhantomData},
     tokio::runtime::Runtime,
     wasmtime::{
         component::{Component, InstancePre, Linker, ResourceTable},
@@ -77,6 +77,8 @@ async fn make_component(
         &tempdir.path().join("app.wasm"),
         add_to_linker,
         false,
+        &HashMap::new(),
+        &HashMap::new(),
     )
     .await?;
 
