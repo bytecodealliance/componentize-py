@@ -73,12 +73,18 @@ impl WasiView for Ctx {
 struct RawComponentizePyConfig {
     bindings: Option<String>,
     wit_directory: Option<String>,
+    #[serde(default)]
+    import_interface_names: HashMap<String, String>,
+    #[serde(default)]
+    export_interface_names: HashMap<String, String>,
 }
 
 #[derive(Debug)]
 struct ComponentizePyConfig {
     bindings: Option<PathBuf>,
     wit_directory: Option<PathBuf>,
+    import_interface_names: HashMap<String, String>,
+    export_interface_names: HashMap<String, String>,
 }
 
 impl TryFrom<(&Path, RawComponentizePyConfig)> for ComponentizePyConfig {
@@ -97,6 +103,8 @@ impl TryFrom<(&Path, RawComponentizePyConfig)> for ComponentizePyConfig {
         Ok(Self {
             bindings: raw.bindings.map(convert).transpose()?,
             wit_directory: raw.wit_directory.map(convert).transpose()?,
+            import_interface_names: raw.import_interface_names,
+            export_interface_names: raw.export_interface_names,
         })
     }
 }
@@ -162,6 +170,7 @@ impl Invoker for MyInvoker {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn generate_bindings(
     wit_path: &Path,
     world: Option<&str>,
@@ -169,12 +178,19 @@ pub fn generate_bindings(
     all_features: bool,
     world_module: Option<&str>,
     output_dir: &Path,
+    import_interface_names: &HashMap<&str, &str>,
+    export_interface_names: &HashMap<&str, &str>,
 ) -> Result<()> {
     // TODO: Split out and reuse the code responsible for finding and using componentize-py.toml files in the
     // `componentize` function below, since that can affect the bindings we should be generating.
 
     let (resolve, world) = parse_wit(wit_path, world, features, all_features)?;
-    let summary = Summary::try_new(&resolve, &iter::once(world).collect())?;
+    let summary = Summary::try_new(
+        &resolve,
+        &iter::once(world).collect(),
+        import_interface_names,
+        export_interface_names,
+    )?;
     let world_name = resolve.worlds[world].name.to_snake_case().escape();
     let world_module = world_module.unwrap_or(&world_name);
     let world_dir = output_dir.join(world_module.replace('.', "/"));
@@ -202,6 +218,8 @@ pub async fn componentize(
     output_path: &Path,
     add_to_linker: Option<&dyn Fn(&mut Linker<Ctx>) -> Result<()>>,
     stub_wasi: bool,
+    import_interface_names: &HashMap<&str, &str>,
+    export_interface_names: &HashMap<&str, &str>,
 ) -> Result<()> {
     // Remove non-existent elements from `python_path` so we don't choke on them later:
     let python_path = &python_path
@@ -223,6 +241,30 @@ pub async fn componentize(
     } else {
         (None, None)
     };
+
+    let import_interface_names = import_interface_names
+        .iter()
+        .map(|(a, b)| (*a, *b))
+        .chain(configs.iter().flat_map(|(_, (config, _))| {
+            config
+                .config
+                .import_interface_names
+                .iter()
+                .map(|(a, b)| (a.as_str(), b.as_str()))
+        }))
+        .collect();
+
+    let export_interface_names = export_interface_names
+        .iter()
+        .map(|(a, b)| (*a, *b))
+        .chain(configs.iter().flat_map(|(_, (config, _))| {
+            config
+                .config
+                .export_interface_names
+                .iter()
+                .map(|(a, b)| (a.as_str(), b.as_str()))
+        }))
+        .collect();
 
     let configs = configs
         .iter()
@@ -271,7 +313,12 @@ pub async fn componentize(
         .chain(main_world)
         .collect::<IndexSet<_>>();
 
-    let summary = Summary::try_new(&resolve, &worlds)?;
+    let summary = Summary::try_new(
+        &resolve,
+        &worlds,
+        &import_interface_names,
+        &export_interface_names,
+    )?;
 
     libraries.push(Library {
         name: "libcomponentize_py_bindings.so".into(),

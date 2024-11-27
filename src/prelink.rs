@@ -50,7 +50,7 @@ pub fn embedded_helper_utils() -> Result<TempDir, io::Error> {
 }
 
 pub fn bundle_libraries(
-    library_path: Vec<(&str, Vec<std::path::PathBuf>)>,
+    library_path: Vec<(&str, Vec<PathBuf>)>,
 ) -> Result<Vec<Library>, anyhow::Error> {
     let mut libraries = vec![
         Library {
@@ -153,9 +153,8 @@ pub fn search_for_libraries_and_configs<'a>(
     module_worlds: &'a [(&'a str, &'a str)],
     world: Option<&'a str>,
 ) -> Result<(ConfigsMatchedWorlds<'a>, Vec<Library>), anyhow::Error> {
-    let mut raw_configs: Vec<crate::ConfigContext<crate::RawComponentizePyConfig>> = Vec::new();
-    let mut library_path: Vec<(&str, Vec<std::path::PathBuf>)> =
-        Vec::with_capacity(python_path.len());
+    let mut raw_configs: Vec<ConfigContext<RawComponentizePyConfig>> = Vec::new();
+    let mut library_path: Vec<(&str, Vec<PathBuf>)> = Vec::with_capacity(python_path.len());
     for path in python_path {
         let mut libraries = Vec::new();
         search_directory(

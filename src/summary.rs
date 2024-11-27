@@ -232,7 +232,12 @@ pub struct Summary<'a> {
 }
 
 impl<'a> Summary<'a> {
-    pub fn try_new(resolve: &'a Resolve, worlds: &IndexSet<WorldId>) -> Result<Self> {
+    pub fn try_new(
+        resolve: &'a Resolve,
+        worlds: &IndexSet<WorldId>,
+        import_interface_names: &HashMap<&str, &str>,
+        export_interface_names: &HashMap<&str, &str>,
+    ) -> Result<Self> {
         let mut me = Self {
             resolve,
             functions: Vec::new(),
@@ -272,8 +277,14 @@ impl<'a> Summary<'a> {
 
         me.types = me.types_sorted();
 
-        me.imported_interface_names = me.interface_names(me.imported_interfaces.keys().copied());
-        me.exported_interface_names = me.interface_names(me.exported_interfaces.keys().copied());
+        me.imported_interface_names = me.interface_names(
+            me.imported_interfaces.keys().copied(),
+            import_interface_names,
+        );
+        me.exported_interface_names = me.interface_names(
+            me.exported_interfaces.keys().copied(),
+            export_interface_names,
+        );
 
         Ok(me)
     }
@@ -1054,6 +1065,7 @@ impl<'a> Summary<'a> {
     fn interface_names(
         &self,
         ids: impl Iterator<Item = InterfaceId>,
+        interface_names: &HashMap<&str, &str>,
     ) -> HashMap<InterfaceId, String> {
         let mut tree = HashMap::<_, HashMap<_, HashMap<_, _>>>::new();
         for id in ids {
@@ -1083,7 +1095,14 @@ impl<'a> Summary<'a> {
                             .insert(
                                 *id,
                                 if let Some(version) = version {
-                                    if versions.len() == 1 {
+                                    if let Some(name) = interface_names.get(
+                                        format!(
+                                            "{package_namespace}:{package_name}/{name}@{version}"
+                                        )
+                                        .as_str(),
+                                    ) {
+                                        (*name).to_owned()
+                                    } else if versions.len() == 1 {
                                         if packages.len() == 1 {
                                             (*name).to_owned()
                                         } else {
@@ -1097,6 +1116,10 @@ impl<'a> Summary<'a> {
                                             version.to_string().replace('.', "-")
                                         )
                                     }
+                                } else if let Some(name) = interface_names.get(
+                                    format!("{package_namespace}:{package_name}/{name}").as_str()
+                                ) {
+                                    (*name).to_owned()
                                 } else if packages.len() == 1 {
                                     (*name).to_owned()
                                 } else {
@@ -1107,7 +1130,10 @@ impl<'a> Summary<'a> {
                     }
                 } else {
                     assert!(names
-                        .insert(*versions.get(&None).unwrap(), (*name).to_owned())
+                        .insert(
+                            *versions.get(&None).unwrap(),
+                            (*interface_names.get(*name).unwrap_or(name)).to_owned()
+                        )
                         .is_none());
                 }
             }
