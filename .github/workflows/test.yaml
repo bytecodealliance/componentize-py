@@ -14,6 +14,59 @@ env:
   WASI_SDK_RELEASE: wasi-sockets-alpha-5
 
 jobs:
+  linux:
+    name: Populate cache
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: "recursive"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install latest Rust nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: wasm32-wasip1 wasm32-unknown-unknown
+
+      - name: Install latest Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1 wasm32-unknown-unknown
+          components: clippy, rustfmt
+
+      - name: Install Rust std source
+        shell: bash
+        run: rustup component add rust-src --toolchain nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "rust-cache-${{ hashFiles('./Cargo.lock') }}"
+          cache-on-failure: false
+
+      - name: Install WASI-SDK
+        shell: bash
+        run: |
+          cd /tmp
+          curl -LO https://github.com/dicej/wasi-sdk/releases/download/${WASI_SDK_RELEASE}/wasi-sdk-${WASI_SDK_VERSION}-linux.tar.gz
+          tar xf wasi-sdk-${WASI_SDK_VERSION}-linux.tar.gz
+          mv wasi-sdk-${WASI_SDK_VERSION} /opt/wasi-sdk
+
+      - name: Cache CPython
+        id: cache-cpython-wasi
+        uses: actions/cache@v4
+        with:
+          path: cpython/builddir/wasi
+          key: cpython-wasi
+          enableCrossOsArchive: true
+
+      - name: Build
+        shell: bash
+        run: cargo build --release
+
   test:
     name: Test
     strategy:
@@ -67,9 +120,9 @@ jobs:
         shell: bash
         run: echo "WASI_SDK_PATH=$(cygpath -m /tmp/wasi-sdk-${WASI_SDK_VERSION})" >> ${GITHUB_ENV}
 
-      - name: Cache CPython
+      - name: Restore CPython
         id: cache-cpython-wasi
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: cpython/builddir/wasi
           key: cpython-wasi
