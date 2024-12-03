@@ -1,6 +1,6 @@
 use std::io::Cursor;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 
 use crate::Library;
 
@@ -26,5 +26,5 @@ pub fn link_libraries(libraries: &[Library]) -> Result<Vec<u8>> {
         ))))?,
     )?;
 
-    return linker.encode().map_err(|e| anyhow!(e));
+    return linker.encode().map_err(|e| anyhow::anyhow!(e));
 }
