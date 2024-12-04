@@ -21,7 +21,7 @@ static NATIVE_EXTENSION_SUFFIX: &str = ".cpython-312-wasm32-wasi.so";
 type ConfigsMatchedWorlds<'a> =
     IndexMap<String, (ConfigContext<ComponentizePyConfig>, Option<&'a str>)>;
 
-pub fn embedded_python_standard_library() -> Result<TempDir, io::Error> {
+pub fn embedded_python_standard_library() -> Result<TempDir> {
     // Untar the embedded copy of the Python standard library into a temporary directory
     let stdlib = tempfile::tempdir()?;
 
@@ -35,7 +35,7 @@ pub fn embedded_python_standard_library() -> Result<TempDir, io::Error> {
     Ok(stdlib)
 }
 
-pub fn embedded_helper_utils() -> Result<TempDir, io::Error> {
+pub fn embedded_helper_utils() -> Result<TempDir> {
     // Untar the embedded copy of helper utilities into a temporary directory
     let bundled = tempfile::tempdir()?;
 
@@ -51,7 +51,7 @@ pub fn embedded_helper_utils() -> Result<TempDir, io::Error> {
 
 pub fn bundle_libraries(
     library_path: Vec<(&str, Vec<PathBuf>)>,
-) -> Result<Vec<Library>, anyhow::Error> {
+) -> Result<Vec<Library>> {
     let mut libraries = vec![
         Library {
             name: "libcomponentize_py_runtime.so".into(),
@@ -152,7 +152,7 @@ pub fn search_for_libraries_and_configs<'a>(
     python_path: &'a Vec<&'a str>,
     module_worlds: &'a [(&'a str, &'a str)],
     world: Option<&'a str>,
-) -> Result<(ConfigsMatchedWorlds<'a>, Vec<Library>), anyhow::Error> {
+) -> Result<(ConfigsMatchedWorlds<'a>, Vec<Library>)> {
     let mut raw_configs: Vec<ConfigContext<RawComponentizePyConfig>> = Vec::new();
     let mut library_path: Vec<(&str, Vec<PathBuf>)> = Vec::with_capacity(python_path.len());
     for path in python_path {
@@ -219,7 +219,7 @@ fn search_directory(
     libraries: &mut Vec<PathBuf>,
     configs: &mut Vec<ConfigContext<RawComponentizePyConfig>>,
     modules_seen: &mut HashSet<String>,
-) -> Result<(), anyhow::Error> {
+) -> Result<()> {
     if path.is_dir() {
         for entry in fs::read_dir(path).with_context(|| path.display().to_string())? {
             search_directory(root, &entry?.path(), libraries, configs, modules_seen)?;
