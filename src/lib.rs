@@ -11,8 +11,7 @@ use {
     serde::Deserialize,
     std::{
         collections::HashMap,
-        env, fs,
-        io::Cursor,
+        fs,
         iter,
         ops::Deref,
         path::{Path, PathBuf},
@@ -34,6 +33,7 @@ mod abi;
 mod bindgen;
 mod bindings;
 pub mod command;
+mod link;
 mod prelink;
 #[cfg(feature = "pyo3")]
 mod python;
@@ -326,29 +326,7 @@ pub async fn componentize(
         dl_openable: false,
     });
 
-    // Link all the libraries (including any native extensions) into a single component.
-    let mut linker = wit_component::Linker::default()
-        .validate(true)
-        .use_built_in_libdl(true);
-
-    for Library {
-        name,
-        module,
-        dl_openable,
-    } in &libraries
-    {
-        linker = linker.library(name, module, *dl_openable)?;
-    }
-
-    linker = linker.adapter(
-        "wasi_snapshot_preview1",
-        &zstd::decode_all(Cursor::new(include_bytes!(concat!(
-            env!("OUT_DIR"),
-            "/wasi_snapshot_preview1.reactor.wasm.zst"
-        ))))?,
-    )?;
-
-    let component = linker.encode()?;
+    let component = link::link_libraries(&libraries)?;
 
     let stubbed_component = if stub_wasi {
         stubwasi::link_stub_modules(libraries)?
