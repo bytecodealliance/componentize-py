@@ -127,10 +127,6 @@ jobs:
           key: cpython-wasi
           enableCrossOsArchive: true
 
-      - name: Lint
-        shell: bash
-        run: bash .github/workflows/lint.sh
-
       - uses: taiki-e/install-action@v2
         with:
           tool: wasmtime-cli
