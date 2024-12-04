@@ -3,7 +3,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fs::{self},
-    io::{self, Cursor},
+    io::Cursor,
     ops::Deref,
     path::{Path, PathBuf},
 };

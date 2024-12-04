@@ -26,5 +26,5 @@ pub fn link_libraries(libraries: &[Library]) -> Result<Vec<u8>> {
         ))))?,
     )?;
 
-    return linker.encode().map_err(|e| anyhow::anyhow!(e));
+    linker.encode().map_err(|e| anyhow::anyhow!(e))
 }
