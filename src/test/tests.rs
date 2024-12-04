@@ -1,3 +1,5 @@
+#![allow(non_local_definitions)]
+
 use {
     super::{Ctx, Tester, SEED},
     anyhow::{anyhow, Error, Result},
