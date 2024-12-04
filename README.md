@@ -82,6 +82,7 @@ hello = Root(store)
 print(f"component says: {hello.hello(store)}")
 EOF
 ```
+test_change
 
 And finally run it:
 
