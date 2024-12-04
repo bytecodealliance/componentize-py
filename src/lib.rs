@@ -11,8 +11,7 @@ use {
     serde::Deserialize,
     std::{
         collections::HashMap,
-        fs,
-        iter,
+        fs, iter,
         ops::Deref,
         path::{Path, PathBuf},
         str,

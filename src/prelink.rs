@@ -49,9 +49,7 @@ pub fn embedded_helper_utils() -> Result<TempDir> {
     Ok(bundled)
 }
 
-pub fn bundle_libraries(
-    library_path: Vec<(&str, Vec<PathBuf>)>,
-) -> Result<Vec<Library>> {
+pub fn bundle_libraries(library_path: Vec<(&str, Vec<PathBuf>)>) -> Result<Vec<Library>> {
     let mut libraries = vec![
         Library {
             name: "libcomponentize_py_runtime.so".into(),
