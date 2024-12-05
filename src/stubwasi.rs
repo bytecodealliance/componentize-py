@@ -10,9 +10,9 @@ use wasmparser::{FuncType, Parser, Payload, TypeRef};
 
 use crate::Library;
 
-pub fn link_stub_modules(
-    libraries: Vec<Library>,
-) -> Result<Option<(Vec<u8>, impl Fn(u32) -> u32)>, Error> {
+type LinkedStubModules = Option<(Vec<u8>, Box<dyn Fn(u32) -> u32>)>;
+
+pub fn link_stub_modules(libraries: Vec<Library>) -> Result<LinkedStubModules, Error> {
     let mut wasi_imports = HashMap::new();
     let mut linker = wit_component::Linker::default()
         .validate(true)
@@ -47,18 +47,21 @@ pub fn link_stub_modules(
     let new_adapter_count = u32::try_from(wasi_imports.len())?;
     assert!(new_adapter_count >= old_adapter_count);
 
-    Ok(Some((component, move |index: u32| {
-        if index == 0 {
-            // `main` module
-            0
-        } else if index <= new_adapter_count {
-            // adapter module
-            old_adapter_count
-        } else {
-            // one of the other kinds of module
-            index + old_adapter_count - new_adapter_count
-        }
-    })))
+    Ok(Some((
+        component,
+        Box::new(move |index: u32| {
+            if index == 0 {
+                // `main` module
+                0
+            } else if index <= new_adapter_count {
+                // adapter module
+                old_adapter_count
+            } else {
+                // one of the other kinds of module
+                index + old_adapter_count - new_adapter_count
+            }
+        }),
+    )))
 }
 
 fn add_wasi_imports<'a>(

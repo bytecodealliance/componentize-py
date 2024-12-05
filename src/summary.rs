@@ -88,7 +88,7 @@ pub struct MyFunction<'a> {
     pub wit_kind: wit_parser::FunctionKind,
 }
 
-impl<'a> MyFunction<'a> {
+impl MyFunction<'_> {
     fn key(&self) -> WorldKey {
         if let Some(interface) = self.interface.as_ref() {
             WorldKey::Interface(interface.id)
