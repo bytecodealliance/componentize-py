@@ -79,7 +79,11 @@ pub enum Command {
 
 #[derive(clap::Args, Debug)]
 pub struct Componentize {
-    /// The name of a Python module containing the app to wrap
+    /// The name of a Python module containing the app to wrap.
+    ///
+    /// Note that this should not match (any of) the world name(s) you are targeting since `componentize-py` will
+    /// generate code using those name(s), and Python doesn't know how to load two top-level modules with the same
+    /// name.
     pub app_name: String,
 
     /// Specify a directory containing the app and/or its dependencies.  May be specified more than once.
