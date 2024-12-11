@@ -312,6 +312,13 @@ pub async fn componentize(
         .chain(main_world)
         .collect::<IndexSet<_>>();
 
+    if worlds
+        .iter()
+        .any(|&id| app_name == resolve.worlds[id].name.to_snake_case().escape())
+    {
+        bail!("App name `{app_name}` conflicts with world name; please rename your application module.");
+    }
+
     let summary = Summary::try_new(
         &resolve,
         &worlds,
