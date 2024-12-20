@@ -179,4 +179,10 @@ world tests {
   export add: func(a: borrow<float>, b: borrow<float>) -> own<float>;
 
   export read-file: func(path: string) -> result<list<u8>, string>;
+
+  record frame {
+    id: s32,
+  }
+
+  import output: func(frame: frame);
 }

@@ -1986,8 +1986,8 @@ from ..types import Result, Ok, Err, Some
                 "{docs}{python_imports}
 from .types import Result, Ok, Err, Some
 {imports}
-{function_imports}
 {type_exports}
+{function_imports}
 {protocol}
 "
             )?;
