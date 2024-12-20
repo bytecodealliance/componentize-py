@@ -57,6 +57,13 @@ pub struct ThingList(Vec<u8>);
 pub struct ThingString(String);
 pub struct MyFloat(f64);
 
+#[async_trait]
+impl TestsImports for Ctx {
+    async fn output(&mut self, _: Frame) -> Result<()> {
+        unreachable!()
+    }
+}
+
 macro_rules! load_guest_code {
     ($($input_string:expr),*) => {
         &[
