@@ -12,8 +12,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  WASI_SDK_VERSION: 20.46gf3a1f8991535
-  WASI_SDK_RELEASE: wasi-sockets-alpha-5
+  WASI_SDK_VERSION: 25.0
+  WASI_SDK_RELEASE: wasi-sdk-25
 
 permissions:
   contents: write
@@ -57,7 +57,7 @@ jobs:
         shell: bash
         run: |
           cd /tmp
-          curl -LO https://github.com/dicej/wasi-sdk/releases/download/${WASI_SDK_RELEASE}/wasi-sdk-${WASI_SDK_VERSION}-linux.tar.gz
+          curl -LO https://github.com/WebAssembly/wasi-sdk/releases/download/${WASI_SDK_RELEASE}/wasi-sdk-${WASI_SDK_VERSION}-linux.tar.gz
           tar xf wasi-sdk-${WASI_SDK_VERSION}-linux.tar.gz
           mv wasi-sdk-${WASI_SDK_VERSION} /opt/wasi-sdk
 
@@ -182,7 +182,7 @@ jobs:
         shell: bash
         run: |
           cd /tmp
-          curl -LO https://github.com/dicej/wasi-sdk/releases/download/${WASI_SDK_RELEASE}/wasi-sdk-${WASI_SDK_VERSION}-${{ matrix.config.wasiSDK }}.tar.gz
+          curl -LO https://github.com/WebAssembly/wasi-sdk/releases/download/${WASI_SDK_RELEASE}/wasi-sdk-${WASI_SDK_VERSION}-${{ matrix.config.wasiSDK }}.tar.gz
           tar xf wasi-sdk-${WASI_SDK_VERSION}-${{ matrix.config.wasiSDK }}.tar.gz
 
       - name: Install WASI-SDK

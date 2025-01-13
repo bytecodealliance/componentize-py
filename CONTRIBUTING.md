@@ -30,8 +30,8 @@ For Rust, something like this should work once you have `rustup`:
 rustup update
 rustup install nightly
 rustup component add rust-src --toolchain nightly
-rustup target add wasm32-wasip1 wasm32-unknown-unknown
-rustup target add --toolchain nightly wasm32-wasip1 wasm32-unknown-unknown
+rustup target add wasm32-wasip2 wasm32-unknown-unknown
+rustup target add --toolchain nightly wasm32-wasip2 wasm32-unknown-unknown
 ```
 
 ### Building and Running
