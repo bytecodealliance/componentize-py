@@ -48,9 +48,9 @@ variable).  Replace `linux` with `macos` or `mingw` (Windows) below depending on
 your OS.
 
 ```shell
-curl -LO https://github.com/dicej/wasi-sdk/releases/download/wasi-sockets-alpha-5/wasi-sdk-20.46gf3a1f8991535-linux.tar.gz
-tar xf wasi-sdk-20.46gf3a1f8991535-linux.tar.gz
-sudo mv wasi-sdk-20.46gf3a1f8991535 /opt/wasi-sdk
+curl -LO https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-25/wasi-sdk-25.0-x86_64-linux.tar.gz
+tar xf wasi-sdk-25.0-x86_64-linux.tar.gz
+sudo mv wasi-sdk-25.0-x86_64-linux /opt/wasi-sdk
 export WASI_SDK_PATH=/opt/wasi-sdk
 ```
 
