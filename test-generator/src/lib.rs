@@ -799,7 +799,6 @@ world echoes-generated-test {{
 use {{
     super::{{Ctx, Tester, SEED}},
     anyhow::Result,
-    async_trait::async_trait,
     once_cell::sync::Lazy,
     proptest::strategy::{{Just, Strategy}},
     wasmtime::{{
@@ -819,14 +818,12 @@ pub struct Exports {{
    {typed_function_fields}
 }}
 
-#[async_trait]
 impl {PREFIX}::Host for Ctx {{
     {host_functions}
 }}
 
 pub struct Host;
 
-#[async_trait]
 impl super::Host for Host {{
     type World = Exports;
 

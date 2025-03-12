@@ -120,7 +120,8 @@ pub fn has_pointer(resolve: &Resolve, ty: Type) -> bool {
         | Type::U64
         | Type::S64
         | Type::F32
-        | Type::F64 => false,
+        | Type::F64
+        | Type::ErrorContext => false,
         Type::String => true,
         Type::Id(id) => match &resolve.types[id].kind {
             TypeDefKind::Record(record) => record
@@ -164,7 +165,7 @@ pub fn abi(resolve: &Resolve, ty: Type) -> Abi {
             align: 2,
             flattened: vec![ValType::I32],
         },
-        Type::U32 | Type::S32 | Type::Char => Abi {
+        Type::U32 | Type::S32 | Type::Char | Type::ErrorContext => Abi {
             size: 4,
             align: 4,
             flattened: vec![ValType::I32],

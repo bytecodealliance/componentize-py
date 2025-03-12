@@ -25,8 +25,8 @@ use {
     },
     wasm_encoder::ValType,
     wit_parser::{
-        Handle, InterfaceId, Resolve, Result_, Results, Type, TypeDefKind, TypeId, TypeOwner,
-        WorldId, WorldItem, WorldKey,
+        Handle, InterfaceId, Resolve, Result_, Type, TypeDefKind, TypeId, TypeOwner, WorldId,
+        WorldItem, WorldKey,
     },
 };
 
@@ -84,7 +84,7 @@ pub struct MyFunction<'a> {
     pub name: &'a str,
     pub docs: Option<&'a str>,
     pub params: &'a [(String, Type)],
-    pub results: &'a Results,
+    pub result: &'a Option<Type>,
     pub wit_kind: wit_parser::FunctionKind,
 }
 
@@ -128,7 +128,7 @@ impl MyFunction<'_> {
         let mut params =
             abi::record_abi_limit(resolve, self.params.types(), MAX_FLAT_PARAMS).flattened;
 
-        let mut results = abi::record_abi(resolve, self.results.types()).flattened;
+        let mut results = abi::record_abi(resolve, self.result.types()).flattened;
 
         if results.len() > MAX_FLAT_RESULTS {
             params.push(ValType::I32);
@@ -142,7 +142,7 @@ impl MyFunction<'_> {
         match self.kind {
             FunctionKind::Export => (
                 abi::record_abi_limit(resolve, self.params.types(), MAX_FLAT_PARAMS).flattened,
-                abi::record_abi_limit(resolve, self.results.types(), MAX_FLAT_RESULTS).flattened,
+                abi::record_abi_limit(resolve, self.result.types(), MAX_FLAT_RESULTS).flattened,
             ),
             FunctionKind::Import
             | FunctionKind::ResourceNew
@@ -310,7 +310,8 @@ impl<'a> Summary<'a> {
             | Type::S64
             | Type::F32
             | Type::F64
-            | Type::String => (),
+            | Type::String
+            | Type::ErrorContext => (),
             Type::Id(id) => {
                 self.world_types.entry(world).or_default().insert(id);
 
@@ -380,13 +381,13 @@ impl<'a> Summary<'a> {
                             self.resource_directions.insert(id, state.direction);
                             let info = self.resource_info.entry(id).or_default();
 
-                            let make = |kind, params, results| MyFunction {
+                            let make = |kind, params, result| MyFunction {
                                 kind,
                                 interface: state.interface.clone(),
                                 name: ty.name.as_deref().unwrap(),
                                 docs: None,
                                 params,
-                                results,
+                                result,
                                 wit_kind: wit_parser::FunctionKind::Freestanding,
                             };
 
@@ -397,8 +398,8 @@ impl<'a> Summary<'a> {
                                     static DROP_PARAMS: sync::Lazy<[(String, Type); 1]> =
                                         sync::Lazy::new(|| [("handle".to_string(), Type::U32)]);
 
-                                    static DROP_RESULTS: sync::Lazy<Results> =
-                                        sync::Lazy::new(Results::empty);
+                                    static DROP_RESULTS: sync::Lazy<Option<Type>> =
+                                        sync::Lazy::new(|| None);
 
                                     self.push_function(make(
                                         FunctionKind::ResourceDropRemote,
@@ -417,7 +418,7 @@ impl<'a> Summary<'a> {
                                     static NEW_PARAMS: sync::Lazy<[(String, Type); 1]> =
                                         sync::Lazy::new(|| [("rep".to_string(), Type::U32)]);
 
-                                    static NEW_RESULTS: Results = Results::Anon(Type::U32);
+                                    static NEW_RESULTS: Option<Type> = Some(Type::U32);
 
                                     self.push_function(make(
                                         FunctionKind::ResourceNew,
@@ -428,7 +429,7 @@ impl<'a> Summary<'a> {
                                     static REP_PARAMS: sync::Lazy<[(String, Type); 1]> =
                                         sync::Lazy::new(|| [("handle".to_string(), Type::U32)]);
 
-                                    static REP_RESULTS: Results = Results::Anon(Type::U32);
+                                    static REP_RESULTS: Option<Type> = Some(Type::U32);
 
                                     self.push_function(make(
                                         FunctionKind::ResourceRep,
@@ -439,8 +440,8 @@ impl<'a> Summary<'a> {
                                     static DROP_PARAMS: sync::Lazy<[(String, Type); 1]> =
                                         sync::Lazy::new(|| [("handle".to_string(), Type::U32)]);
 
-                                    static DROP_RESULTS: sync::Lazy<Results> =
-                                        sync::Lazy::new(Results::empty);
+                                    static DROP_RESULTS: sync::Lazy<Option<Type>> =
+                                        sync::Lazy::new(|| None);
 
                                     self.push_function(make(
                                         FunctionKind::ResourceDropLocal,
@@ -465,7 +466,7 @@ impl<'a> Summary<'a> {
         name: &'a str,
         docs: Option<&'a str>,
         params: &'a [(String, Type)],
-        results: &'a Results,
+        result: &'a Option<Type>,
         direction: Direction,
         wit_kind: wit_parser::FunctionKind,
         world: WorldId,
@@ -474,7 +475,7 @@ impl<'a> Summary<'a> {
             self.visit_type(ty, world);
         }
 
-        for ty in results.types() {
+        for ty in result.types() {
             self.visit_type(ty, world);
         }
 
@@ -484,7 +485,7 @@ impl<'a> Summary<'a> {
             name,
             docs,
             params,
-            results,
+            result,
             wit_kind: wit_kind.clone(),
         };
 
@@ -498,7 +499,7 @@ impl<'a> Summary<'a> {
                 self.push_function(make(FunctionKind::Export));
                 self.push_function(make(FunctionKind::ExportFromCanon));
                 self.push_function(make(FunctionKind::ExportToCanon));
-                if abi::record_abi(self.resolve, results.types())
+                if abi::record_abi(self.resolve, result.types())
                     .flattened
                     .len()
                     > MAX_FLAT_RESULTS
@@ -595,7 +596,7 @@ impl<'a> Summary<'a> {
                             func_name,
                             func.docs.contents.as_deref(),
                             &func.params,
-                            &func.results,
+                            &func.result,
                             direction,
                             func.kind.clone(),
                             world,
@@ -609,7 +610,7 @@ impl<'a> Summary<'a> {
                         &func.name,
                         func.docs.contents.as_deref(),
                         &func.params,
-                        &func.results,
+                        &func.result,
                         direction,
                         func.kind.clone(),
                         world,
@@ -746,6 +747,7 @@ impl<'a> Summary<'a> {
                             .escape(),
                         name: self.function_name(function),
                     }),
+                    _ => todo!("handle async functions"),
                 });
             }
         }
@@ -786,6 +788,7 @@ impl<'a> Summary<'a> {
                 .unwrap()
                 .to_snake_case()
                 .escape(),
+            _ => todo!("support async functions"),
         }
     }
 
@@ -822,6 +825,7 @@ impl<'a> Summary<'a> {
             wit_parser::FunctionKind::Constructor(_) => (0, Some("self")),
             wit_parser::FunctionKind::Method(_) => (1, Some("self")),
             wit_parser::FunctionKind::Static(_) => (0, Some("cls")),
+            _ => todo!("support async functions"),
         };
 
         let mut type_name = |ty| names.type_name(ty, seen, resource);
@@ -864,7 +868,7 @@ impl<'a> Summary<'a> {
             .collect::<Vec<_>>()
             .join(", ");
 
-        let result_types = function.results.types().collect::<Vec<_>>();
+        let result_types = function.result.types().collect::<Vec<_>>();
 
         let (return_statement, return_type, error) =
             if let wit_parser::FunctionKind::Constructor(_) = function.wit_kind {
@@ -950,7 +954,8 @@ impl<'a> Summary<'a> {
             | Type::S64
             | Type::F32
             | Type::F64
-            | Type::String => (),
+            | Type::String
+            | Type::ErrorContext => (),
             Type::Id(id) => {
                 let ty = &self.resolve.types[id];
                 match &ty.kind {
@@ -1009,7 +1014,7 @@ impl<'a> Summary<'a> {
                                     self.sort(*ty, &mut *sorted, &mut *visited);
                                 }
 
-                                for ty in function.results.types() {
+                                for ty in function.result.types() {
                                     self.sort(ty, &mut *sorted, &mut *visited);
                                 }
                             };
@@ -2034,7 +2039,8 @@ from .types import Result, Ok, Err, Some
             | Type::S64
             | Type::F32
             | Type::F64
-            | Type::String => false,
+            | Type::String
+            | Type::ErrorContext => false,
             Type::Id(id) => match &self.resolve.types[id].kind {
                 TypeDefKind::Record(record) => record
                     .fields
@@ -2102,7 +2108,8 @@ impl<'a> TypeNames<'a> {
             | Type::S8
             | Type::S16
             | Type::S32
-            | Type::S64 => "int".into(),
+            | Type::S64
+            | Type::ErrorContext => "int".into(),
             Type::F32 | Type::F64 => "float".into(),
             Type::Char | Type::String => "str".into(),
             Type::Id(id) => {
@@ -2221,6 +2228,7 @@ fn matches_resource(function: &MyFunction, resource: TypeId, direction: Directio
                 wit_parser::FunctionKind::Method(id)
                 | wit_parser::FunctionKind::Static(id)
                 | wit_parser::FunctionKind::Constructor(id) => *id == resource,
+                _ => todo!("support async functions"),
             }
         }
         _ => false,

@@ -23,7 +23,7 @@ use {
     },
     wasmtime_wasi::{
         pipe::{MemoryInputPipe, MemoryOutputPipe},
-        DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, WasiView,
+        DirPerms, FilePerms, IoView, WasiCtx, WasiCtxBuilder, WasiView,
     },
     wit_parser::{Resolve, TypeDefKind, UnresolvedPackageGroup, WorldId, WorldItem, WorldKey},
 };
@@ -63,6 +63,9 @@ impl WasiView for Ctx {
     fn ctx(&mut self) -> &mut WasiCtx {
         &mut self.wasi
     }
+}
+
+impl IoView for Ctx {
     fn table(&mut self) -> &mut ResourceTable {
         &mut self.table
     }

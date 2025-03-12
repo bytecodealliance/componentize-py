@@ -1,3 +1,8 @@
+#![allow(
+    clippy::useless_conversion,
+    reason = "some pyo3 macros produce code that does this"
+)]
+
 use {
     pyo3::{
         exceptions::PyAssertionError,

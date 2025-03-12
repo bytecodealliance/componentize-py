@@ -3,7 +3,6 @@
 use {
     crate::Ctx,
     anyhow::{anyhow, Result},
-    async_trait::async_trait,
     once_cell::sync::Lazy,
     proptest::{
         prelude::Strategy,
@@ -103,7 +102,6 @@ impl PartialEq<MyF64> for MyF64 {
     }
 }
 
-#[async_trait]
 trait Host {
     type World;
 

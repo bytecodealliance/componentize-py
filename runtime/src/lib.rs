@@ -1,4 +1,9 @@
 #![deny(warnings)]
+#![allow(
+    clippy::useless_conversion,
+    reason = "some pyo3 macros produce code that does this"
+)]
+#![allow(static_mut_refs, reason = "wit-bindgen produces code that does this")]
 
 use {
     anyhow::{Error, Result},

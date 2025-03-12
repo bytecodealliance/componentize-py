@@ -3,14 +3,13 @@
 use {
     super::{Ctx, Tester, SEED},
     anyhow::{anyhow, Error, Result},
-    async_trait::async_trait,
     once_cell::sync::Lazy,
     std::str,
     wasmtime::{
         component::{InstancePre, Linker, Resource, ResourceAny},
         Store,
     },
-    wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder, WasiView},
+    wasmtime_wasi::{DirPerms, FilePerms, IoView, WasiCtxBuilder},
 };
 
 wasmtime::component::bindgen!({
@@ -57,7 +56,6 @@ pub struct ThingList(Vec<u8>);
 pub struct ThingString(String);
 pub struct MyFloat(f64);
 
-#[async_trait]
 impl TestsImports for Ctx {
     async fn output(&mut self, _: Frame) -> Result<()> {
         unreachable!()
@@ -87,7 +85,6 @@ const GUEST_CODE: &[(&str, &str)] = load_guest_code!(
 
 struct Host;
 
-#[async_trait]
 impl super::Host for Host {
     type World = Tests;
 
@@ -99,13 +96,12 @@ impl super::Host for Host {
     }
 
     async fn instantiate_pre(store: &mut Store<Ctx>, pre: InstancePre<Ctx>) -> Result<Self::World> {
-        Ok(TestsPre::new(pre)?.instantiate_async(store).await?)
+        TestsPre::new(pre)?.instantiate_async(store).await
     }
 }
 
 struct FooHost;
 
-#[async_trait]
 impl super::Host for FooHost {
     type World = foo_sdk::FooWorld;
 
@@ -114,15 +110,14 @@ impl super::Host for FooHost {
     }
 
     async fn instantiate_pre(store: &mut Store<Ctx>, pre: InstancePre<Ctx>) -> Result<Self::World> {
-        Ok(foo_sdk::FooWorldPre::new(pre)?
+        foo_sdk::FooWorldPre::new(pre)?
             .instantiate_async(store)
-            .await?)
+            .await
     }
 }
 
 struct BarHost;
 
-#[async_trait]
 impl super::Host for BarHost {
     type World = bar_sdk::BarWorld;
 
@@ -131,9 +126,9 @@ impl super::Host for BarHost {
     }
 
     async fn instantiate_pre(store: &mut Store<Ctx>, pre: InstancePre<Ctx>) -> Result<Self::World> {
-        Ok(bar_sdk::BarWorldPre::new(pre)?
+        bar_sdk::BarWorldPre::new(pre)?
             .instantiate_async(store)
-            .await?)
+            .await
     }
 }
 
@@ -166,7 +161,6 @@ fn simple_export() -> Result<()> {
 
 #[test]
 fn simple_import_and_export() -> Result<()> {
-    #[async_trait]
     impl componentize_py::test::simple_import_and_export::Host for Ctx {
         async fn foo(&mut self, v: u32) -> Result<u32> {
             Ok(v + 2)
@@ -191,7 +185,6 @@ fn simple_import_and_export() -> Result<()> {
 fn resource_import_and_export() -> Result<()> {
     use componentize_py::test::resource_import_and_export::{Host, HostThing};
 
-    #[async_trait]
     impl HostThing for Ctx {
         async fn new(&mut self, v: u32) -> Result<Resource<ThingU32>> {
             Ok(self.table().push(ThingU32(v + 8))?)
@@ -260,7 +253,6 @@ fn resource_import_and_export() -> Result<()> {
 fn resource_borrow_import() -> Result<()> {
     use componentize_py::test::resource_borrow_import::{Host, HostThing};
 
-    #[async_trait]
     impl HostThing for Ctx {
         async fn new(&mut self, v: u32) -> Result<Resource<ThingU32>> {
             Ok(self.table().push(ThingU32(v + 2))?)
@@ -271,7 +263,6 @@ fn resource_borrow_import() -> Result<()> {
         }
     }
 
-    #[async_trait]
     impl Host for Ctx {
         async fn foo(&mut self, this: Resource<ThingU32>) -> Result<u32> {
             Ok(self.table().get(&this)?.0 + 3)
@@ -307,7 +298,6 @@ fn resource_borrow_export() -> Result<()> {
 fn resource_with_lists() -> Result<()> {
     use componentize_py::test::resource_with_lists::{Host, HostThing};
 
-    #[async_trait]
     impl HostThing for Ctx {
         async fn new(&mut self, mut v: Vec<u8>) -> Result<Resource<ThingList>> {
             v.extend(b" HostThing.new");
@@ -373,7 +363,6 @@ fn resource_aggregates() -> Result<()> {
             Host, HostThing, L1, L2, R1, R2, R3, T1, T2, V1, V2,
         };
 
-        #[async_trait]
         impl HostThing for Ctx {
             async fn new(&mut self, v: u32) -> Result<Resource<ThingU32>> {
                 Ok(self.table().push(ThingU32(v + 2))?)
@@ -384,7 +373,6 @@ fn resource_aggregates() -> Result<()> {
             }
         }
 
-        #[async_trait]
         impl Host for Ctx {
             async fn foo(
                 &mut self,
@@ -479,7 +467,6 @@ fn resource_alias() -> Result<()> {
     {
         use componentize_py::test::resource_alias1::{Foo, Host, HostThing};
 
-        #[async_trait]
         impl HostThing for Ctx {
             async fn new(&mut self, s: String) -> Result<Resource<ThingString>> {
                 Ok(self.table().push(ThingString(s + " HostThing::new"))?)
@@ -494,7 +481,6 @@ fn resource_alias() -> Result<()> {
             }
         }
 
-        #[async_trait]
         impl Host for Ctx {
             async fn a(&mut self, f: Foo) -> Result<Vec<Resource<ThingString>>> {
                 Ok(vec![f.thing])
@@ -505,7 +491,6 @@ fn resource_alias() -> Result<()> {
     {
         use componentize_py::test::resource_alias2::{Bar, Foo, Host, Thing};
 
-        #[async_trait]
         impl Host for Ctx {
             async fn b(&mut self, f: Foo, g: Bar) -> Result<Vec<Resource<Thing>>> {
                 Ok(vec![f.thing, g.thing])
@@ -599,7 +584,6 @@ fn resource_floats() -> Result<()> {
     {
         use resource_floats_imports::{Host, HostFloat};
 
-        #[async_trait]
         impl HostFloat for Ctx {
             async fn new(&mut self, v: f64) -> Result<Resource<MyFloat>> {
                 Ok(self.table().push(MyFloat(v + 2_f64))?)
@@ -625,7 +609,6 @@ fn resource_floats() -> Result<()> {
     {
         use componentize_py::test::resource_floats::{Host, HostFloat};
 
-        #[async_trait]
         impl HostFloat for Ctx {
             async fn new(&mut self, v: f64) -> Result<Resource<MyFloat>> {
                 Ok(self.table().push(MyFloat(v + 1_f64))?)
@@ -690,7 +673,6 @@ fn resource_borrow_in_record() -> Result<()> {
     {
         use componentize_py::test::resource_borrow_in_record::{Foo, Host, HostThing};
 
-        #[async_trait]
         impl HostThing for Ctx {
             async fn new(&mut self, v: String) -> Result<Resource<ThingString>> {
                 Ok(self.table().push(ThingString(v + " HostThing::new"))?)
@@ -705,7 +687,6 @@ fn resource_borrow_in_record() -> Result<()> {
             }
         }
 
-        #[async_trait]
         impl Host for Ctx {
             async fn test(&mut self, list: Vec<Foo>) -> Result<Vec<Resource<ThingString>>> {
                 list.into_iter()

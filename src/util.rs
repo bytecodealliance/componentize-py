@@ -1,6 +1,6 @@
 use {
-    std::{iter, ops::Deref},
-    wit_parser::{Flags, FlagsRepr, Results, Type},
+    std::iter,
+    wit_parser::{Flags, FlagsRepr, Type},
 };
 
 pub trait Types {
@@ -18,12 +18,9 @@ impl Types for &[(String, Type)] {
     }
 }
 
-impl Types for Results {
+impl Types for Option<Type> {
     fn types(&self) -> Box<dyn Iterator<Item = Type>> {
-        match self {
-            Self::Named(params) => params.deref().types(),
-            Self::Anon(ty) => Box::new(iter::once(*ty)),
-        }
+        Box::new((*self).into_iter())
     }
 }
 
