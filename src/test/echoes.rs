@@ -1,7 +1,6 @@
 use {
     super::{Ctx, MyF32, MyF64, Tester, SEED},
     anyhow::Result,
-    async_trait::async_trait,
     once_cell::sync::Lazy,
     proptest::strategy::{Just, Strategy},
     wasmtime::{
@@ -17,7 +16,6 @@ wasmtime::component::bindgen!({
     trappable_imports: true,
 });
 
-#[async_trait]
 impl componentize_py::test::echoes::Host for Ctx {
     async fn echo_nothing(&mut self) -> Result<()> {
         Ok(())
@@ -187,7 +185,6 @@ impl componentize_py::test::echoes::Host for Ctx {
 
 struct Host;
 
-#[async_trait]
 impl super::Host for Host {
     type World = EchoesTest;
 
@@ -198,7 +195,7 @@ impl super::Host for Host {
     }
 
     async fn instantiate_pre(store: &mut Store<Ctx>, pre: InstancePre<Ctx>) -> Result<Self::World> {
-        Ok(EchoesTestPre::new(pre)?.instantiate_async(store).await?)
+        EchoesTestPre::new(pre)?.instantiate_async(store).await
     }
 }
 

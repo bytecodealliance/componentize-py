@@ -9,7 +9,7 @@ use {
     once_cell::sync::Lazy,
     std::collections::HashMap,
     wasm_encoder::{BlockType, Instruction as Ins, MemArg, ValType},
-    wit_parser::{Handle, Resolve, Results, Type, TypeDefKind, TypeId},
+    wit_parser::{Handle, Resolve, Type, TypeDefKind, TypeId},
 };
 
 // Assume Wasm32
@@ -184,7 +184,7 @@ pub struct FunctionBindgen<'a> {
     stack_pointer: u32,
     types: &'a IndexSet<TypeId>,
     params: &'a [(String, Type)],
-    results: &'a Results,
+    result: &'a Option<Type>,
     params_abi: Abi,
     results_abi: Abi,
     local_stack: Vec<bool>,
@@ -204,9 +204,9 @@ impl<'a> FunctionBindgen<'a> {
             stack_pointer,
             types: &summary.types,
             params: function.params,
-            results: function.results,
+            result: function.result,
             params_abi: abi::record_abi(summary.resolve, function.params.types()),
-            results_abi: abi::record_abi(summary.resolve, function.results.types()),
+            results_abi: abi::record_abi(summary.resolve, function.result.types()),
             local_types: Vec::new(),
             local_stack: Vec::new(),
             instructions: Vec::new(),
@@ -332,7 +332,7 @@ impl<'a> FunctionBindgen<'a> {
                 })
                 .collect::<Vec<_>>();
 
-            self.from_canon_record(self.results.types(), context, &locals, output);
+            self.from_canon_record(self.result.types(), context, &locals, output);
 
             for (local, ty) in locals.iter().zip(&self.results_abi.flattened.clone()).rev() {
                 self.pop_local(*local, *ty);
@@ -343,7 +343,7 @@ impl<'a> FunctionBindgen<'a> {
             self.get_stack();
             self.push(Ins::LocalSet(source));
 
-            self.load_record(self.results.types(), context, source, output);
+            self.load_record(self.result.types(), context, source, output);
 
             self.pop_local(source, ValType::I32);
             self.pop_stack(self.results_abi.size);
@@ -369,7 +369,7 @@ impl<'a> FunctionBindgen<'a> {
     }
 
     pub fn compile_export(&mut self, index: i32, from_canon: i32, to_canon: i32) {
-        let return_style = match self.results.types().collect::<Vec<_>>().as_slice() {
+        let return_style = match self.result.types().collect::<Vec<_>>().as_slice() {
             [Type::Id(id)] if matches!(&self.resolve.types[*id].kind, TypeDefKind::Result(_)) => {
                 ReturnStyle::Result
             }
@@ -429,7 +429,7 @@ impl<'a> FunctionBindgen<'a> {
             self.get_stack();
             self.push(Ins::LocalSet(source));
 
-            self.load_copy_record(self.results.types(), source);
+            self.load_copy_record(self.result.types(), source);
 
             self.pop_local(source, ValType::I32);
 
@@ -462,7 +462,7 @@ impl<'a> FunctionBindgen<'a> {
 
         let mut store_offset = 0;
         let mut load_offset = 0;
-        for ty in self.results.types() {
+        for ty in self.result.types() {
             let abi = abi::abi(self.resolve, ty);
             store_offset = abi::align(store_offset, abi.align);
 
@@ -496,7 +496,7 @@ impl<'a> FunctionBindgen<'a> {
             // Arg 0: *mut MyResults
             let value = 0;
 
-            self.free_stored_record(self.results.types(), value);
+            self.free_stored_record(self.result.types(), value);
 
             self.push(Ins::LocalGet(value));
             self.push(Ins::I32Const(self.results_abi.size.try_into().unwrap()));
@@ -619,7 +619,7 @@ impl<'a> FunctionBindgen<'a> {
                     *IMPORTS.get("componentize-py#ToCanonI32").unwrap(),
                 ));
             }
-            Type::U8 | Type::U16 | Type::U32 => {
+            Type::U8 | Type::U16 | Type::U32 | Type::ErrorContext => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value));
                 self.push(Ins::Call(
@@ -920,7 +920,7 @@ impl<'a> FunctionBindgen<'a> {
                 self.to_canon(ty, context, value);
                 self.push(Ins::I32Store16(mem_arg(0, 1)));
             }
-            Type::U32 | Type::S32 => {
+            Type::U32 | Type::S32 | Type::ErrorContext => {
                 self.push(Ins::LocalGet(destination));
                 self.to_canon(ty, context, value);
                 self.push(Ins::I32Store(mem_arg(0, 2)));
@@ -1212,7 +1212,7 @@ impl<'a> FunctionBindgen<'a> {
                 self.push(Ins::LocalGet(source[0]));
                 self.push(Ins::I32Store16(mem_arg(0, 1)));
             }
-            Type::U32 | Type::S32 | Type::Char => {
+            Type::U32 | Type::S32 | Type::Char | Type::ErrorContext => {
                 self.push(Ins::LocalGet(destination));
                 self.push(Ins::LocalGet(source[0]));
                 self.push(Ins::I32Store(mem_arg(0, 2)));
@@ -1458,7 +1458,7 @@ impl<'a> FunctionBindgen<'a> {
                     *IMPORTS.get("componentize-py#FromCanonI32").unwrap(),
                 ));
             }
-            Type::U8 | Type::U16 | Type::U32 => {
+            Type::U8 | Type::U16 | Type::U32 | Type::ErrorContext => {
                 self.push(Ins::LocalGet(context));
                 self.push(Ins::LocalGet(value[0]));
                 self.push(Ins::Call(
@@ -1793,7 +1793,7 @@ impl<'a> FunctionBindgen<'a> {
                 self.from_canon(ty, context, &[value]);
                 self.pop_local(value, ValType::I32);
             }
-            Type::U32 | Type::S32 | Type::Char => {
+            Type::U32 | Type::S32 | Type::Char | Type::ErrorContext => {
                 let value = self.push_local(ValType::I32);
                 self.push(Ins::LocalGet(source));
                 self.push(Ins::I32Load(mem_arg(0, 2)));
@@ -2091,7 +2091,7 @@ impl<'a> FunctionBindgen<'a> {
                 self.push(Ins::LocalGet(source));
                 self.push(Ins::I32Load16S(mem_arg(0, 1)));
             }
-            Type::U32 | Type::S32 | Type::Char => {
+            Type::U32 | Type::S32 | Type::Char | Type::ErrorContext => {
                 self.push(Ins::LocalGet(source));
                 self.push(Ins::I32Load(mem_arg(0, 2)));
             }
@@ -2307,7 +2307,8 @@ impl<'a> FunctionBindgen<'a> {
             | Type::U64
             | Type::S64
             | Type::F32
-            | Type::F64 => {}
+            | Type::F64
+            | Type::ErrorContext => {}
 
             Type::String => {
                 self.push(Ins::LocalGet(value[0]));
@@ -2466,7 +2467,8 @@ impl<'a> FunctionBindgen<'a> {
             | Type::U64
             | Type::S64
             | Type::F32
-            | Type::F64 => {}
+            | Type::F64
+            | Type::ErrorContext => {}
 
             Type::String => {
                 self.push(Ins::LocalGet(value));

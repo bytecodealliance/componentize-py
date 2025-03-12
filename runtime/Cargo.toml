@@ -12,4 +12,5 @@ once_cell = "1.20.2"
 pyo3 = { version = "0.22.5", features = ["abi3-py312", "num-bigint"] }
 componentize-py-shared = { path = "../shared" }
 num-bigint = "0.4.6"
-wit-bindgen = "0.34.0"
+wit-bindgen = { version = "0.40.0", default-features = false, features = ["macros", "realloc"] }
+wit-bindgen-rt = { version = "0.40.0" }
