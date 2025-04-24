@@ -1,5 +1,5 @@
 use std::{
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
     process::Stdio,
     thread::sleep,
@@ -77,7 +77,19 @@ fn http_example() -> anyhow::Result<()> {
     let mut handle = std::process::Command::new("wasmtime")
         .current_dir(&path)
         .args(["serve", "--wasi", "common", "http.wasm"])
+        .stdout(Stdio::piped())
         .spawn()?;
+
+    let mut buf = [0; 64];
+    let mut stdout = handle.stdout.take().unwrap();
+
+    // Read at least one byte from stdout
+    retry(|| -> anyhow::Result<()> {
+        if buf.is_empty() && stdout.read(&mut buf)? == 0 {
+            return Err(anyhow::anyhow!("No data"));
+        }
+        Ok(())
+    })?;
 
     let content = "’Twas brillig, and the slithy toves
         Did gyre and gimble in the wabe:
@@ -272,8 +284,8 @@ fn tcp_example() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn retry<T>(func: impl Fn() -> anyhow::Result<T>) -> anyhow::Result<T> {
-    for i in 0..10 {
+fn retry<T>(mut func: impl FnMut() -> anyhow::Result<T>) -> anyhow::Result<T> {
+    for i in 0..5 {
         match func() {
             Ok(t) => {
                 return Ok(t);
