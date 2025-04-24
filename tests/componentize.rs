@@ -5,8 +5,10 @@ use std::{
 };
 
 use assert_cmd::Command;
+use flate2::bufread::GzDecoder;
 use fs_extra::dir::CopyOptions;
 use predicates::prelude::{predicate, PredicateBooleanExt};
+use tar::Archive;
 
 #[test]
 fn cli_example() -> anyhow::Result<()> {
@@ -139,7 +141,7 @@ fn matrix_math_example() -> anyhow::Result<()> {
     )?;
     let path = dir.path().join("matrix-math");
 
-    install_numpy(&path);
+    install_numpy(&path)?;
 
     Command::cargo_bin("componentize-py")?
         .current_dir(&path)
@@ -292,19 +294,14 @@ fn venv_path(path: &Path) -> PathBuf {
         .join(if cfg!(windows) { "Scripts" } else { "bin" })
 }
 
-fn install_numpy(path: &Path) {
-    Command::new("curl")
-        .current_dir(path)
-        .args([
-            "-OL",
-            "https://github.com/dicej/wasi-wheels/releases/download/v0.0.1/numpy-wasi.tar.gz",
-        ])
-        .assert()
-        .success();
+fn install_numpy(path: &Path) -> anyhow::Result<()> {
+    let bytes = reqwest::blocking::get(
+        "https://github.com/dicej/wasi-wheels/releases/download/v0.0.1/numpy-wasi.tar.gz",
+    )?
+    .error_for_status()?
+    .bytes()?;
 
-    Command::new("tar")
-        .current_dir(path)
-        .args(["xf", "numpy-wasi.tar.gz"])
-        .assert()
-        .success();
+    Archive::new(GzDecoder::new(&bytes[..])).unpack(path)?;
+
+    Ok(())
 }

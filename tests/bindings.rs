@@ -4,8 +4,10 @@ use std::{
 };
 
 use assert_cmd::{assert::Assert, Command};
+use flate2::bufread::GzDecoder;
 use fs_extra::dir::CopyOptions;
 use predicates::{prelude::predicate, Predicate};
+use tar::Archive;
 
 #[test]
 fn lint_cli_bindings() -> anyhow::Result<()> {
@@ -66,7 +68,7 @@ fn lint_matrix_math_bindings() -> anyhow::Result<()> {
     )?;
     let path = dir.path().join("matrix-math");
 
-    install_numpy(&path);
+    install_numpy(&path)?;
 
     generate_bindings(&path, "matrix-math")?;
 
@@ -165,19 +167,14 @@ fn venv_path(path: &Path) -> PathBuf {
         .join(if cfg!(windows) { "Scripts" } else { "bin" })
 }
 
-fn install_numpy(path: &Path) {
-    Command::new("curl")
-        .current_dir(path)
-        .args([
-            "-OL",
-            "https://github.com/dicej/wasi-wheels/releases/download/v0.0.1/numpy-wasi.tar.gz",
-        ])
-        .assert()
-        .success();
+fn install_numpy(path: &Path) -> anyhow::Result<()> {
+    let bytes = reqwest::blocking::get(
+        "https://github.com/dicej/wasi-wheels/releases/download/v0.0.1/numpy-wasi.tar.gz",
+    )?
+    .error_for_status()?
+    .bytes()?;
 
-    Command::new("tar")
-        .current_dir(path)
-        .args(["xf", "numpy-wasi.tar.gz"])
-        .assert()
-        .success();
+    Archive::new(GzDecoder::new(&bytes[..])).unpack(path)?;
+
+    Ok(())
 }
