@@ -2,12 +2,14 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     process::Stdio,
+    thread::sleep,
+    time::Duration,
 };
 
 use assert_cmd::Command;
 use flate2::bufread::GzDecoder;
 use fs_extra::dir::CopyOptions;
-use predicates::prelude::{predicate, PredicateBooleanExt};
+use predicates::prelude::predicate;
 use tar::Archive;
 
 #[test]
@@ -83,48 +85,55 @@ All mimsy were the borogoves,
         And the mome raths outgrabe.
 ";
 
-    Command::new("curl")
-        .current_dir(&path)
-        .args([
-            "-i",
-            "-H",
-            "content-type: text/plain",
-            "--retry-connrefused",
-            "--retry",
-            "5",
-            "--data-binary",
-            "@-",
-            "http://127.0.0.1:8080/echo",
-        ])
-        .write_stdin(content)
-        .assert()
-        .success()
-        .stdout(predicate::str::ends_with(content));
+    let client = reqwest::blocking::Client::new();
 
-    Command::new("curl")
-        .current_dir(&path)
-        .args([
-            "-i",
-            "-H",
-            "url: https://webassembly.github.io/spec/core/",
-            "-H",
-            "url: https://www.w3.org/groups/wg/wasm/",
-            "-H",
-            "url: https://bytecodealliance.org/",
-            "--retry-connrefused",
-            "--retry",
-            "5",
-            "http://127.0.0.1:8080/hash-all",
-        ])
-        .assert()
-        .success()
-        .stdout(
-            predicate::str::contains("https://webassembly.github.io/spec/core/:").and(
-                predicate::str::contains("https://bytecodealliance.org/:").and(
-                    predicate::str::contains("https://www.w3.org/groups/wg/wasm/:"),
-                ),
-            ),
-        );
+    fn retry(func: impl Fn() -> anyhow::Result<String>) -> anyhow::Result<String> {
+        for i in 0..5 {
+            match func() {
+                Ok(text) => {
+                    return Ok(text);
+                }
+                Err(err) => {
+                    if i == 4 {
+                        return Err(err.into());
+                    } else {
+                        sleep(Duration::from_secs(1));
+                        continue;
+                    }
+                }
+            }
+        }
+        unreachable!()
+    }
+
+    let echo = || -> anyhow::Result<String> {
+        Ok(client
+            .post("http://127.0.0.1:8080/echo")
+            .header("content-type", "text/plain")
+            .body(content)
+            .send()?
+            .error_for_status()?
+            .text()?)
+    };
+
+    let text = retry(echo)?;
+    assert!(text.ends_with(&content));
+
+    let hash_all = || -> anyhow::Result<String> {
+        Ok(client
+            .get("http://127.0.0.1:8080/hash-all")
+            .header("url", "https://webassembly.github.io/spec/core/")
+            .header("url", "https://www.w3.org/groups/wg/wasm/")
+            .header("url", "https://bytecodealliance.org/")
+            .send()?
+            .error_for_status()?
+            .text()?)
+    };
+
+    let text = retry(hash_all)?;
+    assert!(text.contains("https://webassembly.github.io/spec/core/:"));
+    assert!(text.contains("https://bytecodealliance.org/:"));
+    assert!(text.contains("https://www.w3.org/groups/wg/wasm/:"));
 
     handle.kill()?;
 
