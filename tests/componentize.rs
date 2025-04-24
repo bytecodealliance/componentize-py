@@ -87,25 +87,6 @@ All mimsy were the borogoves,
 
     let client = reqwest::blocking::Client::new();
 
-    fn retry(func: impl Fn() -> anyhow::Result<String>) -> anyhow::Result<String> {
-        for i in 0..5 {
-            match func() {
-                Ok(text) => {
-                    return Ok(text);
-                }
-                Err(err) => {
-                    if i == 4 {
-                        return Err(err.into());
-                    } else {
-                        sleep(Duration::from_secs(1));
-                        continue;
-                    }
-                }
-            }
-        }
-        unreachable!()
-    }
-
     let echo = || -> anyhow::Result<String> {
         Ok(client
             .post("http://127.0.0.1:8080/echo")
@@ -238,7 +219,6 @@ fn sandbox_example() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
 #[test]
 fn tcp_example() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
@@ -265,11 +245,7 @@ fn tcp_example() -> anyhow::Result<()> {
         .success()
         .stdout("Component built successfully\n");
 
-    let mut nc_handle = std::process::Command::new("nc")
-        .current_dir(&path)
-        .args(["-l", "127.0.0.1", "3456"])
-        .stdin(Stdio::piped())
-        .spawn()?;
+    let listener = std::net::TcpListener::bind("127.0.0.1:3456")?;
 
     let tcp_handle = std::process::Command::new("wasmtime")
         .current_dir(&path)
@@ -283,12 +259,10 @@ fn tcp_example() -> anyhow::Result<()> {
         .stdout(Stdio::piped())
         .spawn()?;
 
-    let mut nc_std_in = nc_handle.stdin.take().unwrap();
-
-    nc_std_in.write_all(b"hello")?;
+    let (mut stream, _) = listener.accept()?;
+    stream.write_all(b"hello")?;
 
     let output = tcp_handle.wait_with_output()?;
-    nc_handle.kill()?;
 
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
@@ -296,6 +270,25 @@ fn tcp_example() -> anyhow::Result<()> {
     );
 
     Ok(())
+}
+
+fn retry<T>(func: impl Fn() -> anyhow::Result<T>) -> anyhow::Result<T> {
+    for i in 0..10 {
+        match func() {
+            Ok(t) => {
+                return Ok(t);
+            }
+            Err(err) => {
+                if i == 4 {
+                    return Err(err);
+                } else {
+                    sleep(Duration::from_secs(1));
+                    continue;
+                }
+            }
+        }
+    }
+    unreachable!()
 }
 
 fn venv_path(path: &Path) -> PathBuf {
