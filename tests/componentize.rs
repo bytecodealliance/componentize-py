@@ -77,19 +77,25 @@ fn http_example() -> anyhow::Result<()> {
     let mut handle = std::process::Command::new("wasmtime")
         .current_dir(&path)
         .args(["serve", "--wasi", "common", "http.wasm"])
-        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()?;
 
-    let mut buf = [0; 64];
-    let mut stdout = handle.stdout.take().unwrap();
+    let mut buf = [0; 36];
+    let mut stderr = handle.stderr.take().unwrap();
 
-    // Read at least one byte from stdout
-    retry(|| -> anyhow::Result<()> {
-        if buf.is_empty() && stdout.read(&mut buf)? == 0 {
-            return Err(anyhow::anyhow!("No data"));
-        }
-        Ok(())
-    })?;
+    // Read until "Serving HTTP" shows up
+    retry(
+        || -> anyhow::Result<()> {
+            if stderr.read(&mut buf)? == 0 {
+                return Err(anyhow::anyhow!("No data"));
+            }
+            if !String::from_utf8(buf.to_vec())?.contains("Serving HTTP on http://0.0.0.0:8080/") {
+                return Err(anyhow::anyhow!("Wrong output"));
+            }
+            Ok(())
+        },
+        10,
+    )?;
 
     let content = "’Twas brillig, and the slithy toves
         Did gyre and gimble in the wabe:
@@ -109,7 +115,7 @@ All mimsy were the borogoves,
             .text()?)
     };
 
-    let text = retry(echo)?;
+    let text = retry(echo, 5)?;
     assert!(text.ends_with(&content));
 
     let hash_all = || -> anyhow::Result<String> {
@@ -123,7 +129,7 @@ All mimsy were the borogoves,
             .text()?)
     };
 
-    let text = retry(hash_all)?;
+    let text = retry(hash_all, 5)?;
     assert!(text.contains("https://webassembly.github.io/spec/core/:"));
     assert!(text.contains("https://bytecodealliance.org/:"));
     assert!(text.contains("https://www.w3.org/groups/wg/wasm/:"));
@@ -284,14 +290,14 @@ fn tcp_example() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn retry<T>(mut func: impl FnMut() -> anyhow::Result<T>) -> anyhow::Result<T> {
-    for i in 0..5 {
+fn retry<T>(mut func: impl FnMut() -> anyhow::Result<T>, times: usize) -> anyhow::Result<T> {
+    for i in 0..times {
         match func() {
             Ok(t) => {
                 return Ok(t);
             }
             Err(err) => {
-                if i == 4 {
+                if i == times - 1 {
                     return Err(err);
                 } else {
                     sleep(Duration::from_secs(1));
