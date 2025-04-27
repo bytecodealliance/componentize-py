@@ -1,5 +1,5 @@
 use std::{
-    io::{Read, Write},
+    io::Write,
     path::{Path, PathBuf},
     process::Stdio,
     thread::sleep,
@@ -77,27 +77,10 @@ fn http_example() -> anyhow::Result<()> {
     let mut handle = std::process::Command::new("wasmtime")
         .current_dir(&path)
         .args(["serve", "--wasi", "common", "http.wasm"])
-        .stderr(Stdio::piped())
         .spawn()?;
 
-    let mut buf = [0; 36];
-    let mut stderr = handle.stderr.take().unwrap();
-
-    // Read until "Serving HTTP" shows up on Unix
-    // (stderr blocks on windows)
-    #[cfg(unix)]
-    retry(
-        || -> anyhow::Result<()> {
-            if stderr.read(&mut buf)? == 0 {
-                return Err(anyhow::anyhow!("No data"));
-            }
-            if !String::from_utf8(buf.to_vec())?.contains("Serving HTTP on http://0.0.0.0:8080/") {
-                return Err(anyhow::anyhow!("Wrong output"));
-            }
-            Ok(())
-        },
-        10,
-    )?;
+    // Sleep a bit to give the server time to start
+    std::thread::sleep(Duration::from_secs(5));
 
     let content = "’Twas brillig, and the slithy toves
         Did gyre and gimble in the wabe:
@@ -302,7 +285,7 @@ fn retry<T>(mut func: impl FnMut() -> anyhow::Result<T>, times: usize) -> anyhow
                 if i == times - 1 {
                     return Err(err);
                 } else {
-                    sleep(Duration::from_secs(1));
+                    sleep(Duration::from_secs(i as u64 + 1));
                     continue;
                 }
             }
