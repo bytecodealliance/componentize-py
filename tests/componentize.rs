@@ -83,7 +83,9 @@ fn http_example() -> anyhow::Result<()> {
     let mut buf = [0; 36];
     let mut stderr = handle.stderr.take().unwrap();
 
-    // Read until "Serving HTTP" shows up
+    // Read until "Serving HTTP" shows up on Unix
+    // (stderr blocks on windows)
+    #[cfg(unix)]
     retry(
         || -> anyhow::Result<()> {
             if stderr.read(&mut buf)? == 0 {
