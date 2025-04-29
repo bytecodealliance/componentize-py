@@ -18,3 +18,4 @@ examples/cli/cli.wasm
 examples/cli/command
 examples/sandbox/sandbox
 examples/sandbox/sandbox.wasm
+wasi-sdk

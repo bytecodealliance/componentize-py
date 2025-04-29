@@ -79,9 +79,6 @@ fn http_example() -> anyhow::Result<()> {
         .args(["serve", "--wasi", "common", "http.wasm"])
         .spawn()?;
 
-    // Sleep a bit to give the server time to start
-    std::thread::sleep(Duration::from_secs(5));
-
     let content = "’Twas brillig, and the slithy toves
         Did gyre and gimble in the wabe:
 All mimsy were the borogoves,
@@ -90,7 +87,7 @@ All mimsy were the borogoves,
 
     let client = reqwest::blocking::Client::new();
 
-    let echo = || -> anyhow::Result<String> {
+    let text = retry(|| {
         Ok(client
             .post("http://127.0.0.1:8080/echo")
             .header("content-type", "text/plain")
@@ -98,12 +95,10 @@ All mimsy were the borogoves,
             .send()?
             .error_for_status()?
             .text()?)
-    };
-
-    let text = retry(echo, 5)?;
+    })?;
     assert!(text.ends_with(&content));
 
-    let hash_all = || -> anyhow::Result<String> {
+    let text = retry(|| {
         Ok(client
             .get("http://127.0.0.1:8080/hash-all")
             .header("url", "https://webassembly.github.io/spec/core/")
@@ -112,9 +107,7 @@ All mimsy were the borogoves,
             .send()?
             .error_for_status()?
             .text()?)
-    };
-
-    let text = retry(hash_all, 5)?;
+    })?;
     assert!(text.contains("https://webassembly.github.io/spec/core/:"));
     assert!(text.contains("https://bytecodealliance.org/:"));
     assert!(text.contains("https://www.w3.org/groups/wg/wasm/:"));
@@ -275,7 +268,8 @@ fn tcp_example() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn retry<T>(mut func: impl FnMut() -> anyhow::Result<T>, times: usize) -> anyhow::Result<T> {
+fn retry<T>(mut func: impl FnMut() -> anyhow::Result<T>) -> anyhow::Result<T> {
+    let times = 8;
     for i in 0..times {
         match func() {
             Ok(t) => {
@@ -285,7 +279,7 @@ fn retry<T>(mut func: impl FnMut() -> anyhow::Result<T>, times: usize) -> anyhow
                 if i == times - 1 {
                     return Err(err);
                 } else {
-                    sleep(Duration::from_secs(i as u64 + 1));
+                    sleep(Duration::from_millis(2_u64.pow(i) * 100));
                     continue;
                 }
             }
