@@ -8,6 +8,10 @@ on:
       - "CONTRIBUTING.md"
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   WASI_SDK_VERSION: 20.46gf3a1f8991535

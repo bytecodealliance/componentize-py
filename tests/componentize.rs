@@ -2,11 +2,15 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     process::Stdio,
+    thread::sleep,
+    time::Duration,
 };
 
 use assert_cmd::Command;
+use flate2::bufread::GzDecoder;
 use fs_extra::dir::CopyOptions;
-use predicates::prelude::{predicate, PredicateBooleanExt};
+use predicates::prelude::predicate;
+use tar::Archive;
 
 #[test]
 fn cli_example() -> anyhow::Result<()> {
@@ -81,48 +85,32 @@ All mimsy were the borogoves,
         And the mome raths outgrabe.
 ";
 
-    Command::new("curl")
-        .current_dir(&path)
-        .args([
-            "-i",
-            "-H",
-            "content-type: text/plain",
-            "--retry-connrefused",
-            "--retry",
-            "5",
-            "--data-binary",
-            "@-",
-            "http://127.0.0.1:8080/echo",
-        ])
-        .write_stdin(content)
-        .assert()
-        .success()
-        .stdout(predicate::str::ends_with(content));
+    let client = reqwest::blocking::Client::new();
 
-    Command::new("curl")
-        .current_dir(&path)
-        .args([
-            "-i",
-            "-H",
-            "url: https://webassembly.github.io/spec/core/",
-            "-H",
-            "url: https://www.w3.org/groups/wg/wasm/",
-            "-H",
-            "url: https://bytecodealliance.org/",
-            "--retry-connrefused",
-            "--retry",
-            "5",
-            "http://127.0.0.1:8080/hash-all",
-        ])
-        .assert()
-        .success()
-        .stdout(
-            predicate::str::contains("https://webassembly.github.io/spec/core/:").and(
-                predicate::str::contains("https://bytecodealliance.org/:").and(
-                    predicate::str::contains("https://www.w3.org/groups/wg/wasm/:"),
-                ),
-            ),
-        );
+    let text = retry(|| {
+        Ok(client
+            .post("http://127.0.0.1:8080/echo")
+            .header("content-type", "text/plain")
+            .body(content)
+            .send()?
+            .error_for_status()?
+            .text()?)
+    })?;
+    assert!(text.ends_with(&content));
+
+    let text = retry(|| {
+        Ok(client
+            .get("http://127.0.0.1:8080/hash-all")
+            .header("url", "https://webassembly.github.io/spec/core/")
+            .header("url", "https://www.w3.org/groups/wg/wasm/")
+            .header("url", "https://bytecodealliance.org/")
+            .send()?
+            .error_for_status()?
+            .text()?)
+    })?;
+    assert!(text.contains("https://webassembly.github.io/spec/core/:"));
+    assert!(text.contains("https://bytecodealliance.org/:"));
+    assert!(text.contains("https://www.w3.org/groups/wg/wasm/:"));
 
     handle.kill()?;
 
@@ -139,7 +127,7 @@ fn matrix_math_example() -> anyhow::Result<()> {
     )?;
     let path = dir.path().join("matrix-math");
 
-    install_numpy(&path);
+    install_numpy(&path)?;
 
     Command::cargo_bin("componentize-py")?
         .current_dir(&path)
@@ -227,7 +215,6 @@ fn sandbox_example() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
 #[test]
 fn tcp_example() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
@@ -254,11 +241,7 @@ fn tcp_example() -> anyhow::Result<()> {
         .success()
         .stdout("Component built successfully\n");
 
-    let mut nc_handle = std::process::Command::new("nc")
-        .current_dir(&path)
-        .args(["-l", "127.0.0.1", "3456"])
-        .stdin(Stdio::piped())
-        .spawn()?;
+    let listener = std::net::TcpListener::bind("127.0.0.1:3456")?;
 
     let tcp_handle = std::process::Command::new("wasmtime")
         .current_dir(&path)
@@ -272,12 +255,10 @@ fn tcp_example() -> anyhow::Result<()> {
         .stdout(Stdio::piped())
         .spawn()?;
 
-    let mut nc_std_in = nc_handle.stdin.take().unwrap();
-
-    nc_std_in.write_all(b"hello")?;
+    let (mut stream, _) = listener.accept()?;
+    stream.write_all(b"hello")?;
 
     let output = tcp_handle.wait_with_output()?;
-    nc_handle.kill()?;
 
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
@@ -287,24 +268,39 @@ fn tcp_example() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn retry<T>(mut func: impl FnMut() -> anyhow::Result<T>) -> anyhow::Result<T> {
+    let times = 8;
+    for i in 0..times {
+        match func() {
+            Ok(t) => {
+                return Ok(t);
+            }
+            Err(err) => {
+                if i == times - 1 {
+                    return Err(err);
+                } else {
+                    sleep(Duration::from_millis(2_u64.pow(i) * 100));
+                    continue;
+                }
+            }
+        }
+    }
+    unreachable!()
+}
+
 fn venv_path(path: &Path) -> PathBuf {
     path.join(".venv")
         .join(if cfg!(windows) { "Scripts" } else { "bin" })
 }
 
-fn install_numpy(path: &Path) {
-    Command::new("curl")
-        .current_dir(path)
-        .args([
-            "-OL",
-            "https://github.com/dicej/wasi-wheels/releases/download/v0.0.1/numpy-wasi.tar.gz",
-        ])
-        .assert()
-        .success();
+fn install_numpy(path: &Path) -> anyhow::Result<()> {
+    let bytes = reqwest::blocking::get(
+        "https://github.com/dicej/wasi-wheels/releases/download/v0.0.1/numpy-wasi.tar.gz",
+    )?
+    .error_for_status()?
+    .bytes()?;
 
-    Command::new("tar")
-        .current_dir(path)
-        .args(["xf", "numpy-wasi.tar.gz"])
-        .assert()
-        .success();
+    Archive::new(GzDecoder::new(&bytes[..])).unpack(path)?;
+
+    Ok(())
 }
