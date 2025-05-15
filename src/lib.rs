@@ -42,6 +42,11 @@ mod summary;
 mod test;
 mod util;
 
+/// The default name of the Python module containing code generated from the
+/// specified WIT world.  This may be overriden programatically or via the CLI
+/// using the `--world-module` option.
+static DEFAULT_WORLD_MODULE: &str = "wit_world";
+
 wasmtime::component::bindgen!({
     path: "wit",
     world: "init",
@@ -193,8 +198,7 @@ pub fn generate_bindings(
         import_interface_names,
         export_interface_names,
     )?;
-    let world_name = resolve.worlds[world].name.to_snake_case().escape();
-    let world_module = world_module.unwrap_or(&world_name);
+    let world_module = world_module.unwrap_or(DEFAULT_WORLD_MODULE);
     let world_dir = output_dir.join(world_module.replace('.', "/"));
     fs::create_dir_all(&world_dir)?;
     summary.generate_code(
@@ -214,6 +218,7 @@ pub async fn componentize(
     world: Option<&str>,
     features: &[String],
     all_features: bool,
+    world_module: Option<&str>,
     python_path: &[&str],
     module_worlds: &[(&str, &str)],
     app_name: &str,
@@ -436,15 +441,15 @@ pub async fn componentize(
 
     // If the caller specified a world and we haven't already generated bindings for it above, do so now.
     if let (Some(world), false) = (main_world, saw_main_world) {
-        let module = resolve.worlds[world].name.to_snake_case();
+        let module = world_module.unwrap_or(DEFAULT_WORLD_MODULE);
         let world_dir = tempfile::tempdir()?;
-        let module_path = world_dir.path().join(&module);
+        let module_path = world_dir.path().join(module);
         fs::create_dir_all(&module_path)?;
-        summary.generate_code(&module_path, world, &module, &mut locations, false)?;
+        summary.generate_code(&module_path, world, module, &mut locations, false)?;
         world_dir_mounts.push((vec!["world".to_owned()], world_dir));
 
-        // The helper utilities are hard-coded to assume the world module is named `proxy`.  Here we replace that
-        // with the actual world name.
+        // The helper utilities are hard-coded to assume the world module is named `wit_world`.  Here we replace
+        // that with the actual world module name.
         fn replace(path: &Path, pattern: &str, replacement: &str) -> Result<()> {
             if path.is_dir() {
                 for entry in fs::read_dir(path)? {
@@ -461,7 +466,7 @@ pub async fn componentize(
 
             Ok(())
         }
-        replace(embedded_helper_utils.path(), "proxy", &module)?;
+        replace(embedded_helper_utils.path(), "wit_world", module)?;
     };
 
     for (mounts, world_dir) in world_dir_mounts.iter() {

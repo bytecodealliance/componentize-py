@@ -11,16 +11,16 @@ import asyncio
 import socket
 import subprocess
 
-from proxy.types import Ok, Err
-from proxy.imports import types, streams, poll, outgoing_handler
-from proxy.imports.types import (
+from wit_world.types import Ok, Err
+from wit_world.imports import types, streams, poll, outgoing_handler
+from wit_world.imports.types import (
     IncomingBody,
     OutgoingBody,
     OutgoingRequest,
     IncomingResponse,
 )
-from proxy.imports.streams import StreamError_Closed, InputStream
-from proxy.imports.poll import Pollable
+from wit_world.imports.streams import StreamError_Closed, InputStream
+from wit_world.imports.poll import Pollable
 from typing import Optional, cast
 
 # Maximum number of bytes to read at a time

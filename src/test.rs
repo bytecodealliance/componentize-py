@@ -45,6 +45,7 @@ static ENGINE: Lazy<Engine> = Lazy::new(|| {
 #[allow(clippy::type_complexity)]
 async fn make_component(
     wit: &str,
+    world_module: Option<&str>,
     guest_code: &[(&str, &str)],
     python_path: &[&str],
     module_worlds: &[(&str, &str)],
@@ -64,6 +65,7 @@ async fn make_component(
         None,
         &[],
         false,
+        world_module,
         &python_path
             .iter()
             .copied()
@@ -119,6 +121,7 @@ struct Tester<H> {
 impl<H: Host> Tester<H> {
     fn new(
         wit: &str,
+        world_module: Option<&str>,
         guest_code: &[(&str, &str)],
         python_path: &[&str],
         module_worlds: &[(&str, &str)],
@@ -129,6 +132,7 @@ impl<H: Host> Tester<H> {
         // would slow it down a lot).  This will help exercise the stub mechanism when pre-initializing.
         let component = &Runtime::new()?.block_on(make_component(
             wit,
+            world_module,
             guest_code,
             python_path,
             module_worlds,

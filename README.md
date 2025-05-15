@@ -46,8 +46,8 @@ Then, use the `hello` module produced by the command above to write your app:
 
 ```shell
 cat >app.py <<EOF
-import hello
-class Hello(hello.Hello):
+import wit_world
+class WitWorld(wit_world.WitWorld):
     def hello(self) -> str:
         return "Hello, World!"
 EOF

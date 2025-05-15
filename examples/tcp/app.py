@@ -2,7 +2,7 @@ import sys
 import asyncio
 import ipaddress
 from ipaddress import IPv4Address, IPv6Address
-from command import exports
+from wit_world import exports
 from typing import Tuple
 
 

@@ -66,6 +66,12 @@ pub struct Common {
     /// name.
     #[arg(long, value_parser = parse_key_value)]
     pub export_interface_name: Vec<(String, String)>,
+
+    /// Optional name of top-level module to use for bindings.
+    ///
+    /// If this is not specified, the module name will default to "wit_world".
+    #[arg(long)]
+    pub world_module: Option<String>,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -126,12 +132,6 @@ pub struct Bindings {
     ///
     /// This will be created if it does not already exist.
     pub output_dir: PathBuf,
-
-    /// Optional name of top-level module to use for bindings.
-    ///
-    /// If this is not specified, the module name will be derived from the world name.
-    #[arg(long)]
-    pub world_module: Option<String>,
 }
 
 fn parse_key_value(s: &str) -> Result<(String, String), String> {
@@ -157,7 +157,7 @@ fn generate_bindings(common: Common, bindings: Bindings) -> Result<()> {
         common.world.as_deref(),
         &common.features,
         common.all_features,
-        bindings.world_module.as_deref(),
+        common.world_module.as_deref(),
         &bindings.output_dir,
         &common
             .import_interface_name
@@ -189,6 +189,7 @@ fn componentize(common: Common, componentize: Componentize) -> Result<()> {
         common.world.as_deref(),
         &common.features,
         common.all_features,
+        common.world_module.as_deref(),
         &python_path.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
         &componentize
             .module_worlds
@@ -339,6 +340,7 @@ mod tests {
         let common = Common {
             wit_path: Some(wit.path().into()),
             world: None,
+            world_module: Some("bindings".into()),
             quiet: false,
             features: vec![],
             all_features: false,
@@ -347,7 +349,6 @@ mod tests {
         };
         let bindings = Bindings {
             output_dir: out_dir.path().into(),
-            world_module: None,
         };
         generate_bindings(common, bindings)?;
 
@@ -369,6 +370,7 @@ mod tests {
         let common = Common {
             wit_path: Some(wit.path().into()),
             world: None,
+            world_module: Some("bindings".into()),
             quiet: false,
             features: vec!["x".to_owned()],
             all_features: false,
@@ -377,7 +379,6 @@ mod tests {
         };
         let bindings = Bindings {
             output_dir: out_dir.path().into(),
-            world_module: None,
         };
         generate_bindings(common, bindings)?;
 
@@ -399,6 +400,7 @@ mod tests {
         let common = Common {
             wit_path: Some(wit.path().into()),
             world: None,
+            world_module: Some("bindings".into()),
             quiet: false,
             features: vec![],
             all_features: true,
@@ -407,7 +409,6 @@ mod tests {
         };
         let bindings = Bindings {
             output_dir: out_dir.path().into(),
-            world_module: None,
         };
         generate_bindings(common, bindings)?;
 
@@ -427,6 +428,7 @@ mod tests {
         let common = Common {
             wit_path: Some(wit.path().into()),
             world: None,
+            world_module: Some("bindings".into()),
             quiet: false,
             features: vec!["x".to_owned()],
             all_features: false,
@@ -435,7 +437,6 @@ mod tests {
         };
         let bindings = Bindings {
             output_dir: out_dir.path().into(),
-            world_module: None,
         };
         generate_bindings(common.clone(), bindings)?;
         fs::write(
