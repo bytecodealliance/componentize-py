@@ -658,9 +658,7 @@ pub extern "C" fn componentize_py_get_field<'a>(
                 .nth(field)
                 .unwrap_or(0);
 
-            unsafe { mem::transmute::<u32, i32>(value) }
-                .to_object(*py)
-                .into_bound(*py)
+            u32::cast_signed(value).to_object(*py).into_bound(*py)
         }
         Type::Option => match i32::try_from(field).unwrap() {
             DISCRIMINANT_FIELD_INDEX => if value.is_none() { 0 } else { 1 }
@@ -865,7 +863,7 @@ pub unsafe extern "C" fn componentize_py_init<'a>(
                         slice::from_raw_parts(data, len)
                             .iter()
                             .map(|v| {
-                                mem::transmute::<i32, u32>(
+                                i32::cast_unsigned(
                                     Bound::from_borrowed_ptr(*py, v.as_ptr()).extract().unwrap(),
                                 )
                             })

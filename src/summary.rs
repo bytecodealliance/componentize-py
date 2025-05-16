@@ -1945,10 +1945,7 @@ from ..types import Result, Ok, Err, Some
             let mut file = File::create(path.join("__init__.py"))?;
             let function_imports = world_imports.functions.concat();
             let type_exports = world_exports.types.concat();
-            let camel = self.resolve.worlds[world]
-                .name
-                .to_upper_camel_case()
-                .escape();
+            let camel = world_module.to_upper_camel_case().escape();
 
             let protocol = if let Some(alias_module) = world_exports.alias_module {
                 format!("{camel} = {alias_module}.{camel}")

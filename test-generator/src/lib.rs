@@ -859,7 +859,14 @@ class EchoesGenerated(exports.EchoesGenerated):
 )];
 
 static TESTER: Lazy<Tester<Host>> = Lazy::new(|| {{
-    Tester::<Host>::new(include_str!({wit_path:?}), GUEST_CODE, &[], &[], *SEED).unwrap()
+    Tester::<Host>::new(
+        include_str!({wit_path:?}),
+        Some("echoes_generated_test"),
+        GUEST_CODE,
+        &[],
+        &[],
+        *SEED
+    ).unwrap()
 }});
 
 {test_functions}

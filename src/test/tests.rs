@@ -135,6 +135,7 @@ impl super::Host for BarHost {
 static TESTER: Lazy<Tester<Host>> = Lazy::new(|| {
     Tester::<Host>::new(
         include_str!("wit/tests.wit"),
+        Some("tests"),
         GUEST_CODE,
         &["src/test"],
         &[("foo_sdk", "foo-world"), ("bar_sdk", "bar-world")],

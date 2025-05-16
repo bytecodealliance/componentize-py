@@ -1,5 +1,5 @@
-import sandbox
-from sandbox.types import Err
+import wit_world
+from wit_world.types import Err
 import json
 
 
@@ -11,7 +11,7 @@ def handle(e: Exception) -> Err[str]:
         return Err(f"{type(e).__name__}: {message}")
 
 
-class Sandbox(sandbox.Sandbox):
+class WitWorld(wit_world.WitWorld):
     def eval(self, expression: str) -> str:
         try:
             return json.dumps(eval(expression))
