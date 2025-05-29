@@ -60,6 +60,10 @@ impl TestsImports for Ctx {
     async fn output(&mut self, _: Frame) -> Result<()> {
         unreachable!()
     }
+
+    async fn get_bytes(&mut self, count: u32) -> Result<Vec<u8>> {
+        Ok(vec![42u8; usize::try_from(count).unwrap()])
+    }
 }
 
 macro_rules! load_guest_code {
@@ -248,6 +252,11 @@ fn resource_import_and_export() -> Result<()> {
             Ok(())
         })
     })
+}
+
+#[test]
+fn refcounts() -> Result<()> {
+    TESTER.test(|world, store, runtime| runtime.block_on(world.call_test_refcounts(store)))
 }
 
 #[test]

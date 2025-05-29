@@ -482,7 +482,7 @@ dependencies = [
 
 [[package]]
 name = "componentize-py"
-version = "0.17.0"
+version = "0.17.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -632,7 +632,7 @@ dependencies = [
  "rustc-hash",
  "serde",
  "smallvec",
- "target-lexicon 0.13.2",
+ "target-lexicon",
 ]
 
 [[package]]
@@ -681,7 +681,7 @@ dependencies = [
  "cranelift-codegen",
  "log",
  "smallvec",
- "target-lexicon 0.13.2",
+ "target-lexicon",
 ]
 
 [[package]]
@@ -698,7 +698,7 @@ checksum = "7617f13f392ebb63c5126258aca8b8eca739636ca7e4eeee301d3eff68489a6a"
 dependencies = [
  "cranelift-codegen",
  "libc",
- "target-lexicon 0.13.2",
+ "target-lexicon",
 ]
 
 [[package]]
@@ -1849,11 +1849,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3"
-version = "0.22.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d922163ba1f79c04bc49073ba7b32fd5a8d3b76a87c955921234b8e77333c51"
+version = "0.25.0"
+source = "git+https://github.com/dicej/pyo3?branch=v0.25.0-no-wasm32-unwind#d0cf051de41c3cefeee95c9524aa460cde7e849d"
 dependencies = [
- "cfg-if",
  "indoc",
  "libc",
  "memoffset",
@@ -1868,19 +1866,17 @@ dependencies = [
 
 [[package]]
 name = "pyo3-build-config"
-version = "0.22.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc38c5feeb496c8321091edf3d63e9a6829eab4b863b4a6a65f26f3e9cc6b179"
+version = "0.25.0"
+source = "git+https://github.com/dicej/pyo3?branch=v0.25.0-no-wasm32-unwind#d0cf051de41c3cefeee95c9524aa460cde7e849d"
 dependencies = [
  "once_cell",
- "target-lexicon 0.12.16",
+ "target-lexicon",
 ]
 
 [[package]]
 name = "pyo3-ffi"
-version = "0.22.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94845622d88ae274d2729fcefc850e63d7a3ddff5e3ce11bd88486db9f1d357d"
+version = "0.25.0"
+source = "git+https://github.com/dicej/pyo3?branch=v0.25.0-no-wasm32-unwind#d0cf051de41c3cefeee95c9524aa460cde7e849d"
 dependencies = [
  "libc",
  "pyo3-build-config",
@@ -1888,9 +1884,8 @@ dependencies = [
 
 [[package]]
 name = "pyo3-macros"
-version = "0.22.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e655aad15e09b94ffdb3ce3d217acf652e26bbc37697ef012f5e5e348c716e5e"
+version = "0.25.0"
+source = "git+https://github.com/dicej/pyo3?branch=v0.25.0-no-wasm32-unwind#d0cf051de41c3cefeee95c9524aa460cde7e849d"
 dependencies = [
  "proc-macro2",
  "pyo3-macros-backend",
@@ -1900,9 +1895,8 @@ dependencies = [
 
 [[package]]
 name = "pyo3-macros-backend"
-version = "0.22.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae1e3f09eecd94618f60a455a23def79f79eba4dc561a97324bf9ac8c6df30ce"
+version = "0.25.0"
+source = "git+https://github.com/dicej/pyo3?branch=v0.25.0-no-wasm32-unwind#d0cf051de41c3cefeee95c9524aa460cde7e849d"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -2466,12 +2460,6 @@ dependencies = [
  "libc",
  "xattr",
 ]
-
-[[package]]
-name = "target-lexicon"
-version = "0.12.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
 
 [[package]]
 name = "target-lexicon"
@@ -3062,7 +3050,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "sptr",
- "target-lexicon 0.13.2",
+ "target-lexicon",
  "trait-variant",
  "wasm-encoder 0.224.1",
  "wasmparser 0.224.1",
@@ -3152,7 +3140,7 @@ dependencies = [
  "object",
  "pulley-interpreter",
  "smallvec",
- "target-lexicon 0.13.2",
+ "target-lexicon",
  "thiserror",
  "wasmparser 0.224.1",
  "wasmtime-environ",
@@ -3179,7 +3167,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "smallvec",
- "target-lexicon 0.13.2",
+ "target-lexicon",
  "wasm-encoder 0.224.1",
  "wasmparser 0.224.1",
  "wasmprinter",
@@ -3305,7 +3293,7 @@ dependencies = [
  "cranelift-codegen",
  "gimli",
  "object",
- "target-lexicon 0.13.2",
+ "target-lexicon",
  "wasmparser 0.224.1",
  "wasmtime-cranelift",
  "wasmtime-environ",
@@ -3449,7 +3437,7 @@ dependencies = [
  "gimli",
  "regalloc2",
  "smallvec",
- "target-lexicon 0.13.2",
+ "target-lexicon",
  "thiserror",
  "wasmparser 0.224.1",
  "wasmtime-cranelift",

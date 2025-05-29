@@ -134,6 +134,12 @@ class Tests(tests.Tests):
                 return f.read()
         except:
             raise Err(traceback.format_exc())
+
+    def test_refcounts(self):
+        # Retrieve 5GiB in chunks of 1MiB, which should _not_ lead to a
+        # `MemoryError` if we're handling refcounts correctly in the runtime.
+        for _ in range(5 * 1024):
+            chunk = tests.get_bytes(1024 * 1024)
    
 class FooInterface(foo_exports.FooInterface):
     def test(self, s: str) -> str:

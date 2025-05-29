@@ -98,7 +98,7 @@ fn python_generate_bindings(
 #[pyo3(name = "script")]
 fn python_script(py: Python) -> PyResult<()> {
     crate::command::run(
-        py.import_bound("sys")?
+        py.import("sys")?
             .getattr("argv")?
             .extract::<Vec<OsString>>()?,
     )

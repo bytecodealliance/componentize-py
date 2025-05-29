@@ -180,9 +180,13 @@ world tests {
 
   export read-file: func(path: string) -> result<list<u8>, string>;
 
+  export test-refcounts: func();
+
   record frame {
     id: s32,
   }
 
   import output: func(frame: frame);
+
+  import get-bytes: func(count: u32) -> list<u8>;
 }
