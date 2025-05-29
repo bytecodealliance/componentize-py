@@ -333,6 +333,7 @@ impl<'a> FunctionBindgen<'a> {
                 .collect::<Vec<_>>();
 
             self.from_canon_record(self.result.types(), context, &locals, output);
+            self.free_canon_record(self.result.types(), &locals);
 
             for (local, ty) in locals.iter().zip(&self.results_abi.flattened.clone()).rev() {
                 self.pop_local(*local, *ty);
@@ -344,6 +345,7 @@ impl<'a> FunctionBindgen<'a> {
             self.push(Ins::LocalSet(source));
 
             self.load_record(self.result.types(), context, source, output);
+            self.free_stored_record(self.result.types(), source);
 
             self.pop_local(source, ValType::I32);
             self.pop_stack(self.results_abi.size);

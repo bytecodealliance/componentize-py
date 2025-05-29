@@ -124,9 +124,12 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
         }
     }
 
-    cmd.env("RUSTFLAGS", "-C relocation-model=pic")
-        .env("CARGO_TARGET_DIR", out_dir)
-        .env("PYO3_CONFIG_FILE", out_dir.join("pyo3-config.txt"));
+    cmd.env(
+        "RUSTFLAGS",
+        "-C relocation-model=pic --cfg pyo3_disable_reference_pool",
+    )
+    .env("CARGO_TARGET_DIR", out_dir)
+    .env("PYO3_CONFIG_FILE", out_dir.join("pyo3-config.txt"));
 
     let status = cmd.status()?;
     assert!(status.success());
