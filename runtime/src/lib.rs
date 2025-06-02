@@ -672,7 +672,10 @@ pub extern "C" fn componentize_py_get_field<'a>(
                 .into_pyobject(*py)
                 .unwrap()
                 .into_any(),
-            PAYLOAD_FIELD_INDEX => value.to_owned(),
+            PAYLOAD_FIELD_INDEX => unsafe {
+                // Avoid incrementing `value`'s refcount while returning it:
+                Bound::from_owned_ptr(*py, value.as_ptr())
+            },
             _ => unreachable!(),
         },
         Type::NestingOption => match i32::try_from(field).unwrap() {
@@ -682,7 +685,11 @@ pub extern "C" fn componentize_py_get_field<'a>(
                 .into_any(),
             PAYLOAD_FIELD_INDEX => {
                 if value.is_none() {
-                    value.to_owned()
+                    unsafe {
+                        // Avoid incrementing `value`'s refcount while returning
+                        // it:
+                        Bound::from_owned_ptr(*py, value.as_ptr())
+                    }
                 } else {
                     value.getattr("value").unwrap()
                 }
