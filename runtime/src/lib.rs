@@ -196,12 +196,12 @@ fn componentize_py_module(_py: Python<'_>, module: &Bound<PyModule>) -> PyResult
     module.add_function(pyo3::wrap_pyfunction!(drop_resource, module)?)
 }
 
-fn do_init(app_name: String, symbols: Symbols, stub_wasi: bool) -> Result<()> {
+fn do_init(app_name: String, symbols: Symbols, stub_wasi: bool) -> Result<(), String> {
     pyo3::append_to_inittab!(componentize_py_module);
 
     pyo3::prepare_freethreaded_python();
 
-    Python::with_gil(|py| {
+    let init = |py: Python| {
         let app = match py.import(app_name.as_str()) {
             Ok(app) => app,
             Err(e) => {
@@ -390,15 +390,17 @@ fn do_init(app_name: String, symbols: Symbols, stub_wasi: bool) -> Result<()> {
 
         ARGV.set(argv.into()).unwrap();
 
-        Ok(())
-    })
+        Ok::<_, Error>(())
+    };
+
+    Python::with_gil(|py| init(py).map_err(|e| format!("{e:?}")))
 }
 
 struct MyExports;
 
 impl Guest for MyExports {
     fn init(app_name: String, symbols: Symbols, stub_wasi: bool) -> Result<(), String> {
-        let result = do_init(app_name, symbols, stub_wasi).map_err(|e| format!("{e:?}"));
+        let result = do_init(app_name, symbols, stub_wasi);
 
         // This tells the WASI Preview 1 component adapter to reset its state.  In particular, we want it to forget
         // about any open handles and re-request the stdio handles at runtime since we'll be running under a brand
