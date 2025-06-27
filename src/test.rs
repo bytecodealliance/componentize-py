@@ -14,7 +14,7 @@ use {
         component::{Component, InstancePre, Linker, ResourceTable},
         Config, Engine, Store,
     },
-    wasmtime_wasi::{WasiCtx, WasiCtxBuilder},
+    wasmtime_wasi::p2::{WasiCtx, WasiCtxBuilder},
 };
 
 mod echoes;

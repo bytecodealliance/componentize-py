@@ -699,7 +699,7 @@ pub fn generate() -> Result<()> {
 
             writeln!(
                 &mut typed_function_inits,
-                r#"echo{test_index}: instance.get_typed_func::<({params}), ({result_type},)>(&mut *store, component.export_index(Some(&index), "echo{test_index}").unwrap().1)?,"#
+                r#"echo{test_index}: instance.get_typed_func::<({params}), ({result_type},)>(&mut *store, component.get_export_index(Some(&index), "echo{test_index}").unwrap())?,"#
             )
             .unwrap();
         }
@@ -802,7 +802,7 @@ use {{
     once_cell::sync::Lazy,
     proptest::strategy::{{Just, Strategy}},
     wasmtime::{{
-        component::{{Instance, InstancePre, Linker, TypedFunc}},
+        component::{{Instance, InstancePre, Linker, TypedFunc, HasSelf}},
         Store,
     }},
 }};
@@ -828,8 +828,8 @@ impl super::Host for Host {{
     type World = Exports;
 
     fn add_to_linker(linker: &mut Linker<Ctx>) -> Result<()> {{
-        wasmtime_wasi::add_to_linker_async(&mut *linker)?;
-        {PREFIX}::add_to_linker(linker, |ctx| ctx)?;
+        wasmtime_wasi::p2::add_to_linker_async(&mut *linker)?;
+        {PREFIX}::add_to_linker::<_, HasSelf<_>>(linker, |ctx| ctx)?;
         Ok(())
     }}
 
@@ -838,7 +838,7 @@ impl super::Host for Host {{
         pre: InstancePre<Ctx>,
     ) -> Result<Self::World> {{
         let component = pre.component();
-        let (_, index) = component.export_index(None, "componentize-py:test/echoes-generated").unwrap();
+        let index = component.get_export_index(None, "componentize-py:test/echoes-generated").unwrap();
         let instance = pre.instantiate_async(&mut *store).await?;
         Ok((Self::World {{
            {typed_function_inits}

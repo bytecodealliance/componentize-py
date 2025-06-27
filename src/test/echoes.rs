@@ -4,7 +4,7 @@ use {
     once_cell::sync::Lazy,
     proptest::strategy::{Just, Strategy},
     wasmtime::{
-        component::{InstancePre, Linker},
+        component::{HasSelf, InstancePre, Linker},
         Store,
     },
 };
@@ -189,8 +189,8 @@ impl super::Host for Host {
     type World = EchoesTest;
 
     fn add_to_linker(linker: &mut Linker<Ctx>) -> Result<()> {
-        wasmtime_wasi::add_to_linker_async(&mut *linker)?;
-        componentize_py::test::echoes::add_to_linker(linker, |ctx| ctx)?;
+        wasmtime_wasi::p2::add_to_linker_async(&mut *linker)?;
+        componentize_py::test::echoes::add_to_linker::<_, HasSelf<_>>(linker, |ctx| ctx)?;
         Ok(())
     }
 
