@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use anyhow::{bail, Error};
-use wasm_convert::IntoValType;
 use wasm_encoder::{
     CodeSection, ExportKind, ExportSection, Function, FunctionSection, Instruction as Ins, Module,
     TypeSection,
@@ -110,11 +109,13 @@ fn make_stub_adapter(_module: &str, stubs: &HashMap<&str, FuncType>) -> Vec<u8> 
     let mut exports = ExportSection::new();
     let mut code = CodeSection::new();
 
+    use wasm_encoder::reencode::{Reencode, RoundtripReencoder as R};
+
     for (index, (name, ty)) in stubs.iter().enumerate() {
         let index = u32::try_from(index).unwrap();
         types.ty().function(
-            ty.params().iter().map(|&v| IntoValType(v).into()),
-            ty.results().iter().map(|&v| IntoValType(v).into()),
+            ty.params().iter().map(|&v| R.val_type(v).unwrap()),
+            ty.results().iter().map(|&v| R.val_type(v).unwrap()),
         );
         functions.function(index);
         exports.export(name, ExportKind::Func, index);
