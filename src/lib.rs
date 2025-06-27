@@ -22,8 +22,11 @@ use {
         Config, Engine, Store,
     },
     wasmtime_wasi::{
-        pipe::{MemoryInputPipe, MemoryOutputPipe},
-        DirPerms, FilePerms, IoView, WasiCtx, WasiCtxBuilder, WasiView,
+        p2::{
+            pipe::{MemoryInputPipe, MemoryOutputPipe},
+            IoView, WasiCtx, WasiCtxBuilder, WasiView,
+        },
+        DirPerms, FilePerms,
     },
     wit_parser::{Resolve, TypeDefKind, UnresolvedPackageGroup, WorldId, WorldItem, WorldKey},
 };
@@ -585,7 +588,7 @@ fn add_wasi_and_stubs(
     worlds: &IndexSet<WorldId>,
     linker: &mut Linker<Ctx>,
 ) -> Result<()> {
-    wasmtime_wasi::add_to_linker_async(linker)?;
+    wasmtime_wasi::p2::add_to_linker_async(linker)?;
 
     enum Stub<'a> {
         Function(&'a String),
