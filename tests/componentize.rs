@@ -76,7 +76,7 @@ fn http_example() -> anyhow::Result<()> {
 
     let mut handle = std::process::Command::new("wasmtime")
         .current_dir(&path)
-        .args(["serve", "--wasi", "common", "http.wasm"])
+        .args(["serve", "-Scli", "http.wasm"])
         .spawn()?;
 
     let content = "’Twas brillig, and the slithy toves

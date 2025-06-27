@@ -27,7 +27,7 @@ First, build the app and run it:
 
 ```
 componentize-py -d ../../wit -w wasi:http/proxy@0.2.0 componentize app -o http.wasm
-wasmtime serve --wasi common http.wasm
+wasmtime serve -Scli http.wasm
 ```
 
 Then, in another terminal, use cURL to send a request to the app:
