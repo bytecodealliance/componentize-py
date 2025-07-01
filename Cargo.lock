@@ -463,9 +463,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b63caa9aa9397e2d9480a9b13673856c78d8ac123288526c37d7839f2a86990"
 
 [[package]]
-name = "component-init"
+name = "component-init-transform"
 version = "0.1.0"
-source = "git+https://github.com/pchickey/component-init?branch=pch%2Fwasmtime_and_cli#16ec9caa6783398770197361c79f8740094a8305"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "602204303fafe3d9582c7b6f80d8ec594ff7ee033ee584f29b269ee698fc198c"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -485,7 +486,7 @@ dependencies = [
  "bytes",
  "cap-std",
  "clap",
- "component-init",
+ "component-init-transform",
  "componentize-py-shared",
  "flate2",
  "fs_extra",

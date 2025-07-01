@@ -36,8 +36,8 @@ pub fn link_stub_modules(libraries: Vec<Library>) -> Result<LinkedStubModules, E
     // As of this writing, `wit_component::Linker` generates a component such that the first module is the
     // `main` one, followed by any adapters, followed by any libraries, followed by the `init` module, which is
     // finally followed by any shim modules.  Given that the stubbed component may contain more adapters than
-    // the non-stubbed version, we need to tell `component-init` how to translate module indexes from the
-    // former to the latter.
+    // the non-stubbed version, we need to tell `component-init-transform` how to translate module indexes from
+    // the former to the latter.
     //
     // TODO: this is pretty fragile in that it could silently break if `wit_component::Linker`'s implementation
     // changes.  Can we make it more robust?

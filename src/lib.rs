@@ -4,7 +4,7 @@ use {
     anyhow::{anyhow, bail, ensure, Context, Error, Result},
     async_trait::async_trait,
     bytes::Bytes,
-    component_init::Invoker,
+    component_init_transform::Invoker,
     futures::future::FutureExt,
     heck::ToSnakeCase,
     indexmap::{IndexMap, IndexSet},
@@ -351,9 +351,10 @@ pub async fn componentize(
         None
     };
 
-    // Pre-initialize the component by running it through `component_init::initialize`.  Currently, this is the
-    // application's first and only chance to load any standard or third-party modules since we do not yet include
-    // a virtual filesystem in the component to make those modules available at runtime.
+    // Pre-initialize the component by running it through `component_init_transform::initialize`.
+    // Currently, this is the application's first and only chance to load any standard or
+    // third-party modules since we do not yet include a virtual filesystem in the component to
+    // make those modules available at runtime.
 
     let stdout = MemoryOutputPipe::new(10000);
     let stderr = MemoryOutputPipe::new(10000);
@@ -514,7 +515,7 @@ pub async fn componentize(
     let mut store = Store::new(&engine, Ctx { wasi, table });
 
     let app_name = app_name.to_owned();
-    let component = component_init::initialize_staged(
+    let component = component_init_transform::initialize_staged(
         &component,
         stubbed_component
             .as_ref()
