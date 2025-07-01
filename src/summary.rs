@@ -1111,13 +1111,11 @@ impl<'a> Summary<'a> {
                                         if packages.len() == 1 {
                                             (*name).to_owned()
                                         } else {
-                                            format!("{}-{}-{name}", package_namespace, package_name)
+                                            format!("{package_namespace}-{package_name}-{name}")
                                         }
                                     } else {
                                         format!(
-                                            "{}-{}-{name}-{}",
-                                            package_namespace,
-                                            package_name,
+                                            "{package_namespace}-{package_name}-{name}-{}",
                                             version.to_string().replace('.', "-")
                                         )
                                     }
@@ -1128,7 +1126,7 @@ impl<'a> Summary<'a> {
                                 } else if packages.len() == 1 {
                                     (*name).to_owned()
                                 } else {
-                                    format!("{}-{}-{name}", package_namespace, package_name)
+                                    format!("{package_namespace}-{package_name}-{name}",)
                                 }
                             )
                             .is_none());

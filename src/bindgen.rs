@@ -2200,8 +2200,8 @@ impl<'a> FunctionBindgen<'a> {
         self.push(match ty {
             ValType::I32 => Ins::I32Const(0),
             ValType::I64 => Ins::I64Const(0),
-            ValType::F32 => Ins::F32Const(0.0),
-            ValType::F64 => Ins::F64Const(0.0),
+            ValType::F32 => Ins::F32Const(0.0.into()),
+            ValType::F64 => Ins::F64Const(0.0.into()),
             _ => unreachable!(),
         })
     }

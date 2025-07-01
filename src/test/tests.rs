@@ -6,10 +6,13 @@ use {
     once_cell::sync::Lazy,
     std::str,
     wasmtime::{
-        component::{InstancePre, Linker, Resource, ResourceAny},
+        component::{HasSelf, InstancePre, Linker, Resource, ResourceAny},
         Store,
     },
-    wasmtime_wasi::{DirPerms, FilePerms, IoView, WasiCtxBuilder},
+    wasmtime_wasi::{
+        p2::{IoView, WasiCtxBuilder},
+        DirPerms, FilePerms,
+    },
 };
 
 wasmtime::component::bindgen!({
@@ -93,9 +96,9 @@ impl super::Host for Host {
     type World = Tests;
 
     fn add_to_linker(linker: &mut Linker<Ctx>) -> Result<()> {
-        wasmtime_wasi::add_to_linker_async(linker)?;
-        Tests::add_to_linker(linker, |ctx| ctx)?;
-        foo_sdk::FooWorld::add_to_linker(linker, |ctx| ctx)?;
+        wasmtime_wasi::p2::add_to_linker_async(linker)?;
+        Tests::add_to_linker::<_, HasSelf<_>>(linker, |ctx| ctx)?;
+        foo_sdk::FooWorld::add_to_linker::<_, HasSelf<_>>(linker, |ctx| ctx)?;
         Ok(())
     }
 
