@@ -182,7 +182,7 @@ impl Invoker for MyInvoker {
 
 #[allow(clippy::too_many_arguments)]
 pub fn generate_bindings(
-    wit_path: &Path,
+    wit_path: &[impl AsRef<Path>],
     world: Option<&str>,
     features: &[String],
     all_features: bool,
@@ -217,7 +217,7 @@ pub fn generate_bindings(
 
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub async fn componentize(
-    wit_path: Option<&Path>,
+    wit_path: &[impl AsRef<Path>],
     world: Option<&str>,
     features: &[String],
     all_features: bool,
@@ -245,11 +245,12 @@ pub async fn componentize(
 
     // Next, iterate over all the WIT directories, merging them into a single `Resolve`, and matching Python
     // packages to `WorldId`s.
-    let (mut resolve, mut main_world) = if let Some(path) = wit_path {
-        let (resolve, world) = parse_wit(path, world, features, all_features)?;
-        (Some(resolve), Some(world))
-    } else {
-        (None, None)
+    let (mut resolve, mut main_world) = match wit_path {
+        [] => (None, None),
+        paths => {
+            let (resolve, world) = parse_wit(paths, world, features, all_features)?;
+            (Some(resolve), Some(world))
+        }
     };
 
     let import_interface_names = import_interface_names
@@ -281,7 +282,8 @@ pub async fn componentize(
         .map(|(module, (config, world))| {
             Ok((module, match (world, config.config.wit_directory.as_deref()) {
                 (_, Some(wit_path)) => {
-                    let (my_resolve, mut world) = parse_wit(&config.path.join(wit_path), *world, features, all_features)?;
+                    let paths = &[config.path.join(wit_path)];
+                    let (my_resolve, mut world) = parse_wit(paths, *world, features, all_features)?;
 
                     if let Some(resolve) = &mut resolve {
                         let remap = resolve.merge(my_resolve)?;
@@ -303,13 +305,13 @@ pub async fn componentize(
     let resolve = if let Some(resolve) = resolve {
         resolve
     } else {
-        // If no WIT directory was provided as a parameter and none were referenced by Python packages, use ./wit
-        // by default.
-        let (my_resolve, world) = parse_wit(Path::new("wit"), world, features, all_features)
-            .context(
-                "no WIT files found; please specify the directory or file \
+        // If no WIT directory was provided as a parameter and none were referenced by Python packages, use
+        // the default values.
+        let paths: &[&Path] = &[];
+        let (my_resolve, world) = parse_wit(paths, world, features, all_features).context(
+            "no WIT files found; please specify the directory or file \
                  containing the WIT world you wish to target",
-            )?;
+        )?;
         main_world = Some(world);
         my_resolve
     };
@@ -556,11 +558,19 @@ pub async fn componentize(
 }
 
 fn parse_wit(
-    path: &Path,
+    paths: &[impl AsRef<Path>],
     world: Option<&str>,
     features: &[String],
     all_features: bool,
 ) -> Result<(Resolve, WorldId)> {
+    // If no WIT directory was provided as a parameter and none were referenced by Python packages, use ./wit
+    // by default.
+    if paths.is_empty() {
+        let paths = &[Path::new("wit")];
+        return parse_wit(paths, world, features, all_features);
+    }
+    debug_assert!(!paths.is_empty(), "The paths should not be empty");
+
     let mut resolve = Resolve {
         all_features,
         ..Default::default()
@@ -574,12 +584,19 @@ fn parse_wit(
             resolve.features.insert(feature.to_string());
         }
     }
-    let pkg = if path.is_dir() {
-        resolve.push_dir(path)?.0
-    } else {
-        let pkg = UnresolvedPackageGroup::parse_file(path)?;
-        resolve.push_group(pkg)?
-    };
+
+    let mut last_pkg = None;
+    for path in paths.iter().map(AsRef::as_ref) {
+        let pkg = if path.is_dir() {
+            resolve.push_dir(path)?.0
+        } else {
+            let pkg = UnresolvedPackageGroup::parse_file(path)?;
+            resolve.push_group(pkg)?
+        };
+        last_pkg = Some(pkg);
+    }
+
+    let pkg = last_pkg.unwrap(); // The paths should not be empty
     let world = resolve.select_world(pkg, world)?;
     Ok((resolve, world))
 }

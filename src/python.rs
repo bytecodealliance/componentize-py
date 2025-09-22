@@ -19,7 +19,7 @@ use {
 #[pyo3(name = "componentize")]
 #[pyo3(signature = (wit_path, world, features, all_features, world_module, python_path, module_worlds, app_name, output_path, stub_wasi, import_interface_names, export_interface_names))]
 fn python_componentize(
-    wit_path: Option<PathBuf>,
+    wit_path: Vec<PathBuf>,
     world: Option<&str>,
     features: Vec<String>,
     all_features: bool,
@@ -34,7 +34,7 @@ fn python_componentize(
 ) -> PyResult<()> {
     (|| {
         Runtime::new()?.block_on(crate::componentize(
-            wit_path.as_deref(),
+            &wit_path,
             world,
             &features,
             all_features,
@@ -66,7 +66,7 @@ fn python_componentize(
 #[pyo3(name = "generate_bindings")]
 #[pyo3(signature = (wit_path, world, features, all_features, world_module, output_dir, import_interface_names, export_interface_names))]
 fn python_generate_bindings(
-    wit_path: PathBuf,
+    wit_path: Vec<PathBuf>,
     world: Option<&str>,
     features: Vec<String>,
     all_features: bool,
