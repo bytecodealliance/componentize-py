@@ -1,6 +1,7 @@
 use {
     anyhow::{Context, Result},
     clap::Parser as _,
+    serde::Serialize,
     std::{
         env,
         ffi::OsString,
@@ -83,6 +84,26 @@ pub enum Command {
     Bindings(Bindings),
 }
 
+#[derive(clap::ValueEnum, Clone, Default, Debug, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WasiAdapter {
+    /// The "reactor" adapter provides the default adaptation from preview1 to preview2.
+    ///
+    /// This adapter implements the wasi:cli/imports world.
+    #[default]
+    Reactor,
+    /// The "command" adapter extends the “reactor” adapter and additionally exports a run function entrypoint.
+    ///
+    /// This adapter implements the wasi:cli/command world.
+    Command,
+    /// The “proxy” adapter provides implements a HTTP proxy which is more restricted than the "reactor" adapter
+    /// adapter, as it lacks filesystem, socket, environment, exit, and terminal support, but includes HTTP
+    /// handlers for incoming and outgoing requests.
+    ///
+    /// This adapter implements the wasi:http/proxy world.
+    Proxy,
+}
+
 #[derive(clap::Args, Debug)]
 pub struct Componentize {
     /// The name of a Python module containing the app to wrap.
@@ -116,6 +137,10 @@ pub struct Componentize {
     /// Output file to which to write the resulting component
     #[arg(short = 'o', long, default_value = "index.wasm")]
     pub output: PathBuf,
+
+    /// Adapter to use
+    #[arg(short = 'a', long, default_value = "reactor")]
+    pub adapter: WasiAdapter,
 
     /// If set, replace all WASI imports with trapping stubs.
     ///
@@ -199,6 +224,7 @@ fn componentize(common: Common, componentize: Componentize) -> Result<()> {
         &componentize.app_name,
         &componentize.output,
         None,
+        componentize.adapter,
         componentize.stub_wasi,
         &common
             .import_interface_name

@@ -61,7 +61,6 @@ fn stubs_for_clippy(out_dir: &Path) -> Result<()> {
         "libwasi-emulated-signal.so.zst",
         "libc++.so.zst",
         "libc++abi.so.zst",
-        "wasi_snapshot_preview1.reactor.wasm.zst",
     ];
 
     for file in files {
@@ -210,13 +209,6 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
     } else {
         bail!("no such directory: {}", path.display())
     }
-
-    compress(
-        &repo_dir.join("adapters/ab5a4484"),
-        "wasi_snapshot_preview1.reactor.wasm",
-        out_dir,
-        false,
-    )?;
 
     Ok(())
 }

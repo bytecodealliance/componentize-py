@@ -47,6 +47,7 @@ im-rc = "15.1.0"
 serde = { version = "1.0.213", features = ["derive"] }
 toml = "0.8.19"
 semver = "1.0.23"
+wasi-preview1-component-adapter-provider = "37.0.0"
 
 [dev-dependencies]
 assert_cmd = "2.0.16"

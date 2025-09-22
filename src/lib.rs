@@ -1,6 +1,7 @@
 #![deny(warnings)]
 
 use {
+    crate::command::WasiAdapter,
     anyhow::{anyhow, bail, ensure, Context, Error, Result},
     async_trait::async_trait,
     bytes::Bytes,
@@ -227,6 +228,7 @@ pub async fn componentize(
     app_name: &str,
     output_path: &Path,
     add_to_linker: Option<&dyn Fn(&mut Linker<Ctx>) -> Result<()>>,
+    adapter: WasiAdapter,
     stub_wasi: bool,
     import_interface_names: &HashMap<&str, &str>,
     export_interface_names: &HashMap<&str, &str>,
@@ -343,7 +345,7 @@ pub async fn componentize(
         dl_openable: false,
     });
 
-    let component = link::link_libraries(&libraries)?;
+    let component = link::link_libraries(&libraries, adapter)?;
 
     let stubbed_component = if stub_wasi {
         stubwasi::link_stub_modules(libraries)?

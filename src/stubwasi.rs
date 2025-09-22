@@ -12,7 +12,7 @@ use crate::Library;
 type LinkedStubModules = Option<(Vec<u8>, Box<dyn Fn(u32) -> u32>)>;
 
 pub fn link_stub_modules(libraries: Vec<Library>) -> Result<LinkedStubModules, Error> {
-    let mut wasi_imports = HashMap::new();
+    let mut imports_to_stub = HashMap::new();
     let mut linker = wit_component::Linker::default()
         .validate(true)
         .use_built_in_libdl(true);
@@ -23,11 +23,11 @@ pub fn link_stub_modules(libraries: Vec<Library>) -> Result<LinkedStubModules, E
         dl_openable,
     } in &libraries
     {
-        add_wasi_imports(module, &mut wasi_imports)?;
+        add_wasi_imports(module, &mut imports_to_stub, false)?;
         linker = linker.library(name, module, *dl_openable)?;
     }
 
-    for (module, imports) in &wasi_imports {
+    for (module, imports) in &imports_to_stub {
         linker = linker.adapter(module, &make_stub_adapter(module, imports))?;
     }
 
@@ -43,7 +43,7 @@ pub fn link_stub_modules(libraries: Vec<Library>) -> Result<LinkedStubModules, E
     // changes.  Can we make it more robust?
 
     let old_adapter_count = 1;
-    let new_adapter_count = u32::try_from(wasi_imports.len())?;
+    let new_adapter_count = u32::try_from(imports_to_stub.len())?;
     assert!(new_adapter_count >= old_adapter_count);
 
     Ok(Some((
@@ -66,6 +66,7 @@ pub fn link_stub_modules(libraries: Vec<Library>) -> Result<LinkedStubModules, E
 fn add_wasi_imports<'a>(
     module: &'a [u8],
     imports: &mut HashMap<&'a str, HashMap<&'a str, FuncType>>,
+    only_missing: bool,
 ) -> Result<(), Error> {
     let mut types = Vec::new();
     for payload in Parser::new(0).parse_all(module) {
@@ -80,9 +81,17 @@ fn add_wasi_imports<'a>(
                 for import in reader {
                     let import = import?;
 
-                    if import.module == "wasi_snapshot_preview1"
-                        || import.module.starts_with("wasi:")
-                    {
+                    // if `only_missing`, we should only stub wasi modules that are
+                    // not present in the selected wasi adapter.
+                    let is_adapter = import.module == "wasi_snapshot1_preview1";
+                    let has_wasi_prefix = import.module.starts_with("wasi:");
+                    let should_stub = if only_missing {
+                        !is_adapter && has_wasi_prefix
+                    } else {
+                        is_adapter || has_wasi_prefix
+                    };
+
+                    if should_stub {
                         if let TypeRef::Func(ty) = import.ty {
                             imports
                                 .entry(import.module)
