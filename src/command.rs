@@ -24,7 +24,7 @@ pub struct Options {
 
 #[derive(clap::Args, Clone, Debug)]
 pub struct Common {
-    /// File or directory containing WIT document(s).
+    /// Files or directories containing WIT document(s).
     ///
     /// This may be specified more than once, for example:
     /// `-d ./wit/deps -d ./wit/app`
