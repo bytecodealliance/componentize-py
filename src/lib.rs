@@ -22,11 +22,8 @@ use {
         Config, Engine, Store,
     },
     wasmtime_wasi::{
-        p2::{
-            pipe::{MemoryInputPipe, MemoryOutputPipe},
-            IoView, WasiCtx, WasiCtxBuilder, WasiView,
-        },
-        DirPerms, FilePerms,
+        p2::pipe::{MemoryInputPipe, MemoryOutputPipe},
+        DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView,
     },
     wit_parser::{Resolve, TypeDefKind, UnresolvedPackageGroup, WorldId, WorldItem, WorldKey},
 };
@@ -53,7 +50,7 @@ static DEFAULT_WORLD_MODULE: &str = "wit_world";
 wasmtime::component::bindgen!({
     path: "wit",
     world: "init",
-    async: true
+    exports: { default: async }
 });
 
 pub struct Ctx {
@@ -68,14 +65,11 @@ pub struct Library {
 }
 
 impl WasiView for Ctx {
-    fn ctx(&mut self) -> &mut WasiCtx {
-        &mut self.wasi
-    }
-}
-
-impl IoView for Ctx {
-    fn table(&mut self) -> &mut ResourceTable {
-        &mut self.table
+    fn ctx(&mut self) -> WasiCtxView<'_> {
+        WasiCtxView {
+            ctx: &mut self.wasi,
+            table: &mut self.table,
+        }
     }
 }
 
@@ -329,7 +323,9 @@ pub async fn componentize(
         .iter()
         .any(|&id| app_name == resolve.worlds[id].name.to_snake_case().escape())
     {
-        bail!("App name `{app_name}` conflicts with world name; please rename your application module.");
+        bail!(
+            "App name `{app_name}` conflicts with world name; please rename your application module."
+        );
     }
 
     let summary = Summary::try_new(
@@ -597,7 +593,8 @@ fn parse_wit(
     }
 
     let pkg = last_pkg.unwrap(); // The paths should not be empty
-    let world = resolve.select_world(pkg, world)?;
+    let world = resolve.select_world(&[pkg], world)?;
+
     Ok((resolve, world))
 }
 

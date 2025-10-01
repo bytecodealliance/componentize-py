@@ -15,23 +15,21 @@ tar = "0.4.42"
 tempfile = "3.13.0"
 zstd = "0.13.2"
 componentize-py-shared = { path = "shared" }
-wasm-encoder = "0.235.0"
-wit-parser = "0.235.0"
-wit-component = "0.235.0"
-wasmparser = "0.235.0"
+wasm-encoder = "0.239.0"
+wit-parser = "0.239.0"
+wit-component = "0.239.0"
+wasmparser = "0.239.0"
 indexmap = "2.6.0"
 bincode = "1.3.3"
 heck = "0.5.0"
-# TODO: switch back to upstream once we've updated to Python 3.14, at which
-# point the following patch will no longer be needed:
-pyo3 = { git = "https://github.com/dicej/pyo3", branch = "v0.25.0-no-wasm32-unwind", features = [
+pyo3 = { version = "0.26.0", features = [
     "abi3-py39",
     "extension-module",
 ], optional = true }
-wasmtime = "34.0.1"
-wasmtime-wasi = "34.0.1"
+wasmtime = "37.0.1"
+wasmtime-wasi = "37.0.1"
 once_cell = "1.20.2"
-component-init-transform = "0.1"
+component-init-transform = { version = "0.2", git = "https://github.com/dicej/component-init", rev = "3800ab6e" }
 async-trait = "0.1.83"
 futures = "0.3.31"
 tokio = { version = "1.41.0", features = [
@@ -73,3 +71,4 @@ test-generator = { path = "test-generator" }
 
 [workspace]
 members = ["runtime", "shared", "test-generator"]
+

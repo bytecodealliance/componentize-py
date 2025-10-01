@@ -382,7 +382,9 @@ fn equality(a: &str, b: &str, ty: &Type) -> String {
         }
         Type::Option(ty) => {
             let test = equality("a", "b", ty);
-            format!("(match (&{a}, &{b}) {{ (Some(a), Some(b)) => {test}, (None, None) => true, _ => false }})")
+            format!(
+                "(match (&{a}, &{b}) {{ (Some(a), Some(b)) => {test}, (None, None) => true, _ => false }})"
+            )
         }
         Type::Result { ok, err } => {
             let ok = ok
@@ -393,7 +395,9 @@ fn equality(a: &str, b: &str, ty: &Type) -> String {
                 .as_ref()
                 .map(|ty| equality("a", "b", ty))
                 .unwrap_or_else(|| "true".to_owned());
-            format!("(match (&{a}, &{b}) {{ (Ok(a), Ok(b)) => {ok}, (Err(a), Err(b)) => {err}, _ => false }})")
+            format!(
+                "(match (&{a}, &{b}) {{ (Ok(a), Ok(b)) => {ok}, (Err(a), Err(b)) => {err}, _ => false }})"
+            )
         }
         Type::Tuple(types) => {
             if types.is_empty() {
@@ -479,7 +483,9 @@ fn strategy(ty: &Type, max_list_size: usize) -> String {
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("(0..{length}).prop_flat_map(move |index| match index {{ {cases}, _ => unreachable!() }})")
+            format!(
+                "(0..{length}).prop_flat_map(move |index| match index {{ {cases}, _ => unreachable!() }})"
+            )
         }
         Type::Flags { id, count } => {
             let name = format!("{PREFIX}::Flags{id}Type");
@@ -502,7 +508,9 @@ fn strategy(ty: &Type, max_list_size: usize) -> String {
                 .map(|index| format!("index => {name}::C{index}"))
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("(0..{count}).prop_map(move |index| match index {{ {cases}, _ => unreachable!() }})")
+            format!(
+                "(0..{count}).prop_map(move |index| match index {{ {cases}, _ => unreachable!() }})"
+            )
         }
         Type::Option(ty) => {
             format!("proptest::option::of({})", strategy(ty, max_list_size))
@@ -810,8 +818,8 @@ use {{
 wasmtime::component::bindgen!({{
     path: {wit_path:?},
     world: "echoes-generated-test",
-    async: true,
-    trappable_imports: true,
+    imports: {{ default: async | trappable }},
+    exports: {{ default: async }},
 }});
 
 pub struct Exports {{

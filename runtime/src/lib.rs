@@ -27,7 +27,7 @@ use {
             PyListMethods, PyMapping, PyMappingMethods, PyModule, PyModuleMethods, PyString,
             PyTuple,
         },
-        Borrowed, Bound, IntoPyObject, Py, PyAny, PyErr, PyObject, PyResult, Python,
+        Borrowed, Bound, IntoPyObject, Py, PyAny, PyErr, PyResult, Python,
     },
     std::{
         alloc::{self, Layout},
@@ -53,12 +53,12 @@ static STUB_WASI: OnceCell<bool> = OnceCell::new();
 static EXPORTS: OnceCell<Vec<Export>> = OnceCell::new();
 static TYPES: OnceCell<Vec<Type>> = OnceCell::new();
 static ENVIRON: OnceCell<Py<PyMapping>> = OnceCell::new();
-static SOME_CONSTRUCTOR: OnceCell<PyObject> = OnceCell::new();
-static OK_CONSTRUCTOR: OnceCell<PyObject> = OnceCell::new();
-static ERR_CONSTRUCTOR: OnceCell<PyObject> = OnceCell::new();
-static FINALIZE: OnceCell<PyObject> = OnceCell::new();
-static DROP_RESOURCE: OnceCell<PyObject> = OnceCell::new();
-static SEED: OnceCell<PyObject> = OnceCell::new();
+static SOME_CONSTRUCTOR: OnceCell<Py<PyAny>> = OnceCell::new();
+static OK_CONSTRUCTOR: OnceCell<Py<PyAny>> = OnceCell::new();
+static ERR_CONSTRUCTOR: OnceCell<Py<PyAny>> = OnceCell::new();
+static FINALIZE: OnceCell<Py<PyAny>> = OnceCell::new();
+static DROP_RESOURCE: OnceCell<Py<PyAny>> = OnceCell::new();
+static SEED: OnceCell<Py<PyAny>> = OnceCell::new();
 static ARGV: OnceCell<Py<PyList>> = OnceCell::new();
 
 struct Borrow {
@@ -73,14 +73,14 @@ const PAYLOAD_FIELD_INDEX: i32 = 1;
 
 #[derive(Debug)]
 struct Case {
-    constructor: PyObject,
+    constructor: Py<PyAny>,
     has_payload: bool,
 }
 
 #[derive(Debug)]
 enum Type {
     Record {
-        constructor: PyObject,
+        constructor: Py<PyAny>,
         fields: Vec<String>,
     },
     Variant {
@@ -88,11 +88,11 @@ enum Type {
         cases: Vec<Case>,
     },
     Enum {
-        constructor: PyObject,
+        constructor: Py<PyAny>,
         count: usize,
     },
     Flags {
-        constructor: PyObject,
+        constructor: Py<PyAny>,
         u32_count: usize,
     },
     Option,
@@ -101,7 +101,7 @@ enum Type {
     Tuple(usize),
     Handle,
     Resource {
-        constructor: PyObject,
+        constructor: Py<PyAny>,
         local: Option<LocalResource>,
         #[allow(dead_code)]
         remote: Option<RemoteResource>,
@@ -111,13 +111,13 @@ enum Type {
 #[derive(Debug)]
 enum Export {
     Freestanding {
-        instance: PyObject,
+        instance: Py<PyAny>,
         name: Py<PyString>,
     },
-    Constructor(PyObject),
+    Constructor(Py<PyAny>),
     Method(Py<PyString>),
     Static {
-        class: PyObject,
+        class: Py<PyAny>,
         name: Py<PyString>,
     },
 }
@@ -199,7 +199,7 @@ fn componentize_py_module(_py: Python<'_>, module: &Bound<PyModule>) -> PyResult
 fn do_init(app_name: String, symbols: Symbols, stub_wasi: bool) -> Result<(), String> {
     pyo3::append_to_inittab!(componentize_py_module);
 
-    pyo3::prepare_freethreaded_python();
+    Python::initialize();
 
     let init = |py: Python| {
         let app = match py.import(app_name.as_str()) {
@@ -393,7 +393,7 @@ fn do_init(app_name: String, symbols: Symbols, stub_wasi: bool) -> Result<(), St
         Ok::<_, Error>(())
     };
 
-    Python::with_gil(|py| init(py).map_err(|e| format!("{e:?}")))
+    Python::attach(|py| init(py).map_err(|e| format!("{e:?}")))
 }
 
 struct MyExports;
@@ -439,7 +439,7 @@ pub unsafe extern "C" fn componentize_py_dispatch(
     params_canon: *const c_void,
     results_canon: *mut c_void,
 ) {
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let mut params_py = vec![ptr::null_mut::<ffi::PyObject>(); param_count.try_into().unwrap()];
 
         componentize_py_call_indirect(
@@ -1056,7 +1056,7 @@ pub extern "C" fn componentize_py_from_canon_handle<'a>(
 
     if local != 0 {
         if borrow != 0 {
-            unsafe { PyObject::from_borrowed_ptr(*py, value as usize as _) }.into_bound(*py)
+            unsafe { Py::<PyAny>::from_borrowed_ptr(*py, value as usize as _) }.into_bound(*py)
         } else {
             let Some(LocalResource { rep, .. }) = resource_local else {
                 panic!("expected local resource, found {ty:?}");
@@ -1076,7 +1076,7 @@ pub extern "C" fn componentize_py_from_canon_handle<'a>(
                 }
             };
 
-            let value = unsafe { PyObject::from_borrowed_ptr(*py, rep as _) }.into_bound(*py);
+            let value = unsafe { Py::<PyAny>::from_borrowed_ptr(*py, rep as _) }.into_bound(*py);
 
             value
                 .delattr(intern!(*py, "__componentize_py_handle"))
@@ -1160,7 +1160,7 @@ pub extern "C" fn componentize_py_to_canon_handle(
         if value.hasattr(name).unwrap() {
             value.getattr(name).unwrap().extract().unwrap()
         } else {
-            let rep = PyObject::from(value.to_owned()).into_ptr();
+            let rep = Py::<PyAny>::from(value.to_owned()).into_ptr();
             let handle = {
                 let params = [rep as usize];
                 let mut results = [MaybeUninit::<u32>::uninit()];
@@ -1175,7 +1175,7 @@ pub extern "C" fn componentize_py_to_canon_handle(
                 }
             };
 
-            let instance = unsafe { PyObject::from_borrowed_ptr(*py, rep) };
+            let instance = unsafe { Py::<PyAny>::from_borrowed_ptr(*py, rep) };
 
             instance
                 .setattr(*py, name, handle.into_pyobject(*py).unwrap())

@@ -12,8 +12,8 @@ use {
 wasmtime::component::bindgen!({
     path: "src/test/wit",
     world: "echoes-test",
-    async: true,
-    trappable_imports: true,
+    imports: { default: async | trappable },
+    exports: { default: async },
 });
 
 impl componentize_py::test::echoes::Host for Ctx {
