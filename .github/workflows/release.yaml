@@ -138,7 +138,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.14.0-rc3"
+          python-version: "3.14.0-rc.3"
 
       - name: Install latest Rust nightly toolchain
         uses: dtolnay/rust-toolchain@nightly
