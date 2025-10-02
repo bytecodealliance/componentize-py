@@ -7,11 +7,11 @@ sandboxed Python code snippets from within a Python app.
 
 ## Prerequisites
 
-* `wasmtime-py` 25.0.0 or later
-* `componentize-py` 0.17.2
+* `wasmtime-py` 37.0.1 or later
+* `componentize-py` 0.18.0
 
 ```
-pip install componentize-py==0.17.2 wasmtime==25.0.0
+pip install componentize-py==0.18.0 wasmtime==37.0.1
 ```
 
 ## Running the demo
