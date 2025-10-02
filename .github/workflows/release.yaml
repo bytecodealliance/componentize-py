@@ -57,8 +57,8 @@ jobs:
         run: |
           cd /tmp
           curl -LO https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz
-          tar xf wasi-sdk-${WASI_SDK_VERSION}-x86_64-linux.tar.gz
-          mv wasi-sdk-${WASI_SDK_VERSION}-x86_64-linux /opt/wasi-sdk
+          tar xf wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz
+          mv wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux /opt/wasi-sdk
 
       - name: Cache CPython
         id: cache-cpython-wasi
@@ -84,7 +84,7 @@ jobs:
               os: "ubuntu-latest",
               arch: "amd64",
               maturin_target: "x86_64",
-              wasiSDK: "linux",
+              wasiSDK: "x86_64-linux",
               extension: "",
               buildArgs: "",
               target: "",
@@ -94,7 +94,7 @@ jobs:
               os: "ubuntu-latest",
               arch: "aarch64",
               maturin_target: "aarch64",
-              wasiSDK: "linux",
+              wasiSDK: "x86_64-linux",
               extension: "",
               buildArgs: "--target aarch64-unknown-linux-gnu",
               target: "aarch64-unknown-linux-gnu",
@@ -104,7 +104,7 @@ jobs:
               os: "macos-latest",
               arch: "amd64",
               maturin_target: "x86_64",
-              wasiSDK: "macos",
+              wasiSDK: "arm64-macos",
               extension: "",
               buildArgs: "",
               target: "",
@@ -114,7 +114,7 @@ jobs:
               os: "macos-latest",
               arch: "aarch64",
               maturin_target: "aarch64",
-              wasiSDK: "macos",
+              wasiSDK: "arm64-macos",
               extension: "",
               buildArgs: "--target aarch64-apple-darwin",
               target: "aarch64-apple-darwin",
@@ -124,7 +124,7 @@ jobs:
               os: "windows-latest",
               arch: "amd64",
               maturin_target: "x64",
-              wasiSDK: "mingw",
+              wasiSDK: "x86_64-windows",
               extension: ".exe",
               buildArgs: "",
               target: "",
@@ -181,18 +181,18 @@ jobs:
         shell: bash
         run: |
           cd /tmp
-          curl -LO https://github.com/dicej/wasi-sdk/releases/download/${WASI_SDK_RELEASE}/wasi-sdk-${WASI_SDK_VERSION}-${{ matrix.config.wasiSDK }}.tar.gz
-          tar xf wasi-sdk-${WASI_SDK_VERSION}-${{ matrix.config.wasiSDK }}.tar.gz
+          curl -LO https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-${{ matrix.config.wasiSDK }}.tar.gz
+          tar xf wasi-sdk-${WASI_SDK_VERSION}.0-${{ matrix.config.wasiSDK }}.tar.gz
 
       - name: Install WASI-SDK
         if: runner.os != 'Windows'
         shell: bash
-        run: sudo mv /tmp/wasi-sdk-${WASI_SDK_VERSION} /opt/wasi-sdk
+        run: sudo mv /tmp/wasi-sdk-${WASI_SDK_VERSION}.0-${{ matrix.config.wasiSDK }} /opt/wasi-sdk
 
       - name: Install WASI-SDK on Windows
         if: runner.os == 'Windows'
         shell: bash
-        run: echo "WASI_SDK_PATH=$(cygpath -m /tmp/wasi-sdk-${WASI_SDK_VERSION})" >> ${GITHUB_ENV}
+        run: echo "WASI_SDK_PATH=$(cygpath -m /tmp/wasi-sdk-${WASI_SDK_VERSION}.0-${{ matrix.config.wasiSDK }})" >> ${GITHUB_ENV}
 
       - name: Restore CPython
         id: cache-cpython-wasi
