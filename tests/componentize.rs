@@ -295,7 +295,7 @@ fn venv_path(path: &Path) -> PathBuf {
 
 fn install_numpy(path: &Path) -> anyhow::Result<()> {
     let bytes = reqwest::blocking::get(
-        "https://github.com/dicej/wasi-wheels/releases/download/v0.0.1/numpy-wasi.tar.gz",
+        "https://github.com/dicej/wasi-wheels/releases/download/v0.0.2/numpy-wasi.tar.gz",
     )?
     .error_for_status()?
     .bytes()?;

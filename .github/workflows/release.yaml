@@ -12,8 +12,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  WASI_SDK_VERSION: 20.46gf3a1f8991535
-  WASI_SDK_RELEASE: wasi-sockets-alpha-5
+  WASI_SDK_VERSION: 27
 
 permissions:
   contents: write
@@ -31,7 +30,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.14.0-rc.3"
 
       - name: Install latest Rust nightly toolchain
         uses: dtolnay/rust-toolchain@nightly
@@ -57,16 +56,16 @@ jobs:
         shell: bash
         run: |
           cd /tmp
-          curl -LO https://github.com/dicej/wasi-sdk/releases/download/${WASI_SDK_RELEASE}/wasi-sdk-${WASI_SDK_VERSION}-linux.tar.gz
-          tar xf wasi-sdk-${WASI_SDK_VERSION}-linux.tar.gz
-          mv wasi-sdk-${WASI_SDK_VERSION} /opt/wasi-sdk
+          curl -LO https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz
+          tar xf wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz
+          mv wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux /opt/wasi-sdk
 
       - name: Cache CPython
         id: cache-cpython-wasi
         uses: actions/cache@v4
         with:
           path: cpython/builddir/wasi
-          key: cpython-wasi
+          key: cpython-wasi-v1
           enableCrossOsArchive: true
 
       - name: Build
@@ -85,7 +84,7 @@ jobs:
               os: "ubuntu-latest",
               arch: "amd64",
               maturin_target: "x86_64",
-              wasiSDK: "linux",
+              wasiSDK: "x86_64-linux",
               extension: "",
               buildArgs: "",
               target: "",
@@ -95,7 +94,7 @@ jobs:
               os: "ubuntu-latest",
               arch: "aarch64",
               maturin_target: "aarch64",
-              wasiSDK: "linux",
+              wasiSDK: "x86_64-linux",
               extension: "",
               buildArgs: "--target aarch64-unknown-linux-gnu",
               target: "aarch64-unknown-linux-gnu",
@@ -105,7 +104,7 @@ jobs:
               os: "macos-latest",
               arch: "amd64",
               maturin_target: "x86_64",
-              wasiSDK: "macos",
+              wasiSDK: "arm64-macos",
               extension: "",
               buildArgs: "",
               target: "",
@@ -115,7 +114,7 @@ jobs:
               os: "macos-latest",
               arch: "aarch64",
               maturin_target: "aarch64",
-              wasiSDK: "macos",
+              wasiSDK: "arm64-macos",
               extension: "",
               buildArgs: "--target aarch64-apple-darwin",
               target: "aarch64-apple-darwin",
@@ -125,7 +124,7 @@ jobs:
               os: "windows-latest",
               arch: "amd64",
               maturin_target: "x64",
-              wasiSDK: "mingw",
+              wasiSDK: "x86_64-windows",
               extension: ".exe",
               buildArgs: "",
               target: "",
@@ -139,7 +138,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.14.0-rc.3"
 
       - name: Install latest Rust nightly toolchain
         uses: dtolnay/rust-toolchain@nightly
@@ -182,25 +181,25 @@ jobs:
         shell: bash
         run: |
           cd /tmp
-          curl -LO https://github.com/dicej/wasi-sdk/releases/download/${WASI_SDK_RELEASE}/wasi-sdk-${WASI_SDK_VERSION}-${{ matrix.config.wasiSDK }}.tar.gz
-          tar xf wasi-sdk-${WASI_SDK_VERSION}-${{ matrix.config.wasiSDK }}.tar.gz
+          curl -LO https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-${{ matrix.config.wasiSDK }}.tar.gz
+          tar xf wasi-sdk-${WASI_SDK_VERSION}.0-${{ matrix.config.wasiSDK }}.tar.gz
 
       - name: Install WASI-SDK
         if: runner.os != 'Windows'
         shell: bash
-        run: sudo mv /tmp/wasi-sdk-${WASI_SDK_VERSION} /opt/wasi-sdk
+        run: sudo mv /tmp/wasi-sdk-${WASI_SDK_VERSION}.0-${{ matrix.config.wasiSDK }} /opt/wasi-sdk
 
       - name: Install WASI-SDK on Windows
         if: runner.os == 'Windows'
         shell: bash
-        run: echo "WASI_SDK_PATH=$(cygpath -m /tmp/wasi-sdk-${WASI_SDK_VERSION})" >> ${GITHUB_ENV}
+        run: echo "WASI_SDK_PATH=$(cygpath -m /tmp/wasi-sdk-${WASI_SDK_VERSION}.0-${{ matrix.config.wasiSDK }})" >> ${GITHUB_ENV}
 
       - name: Restore CPython
         id: cache-cpython-wasi
         uses: actions/cache/restore@v4
         with:
           path: cpython/builddir/wasi
-          key: cpython-wasi
+          key: cpython-wasi-v1
           enableCrossOsArchive: true
 
       - name: Build wheels

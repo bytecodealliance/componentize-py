@@ -16,7 +16,7 @@ use zstd::Decoder;
 
 use crate::{ComponentizePyConfig, ConfigContext, Library, RawComponentizePyConfig};
 
-static NATIVE_EXTENSION_SUFFIX: &str = ".cpython-312-wasm32-wasi.so";
+static NATIVE_EXTENSION_SUFFIX: &str = ".cpython-314-wasm32-wasi.so";
 
 type ConfigsMatchedWorlds<'a> =
     IndexMap<String, (ConfigContext<ComponentizePyConfig>, Option<&'a str>)>;
@@ -60,10 +60,10 @@ pub fn bundle_libraries(library_path: Vec<(&str, Vec<PathBuf>)>) -> Result<Vec<L
             dl_openable: false,
         },
         Library {
-            name: "libpython3.12.so".into(),
+            name: "libpython3.14.so".into(),
             module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
                 env!("OUT_DIR"),
-                "/libpython3.12.so.zst"
+                "/libpython3.14.so.zst"
             ))))?,
             dl_openable: false,
         },

@@ -1,8 +1,8 @@
 implementation=CPython
-version=3.12
+version=3.14
 shared=false
 abi3=false
-lib_name=python3.12
+lib_name=python3.14
 pointer_width=64
 build_flags=
 suppress_build_script_link_lines=false
