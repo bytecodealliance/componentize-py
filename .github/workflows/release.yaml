@@ -82,6 +82,11 @@ jobs:
               os: "ubuntu-latest",
               arch: "amd64",
               maturin_target: "x86_64",
+              # As of this writing, the offical WASI-SDK x86_64-linux builds
+              # require a newer version of glibc than the manylinux 2_28 Maturin
+              # Docker build images support.  That means we need to use a
+              # special build made using Ubuntu 18.04 here:
+              wasiSDK_source: "dicej",
               wasiSDK: "x86_64-linux",
               extension: "",
               buildArgs: "",
@@ -92,6 +97,7 @@ jobs:
               os: "ubuntu-latest",
               arch: "aarch64",
               maturin_target: "aarch64",
+              wasiSDK_source: "WebAssembly",
               wasiSDK: "x86_64-linux",
               extension: "",
               buildArgs: "--target aarch64-unknown-linux-gnu",
@@ -102,6 +108,7 @@ jobs:
               os: "macos-latest",
               arch: "amd64",
               maturin_target: "x86_64",
+              wasiSDK_source: "WebAssembly",
               wasiSDK: "arm64-macos",
               extension: "",
               buildArgs: "",
@@ -112,6 +119,7 @@ jobs:
               os: "macos-latest",
               arch: "aarch64",
               maturin_target: "aarch64",
+              wasiSDK_source: "WebAssembly",
               wasiSDK: "arm64-macos",
               extension: "",
               buildArgs: "--target aarch64-apple-darwin",
@@ -122,6 +130,7 @@ jobs:
               os: "windows-latest",
               arch: "amd64",
               maturin_target: "x64",
+              wasiSDK_source: "WebAssembly",
               wasiSDK: "x86_64-windows",
               extension: ".exe",
               buildArgs: "",
@@ -179,7 +188,7 @@ jobs:
         shell: bash
         run: |
           cd /tmp
-          curl -LO https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-${{ matrix.config.wasiSDK }}.tar.gz
+          curl -LO https://github.com/${{ matrix.config.wasiSDK_source }}/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-${{ matrix.config.wasiSDK }}.tar.gz
           tar xf wasi-sdk-${WASI_SDK_VERSION}.0-${{ matrix.config.wasiSDK }}.tar.gz
 
       - name: Install WASI-SDK
