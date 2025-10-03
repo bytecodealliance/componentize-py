@@ -65,9 +65,17 @@ tempfile = "3.13.0"
 
 [build-dependencies]
 anyhow = "1.0.89"
+reqwest = { version = "0.12.15", features = [
+    "blocking",
+    "brotli",
+    "deflate",
+    "gzip",
+    "zstd",
+] }
 tar = "0.4.41"
 zstd = "0.13.2"
 test-generator = { path = "test-generator" }
+flate2 = "1.1.1"
 
 [workspace]
 members = ["runtime", "shared", "test-generator"]

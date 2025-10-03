@@ -268,11 +268,11 @@ fn add(builder: &mut Builder<impl Write>, root: &Path, path: &Path) -> Result<()
 fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
     let cpython_wasi_dir = repo_dir.join("cpython/builddir/wasi");
     if !cpython_wasi_dir.join("libpython3.14.so").exists() {
+        fs::create_dir_all(&cpython_wasi_dir)?;
         if !cpython_wasi_dir.join("libpython3.14.a").exists() {
             let cpython_native_dir = repo_dir.join("cpython/builddir/build");
             if !cpython_native_dir.join(PYTHON_EXECUTABLE).exists() {
                 fs::create_dir_all(&cpython_native_dir)?;
-                fs::create_dir_all(&cpython_wasi_dir)?;
 
                 run(Command::new("../../configure")
                     .current_dir(&cpython_native_dir)
@@ -284,6 +284,9 @@ fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
                 run(Command::new("make").current_dir(cpython_native_dir))?;
             }
 
+            let lib_install_dir = cpython_wasi_dir.join("deps");
+            build_zlib(wasi_sdk, &lib_install_dir)?;
+
             let config_guess =
                 run(Command::new("../../config.guess").current_dir(&cpython_wasi_dir))?;
 
@@ -292,7 +295,14 @@ fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
                     "CONFIG_SITE",
                     "../../Tools/wasm/wasi/config.site-wasm32-wasi",
                 )
-                .env("CFLAGS", "-fPIC")
+                .env(
+                    "CFLAGS",
+                    format!("-fPIC -I{}/deps/include", cpython_wasi_dir.display()),
+                )
+                .env(
+                    "LDFLAGS",
+                    format!("-L{}/deps/lib", cpython_wasi_dir.display()),
+                )
                 .current_dir(&cpython_wasi_dir)
                 .args([
                     "../../configure",
@@ -329,6 +339,7 @@ fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
             .arg(cpython_wasi_dir.join("Modules/_hacl/libHacl_Hash_SHA3.a"))
             .arg(cpython_wasi_dir.join("Modules/_decimal/libmpdec/libmpdec.a"))
             .arg(cpython_wasi_dir.join("Modules/expat/libexpat.a"))
+            .arg(cpython_wasi_dir.join("deps/lib/libz.a"))
             .arg("-lwasi-emulated-signal")
             .arg("-lwasi-emulated-getpid")
             .arg("-lwasi-emulated-process-clocks")
@@ -386,5 +397,56 @@ fn make_pyo3_config(repo_dir: &Path) -> Result<()> {
 
     println!("cargo:rerun-if-changed=pyo3-config.txt");
 
+    Ok(())
+}
+
+fn fetch_extract(url: &str, out_dir: &Path) -> Result<()> {
+    let response = reqwest::blocking::get(url)?;
+    let decoder = flate2::read::GzDecoder::new(response);
+    let mut archive = tar::Archive::new(decoder);
+    archive.unpack(out_dir)?;
+    Ok(())
+}
+
+fn add_compile_envs(wasi_sdk: &Path, command: &mut Command) {
+    let sysroot = wasi_sdk.join("share/wasi-sysroot");
+    let sysroot = sysroot.to_string_lossy();
+    command
+        .env("AR", wasi_sdk.join("bin/ar"))
+        .env("CC", wasi_sdk.join("bin/clang"))
+        .env("RANLIB", wasi_sdk.join("bin/ranlib"))
+        .env(
+            "CFLAGS",
+            format!("--target=wasm32-wasi --sysroot={sysroot} -I{sysroot}/include/wasm32-wasip1 -D_WASI_EMULATED_SIGNAL -fPIC"),
+        )
+        .env(
+            "LDFLAGS",
+            format!("--target=wasm32-wasip2 --sysroot={sysroot} -L{sysroot}/lib -lwasi-emulated-signal")
+        );
+}
+
+fn build_zlib(wasi_sdk: &Path, install_dir: &Path) -> Result<()> {
+    let out_dir = PathBuf::from(env::var("OUT_DIR")?);
+    fetch_extract(
+        "https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz",
+        &out_dir,
+    )?;
+    let src_dir = out_dir.join("zlib-1.3.1");
+    let mut configure = Command::new("./configure");
+    add_compile_envs(wasi_sdk, &mut configure);
+    configure
+        .current_dir(&src_dir)
+        .arg("--static")
+        .arg(format!("--prefix={}", install_dir.display()));
+    run(&mut configure)?;
+    let mut make = Command::new("make");
+    add_compile_envs(wasi_sdk, &mut make);
+    make.current_dir(src_dir)
+        .arg(format!("AR={}", wasi_sdk.join("bin/ar").display()))
+        .arg("ARFLAGS=rcs")
+        .arg(format!("CC={}", wasi_sdk.join("bin/clang").display()))
+        .arg("static")
+        .arg("install");
+    run(&mut make)?;
     Ok(())
 }
