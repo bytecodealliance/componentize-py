@@ -269,7 +269,7 @@ fn tcp_example() -> anyhow::Result<()> {
 }
 
 fn retry<T>(mut func: impl FnMut() -> anyhow::Result<T>) -> anyhow::Result<T> {
-    let times = 8;
+    let times = 10;
     for i in 0..times {
         match func() {
             Ok(t) => {
