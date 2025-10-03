@@ -53,24 +53,26 @@ fs_extra = "1.3.0"
 hex = "0.4.3"
 predicates = "3.1.2"
 proptest = "1.5.0"
-reqwest = { version = "0.12.15", features = [
+reqwest = { version = "0.12.15", default-features = false, features = [
     "blocking",
     "brotli",
     "deflate",
     "gzip",
     "zstd",
+    "rustls-tls",
 ] }
 tar = "0.4.42"
 tempfile = "3.13.0"
 
 [build-dependencies]
 anyhow = "1.0.89"
-reqwest = { version = "0.12.15", features = [
+reqwest = { version = "0.12.15", default-features = false, features = [
     "blocking",
     "brotli",
     "deflate",
     "gzip",
     "zstd",
+    "rustls-tls",
 ] }
 tar = "0.4.41"
 zstd = "0.13.2"
