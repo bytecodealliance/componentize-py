@@ -60,17 +60,15 @@ jobs:
           tar xf wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz
           mv wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux /opt/wasi-sdk
 
-      - name: Cache CPython
-        id: cache-cpython-wasi
-        uses: actions/cache@v4
-        with:
-          path: cpython/builddir/wasi
-          key: cpython-wasi-v1
-          enableCrossOsArchive: true
-
       - name: Build
         shell: bash
         run: cargo build --release
+
+      - name: Upload CPython builddir
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpython-wasi
+          path: cpython/builddir/wasi
 
   release:
     name: Build and release
@@ -195,12 +193,10 @@ jobs:
         run: echo "WASI_SDK_PATH=$(cygpath -m /tmp/wasi-sdk-${WASI_SDK_VERSION}.0-${{ matrix.config.wasiSDK }})" >> ${GITHUB_ENV}
 
       - name: Restore CPython
-        id: cache-cpython-wasi
-        uses: actions/cache/restore@v4
+        uses: actions/download-artifact@v5
         with:
+          name: cpython-wasi
           path: cpython/builddir/wasi
-          key: cpython-wasi-v1
-          enableCrossOsArchive: true
 
       - name: Build wheels
         uses: PyO3/maturin-action@v1
