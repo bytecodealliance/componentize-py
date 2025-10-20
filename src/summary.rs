@@ -8,13 +8,13 @@ use {
         },
         util::Types as _,
     },
-    anyhow::{bail, Result},
+    anyhow::{Result, bail},
     heck::{ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase},
     indexmap::{IndexMap, IndexSet},
     once_cell::sync,
     semver::Version,
     std::{
-        collections::{hash_map::Entry, HashMap, HashSet},
+        collections::{HashMap, HashSet, hash_map::Entry},
         fmt::Write as _,
         fs::{self, File},
         io::Write as _,
@@ -654,7 +654,7 @@ impl<'a> Summary<'a> {
                     OwnedKind::Flags(flags.repr().count().try_into().unwrap())
                 }
                 TypeDefKind::Tuple(_) | TypeDefKind::Option(_) | TypeDefKind::Result(_) => {
-                    return self.summarize_unowned_type(id)
+                    return self.summarize_unowned_type(id);
                 }
                 TypeDefKind::Resource => {
                     let info = &self.resource_info[&id];
@@ -1082,13 +1082,14 @@ impl<'a> Summary<'a> {
                 unreachable!()
             };
 
-            assert!(tree
-                .entry(info.name)
-                .or_default()
-                .entry(info.package.map(|p| (p.namespace, p.name)))
-                .or_default()
-                .insert(info.package.and_then(|p| p.version), id)
-                .is_none());
+            assert!(
+                tree.entry(info.name)
+                    .or_default()
+                    .entry(info.package.map(|p| (p.namespace, p.name)))
+                    .or_default()
+                    .insert(info.package.and_then(|p| p.version), id)
+                    .is_none()
+            );
         }
 
         let mut names = HashMap::new();
@@ -1096,11 +1097,12 @@ impl<'a> Summary<'a> {
             for (package, versions) in packages {
                 if let Some((package_namespace, package_name)) = package {
                     for (version, id) in versions {
-                        assert!(names
-                            .insert(
-                                *id,
-                                if let Some(version) = version {
-                                    if let Some(name) = interface_names.get(
+                        assert!(
+                            names
+                                .insert(
+                                    *id,
+                                    if let Some(version) = version {
+                                        if let Some(name) = interface_names.get(
                                         format!(
                                             "{package_namespace}:{package_name}/{name}@{version}"
                                         )
@@ -1119,25 +1121,29 @@ impl<'a> Summary<'a> {
                                             version.to_string().replace('.', "-")
                                         )
                                     }
-                                } else if let Some(name) = interface_names.get(
-                                    format!("{package_namespace}:{package_name}/{name}").as_str()
-                                ) {
-                                    (*name).to_owned()
-                                } else if packages.len() == 1 {
-                                    (*name).to_owned()
-                                } else {
-                                    format!("{package_namespace}-{package_name}-{name}",)
-                                }
-                            )
-                            .is_none());
+                                    } else if let Some(name) = interface_names.get(
+                                        format!("{package_namespace}:{package_name}/{name}")
+                                            .as_str()
+                                    ) {
+                                        (*name).to_owned()
+                                    } else if packages.len() == 1 {
+                                        (*name).to_owned()
+                                    } else {
+                                        format!("{package_namespace}-{package_name}-{name}",)
+                                    }
+                                )
+                                .is_none()
+                        );
                     }
                 } else {
-                    assert!(names
-                        .insert(
-                            *versions.get(&None).unwrap(),
-                            (*interface_names.get(*name).unwrap_or(name)).to_owned()
-                        )
-                        .is_none());
+                    assert!(
+                        names
+                            .insert(
+                                *versions.get(&None).unwrap(),
+                                (*interface_names.get(*name).unwrap_or(name)).to_owned()
+                            )
+                            .is_none()
+                    );
                 }
             }
         }

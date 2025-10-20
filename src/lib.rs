@@ -1,7 +1,7 @@
 #![deny(warnings)]
 
 use {
-    anyhow::{anyhow, bail, ensure, Context, Error, Result},
+    anyhow::{Context, Error, Result, anyhow, bail, ensure},
     async_trait::async_trait,
     bytes::Bytes,
     component_init_transform::Invoker,
@@ -18,12 +18,12 @@ use {
     },
     summary::{Escape, Locations, Summary},
     wasmtime::{
-        component::{Component, Instance, Linker, ResourceTable, ResourceType},
         Config, Engine, Store,
+        component::{Component, Instance, Linker, ResourceTable, ResourceType},
     },
     wasmtime_wasi::{
-        p2::pipe::{MemoryInputPipe, MemoryOutputPipe},
         DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView,
+        p2::pipe::{MemoryInputPipe, MemoryOutputPipe},
     },
     wit_parser::{Resolve, TypeDefKind, UnresolvedPackageGroup, WorldId, WorldItem, WorldKey},
 };
@@ -661,29 +661,27 @@ fn add_wasi_and_stubs(
             // Note that we do _not_ stub interfaces which appear to be part of WASIp2 since those should be
             // provided by the `wasmtime_wasi::add_to_linker_async` call above, and adding stubs to those same
             // interfaces would just cause trouble.
-            if !is_wasip2_cli(&interface_name) {
-                if let Ok(mut instance) = linker.instance(&interface_name) {
-                    for stub in stubs {
-                        let interface_name = interface_name.clone();
-                        match stub {
-                            Stub::Function(name) => instance.func_new(name, {
+            if !is_wasip2_cli(&interface_name)
+                && let Ok(mut instance) = linker.instance(&interface_name)
+            {
+                for stub in stubs {
+                    let interface_name = interface_name.clone();
+                    match stub {
+                        Stub::Function(name) => instance.func_new(name, {
+                            let name = name.clone();
+                            move |_, _, _| {
+                                Err(anyhow!("called trapping stub: {interface_name}#{name}"))
+                            }
+                        }),
+                        Stub::Resource(name) => instance
+                            .resource(name, ResourceType::host::<()>(), {
                                 let name = name.clone();
-                                move |_, _, _| {
+                                move |_, _| {
                                     Err(anyhow!("called trapping stub: {interface_name}#{name}"))
                                 }
-                            }),
-                            Stub::Resource(name) => instance
-                                .resource(name, ResourceType::host::<()>(), {
-                                    let name = name.clone();
-                                    move |_, _| {
-                                        Err(anyhow!(
-                                            "called trapping stub: {interface_name}#{name}"
-                                        ))
-                                    }
-                                })
-                                .map(drop),
-                        }?;
-                    }
+                            })
+                            .map(drop),
+                    }?;
                 }
             }
         } else {

@@ -1,8 +1,8 @@
 use {
     crate::{
         bindgen::{
-            FunctionBindgen, DISPATCHABLE_CORE_PARAM_COUNT, DISPATCH_CORE_PARAM_COUNT, IMPORTS,
-            IMPORT_SIGNATURES,
+            DISPATCH_CORE_PARAM_COUNT, DISPATCHABLE_CORE_PARAM_COUNT, FunctionBindgen,
+            IMPORT_SIGNATURES, IMPORTS,
         },
         summary::{FunctionKind, Summary},
     },
@@ -181,14 +181,14 @@ pub fn make_bindings(
         types.ty().function(params, results);
         functions.function(offset);
         function_names.push((offset, function.internal_name(resolve)));
-        let mut gen = FunctionBindgen::new(summary, function, stack_pointer);
+        let mut r#gen = FunctionBindgen::new(summary, function, stack_pointer);
 
         match function.kind {
             FunctionKind::Import => {
-                gen.compile_import(import_index.try_into().unwrap());
+                r#gen.compile_import(import_index.try_into().unwrap());
                 import_index += 1;
             }
-            FunctionKind::Export => gen.compile_export(
+            FunctionKind::Export => r#gen.compile_export(
                 export_set
                     .get_index_of(&(function.interface.as_ref().map(|i| i.name), function.name))
                     .unwrap()
@@ -198,25 +198,25 @@ pub fn make_bindings(
                 dispatch_index,
                 dispatch_index + 1,
             ),
-            FunctionKind::ExportFromCanon => gen.compile_export_from_canon(),
-            FunctionKind::ExportToCanon => gen.compile_export_to_canon(),
-            FunctionKind::ExportPostReturn => gen.compile_export_post_return(),
+            FunctionKind::ExportFromCanon => r#gen.compile_export_from_canon(),
+            FunctionKind::ExportToCanon => r#gen.compile_export_to_canon(),
+            FunctionKind::ExportPostReturn => r#gen.compile_export_post_return(),
             FunctionKind::ResourceNew => {
-                gen.compile_resource_new(import_index.try_into().unwrap());
+                r#gen.compile_resource_new(import_index.try_into().unwrap());
                 import_index += 1;
             }
             FunctionKind::ResourceRep => {
-                gen.compile_resource_rep(import_index.try_into().unwrap());
+                r#gen.compile_resource_rep(import_index.try_into().unwrap());
                 import_index += 1;
             }
             FunctionKind::ResourceDropLocal | FunctionKind::ResourceDropRemote => {
-                gen.compile_resource_drop(import_index.try_into().unwrap());
+                r#gen.compile_resource_drop(import_index.try_into().unwrap());
                 import_index += 1;
             }
         };
 
-        let mut func = Function::new_with_locals_types(gen.local_types);
-        for instruction in &gen.instructions {
+        let mut func = Function::new_with_locals_types(r#gen.local_types);
+        for instruction in &r#gen.instructions {
             func.instruction(instruction);
         }
         func.instruction(&Ins::End);

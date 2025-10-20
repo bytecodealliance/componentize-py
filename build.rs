@@ -1,7 +1,7 @@
 #![deny(warnings)]
 
 use {
-    anyhow::{anyhow, bail, Context, Result},
+    anyhow::{Context, Result, anyhow, bail},
     std::{
         env,
         fmt::Write as _,
@@ -297,11 +297,17 @@ fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
                 )
                 .env(
                     "CFLAGS",
-                    format!("-fPIC -I{}/deps/include", cpython_wasi_dir.display()),
+                    format!(
+                        "--target=wasm32-wasip2 -fPIC -I{}/deps/include",
+                        cpython_wasi_dir.display()
+                    ),
                 )
                 .env(
                     "LDFLAGS",
-                    format!("-L{}/deps/lib", cpython_wasi_dir.display()),
+                    format!(
+                        "--target=wasm32-wasip2 -L{}/deps/lib",
+                        cpython_wasi_dir.display()
+                    ),
                 )
                 .current_dir(&cpython_wasi_dir)
                 .args([

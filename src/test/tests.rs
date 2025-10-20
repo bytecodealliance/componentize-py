@@ -1,13 +1,13 @@
 #![allow(non_local_definitions)]
 
 use {
-    super::{Ctx, Tester, SEED},
-    anyhow::{anyhow, Error, Result},
+    super::{Ctx, SEED, Tester},
+    anyhow::{Error, Result, anyhow},
     once_cell::sync::Lazy,
     std::str,
     wasmtime::{
-        component::{HasSelf, InstancePre, Linker, Resource, ResourceAny},
         Store,
+        component::{HasSelf, InstancePre, Linker, Resource, ResourceAny},
     },
     wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder, WasiView},
 };

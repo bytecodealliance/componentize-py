@@ -3,10 +3,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use assert_cmd::{assert::Assert, Command};
+use assert_cmd::{Command, assert::Assert};
 use flate2::bufread::GzDecoder;
 use fs_extra::dir::CopyOptions;
-use predicates::{prelude::predicate, Predicate};
+use predicates::{Predicate, prelude::predicate};
 use tar::Archive;
 
 #[test]

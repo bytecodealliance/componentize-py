@@ -5,10 +5,10 @@
 
 use {
     pyo3::{
+        Bound, PyResult, Python,
         exceptions::PyAssertionError,
         pybacked::PyBackedStr,
         types::{PyAnyMethods, PyModule, PyModuleMethods},
-        Bound, PyResult, Python,
     },
     std::{ffi::OsString, path::PathBuf},
     tokio::runtime::Runtime,

@@ -1,11 +1,11 @@
 use {
-    super::{Ctx, MyF32, MyF64, Tester, SEED},
+    super::{Ctx, MyF32, MyF64, SEED, Tester},
     anyhow::Result,
     once_cell::sync::Lazy,
     proptest::strategy::{Just, Strategy},
     wasmtime::{
-        component::{HasSelf, InstancePre, Linker},
         Store,
+        component::{HasSelf, InstancePre, Linker},
     },
 };
 

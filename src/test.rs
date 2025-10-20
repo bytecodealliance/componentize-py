@@ -2,7 +2,7 @@
 
 use {
     crate::Ctx,
-    anyhow::{anyhow, Result},
+    anyhow::{Result, anyhow},
     once_cell::sync::Lazy,
     proptest::{
         prelude::Strategy,
@@ -11,8 +11,8 @@ use {
     std::{collections::HashMap, env, fs, iter, marker::PhantomData},
     tokio::runtime::Runtime,
     wasmtime::{
-        component::{Component, InstancePre, Linker, ResourceTable},
         Config, Engine, Store,
+        component::{Component, InstancePre, Linker, ResourceTable},
     },
     wasmtime_wasi::{WasiCtx, WasiCtxBuilder},
 };
