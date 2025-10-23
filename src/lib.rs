@@ -10,6 +10,7 @@ use {
     indexmap::{IndexMap, IndexSet},
     serde::Deserialize,
     std::{
+        borrow::Cow,
         collections::HashMap,
         fs, iter,
         ops::Deref,
@@ -17,6 +18,7 @@ use {
         str,
     },
     summary::{Escape, Locations, Summary},
+    wasm_encoder::{CustomSection, Section as _},
     wasmtime::{
         Config, Engine, Store,
         component::{Component, Instance, Linker, ResourceTable, ResourceType},
@@ -25,12 +27,14 @@ use {
         DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView,
         p2::pipe::{MemoryInputPipe, MemoryOutputPipe},
     },
-    wit_parser::{Resolve, TypeDefKind, UnresolvedPackageGroup, WorldId, WorldItem, WorldKey},
+    wit_component::metadata,
+    wit_dylib::DylibOpts,
+    wit_parser::{
+        CloneMaps, Package, PackageName, Resolve, Stability, TypeDefKind, UnresolvedPackageGroup,
+        World, WorldId, WorldItem, WorldKey,
+    },
 };
 
-mod abi;
-mod bindgen;
-mod bindings;
 pub mod command;
 mod link;
 mod prelink;
@@ -50,7 +54,7 @@ static DEFAULT_WORLD_MODULE: &str = "wit_world";
 wasmtime::component::bindgen!({
     path: "wit",
     world: "init",
-    exports: { default: async }
+    exports: { default: async },
 });
 
 pub struct Ctx {
@@ -189,11 +193,13 @@ pub fn generate_bindings(
     // `componentize` function below, since that can affect the bindings we should be generating.
 
     let (resolve, world) = parse_wit(wit_path, world, features, all_features)?;
+    let import_function_indexes = &HashMap::new();
     let summary = Summary::try_new(
         &resolve,
         &iter::once(world).collect(),
         import_interface_names,
         export_interface_names,
+        import_function_indexes,
     )?;
     let world_module = world_module.unwrap_or(DEFAULT_WORLD_MODULE);
     let world_dir = output_dir.join(world_module.replace('.', "/"));
@@ -296,7 +302,7 @@ pub async fn componentize(
         })
         .collect::<Result<IndexMap<_, _>>>()?;
 
-    let resolve = if let Some(resolve) = resolve {
+    let mut resolve = if let Some(resolve) = resolve {
         resolve
     } else {
         // If no WIT directory was provided as a parameter and none were referenced by Python packages, use
@@ -304,7 +310,7 @@ pub async fn componentize(
         let paths: &[&Path] = &[];
         let (my_resolve, world) = parse_wit(paths, world, features, all_features).context(
             "no WIT files found; please specify the directory or file \
-                 containing the WIT world you wish to target",
+             containing the WIT world you wish to target",
         )?;
         main_world = Some(world);
         my_resolve
@@ -328,16 +334,75 @@ pub async fn componentize(
         );
     }
 
+    let union_package = resolve.packages.alloc(Package {
+        name: PackageName {
+            namespace: "componentize-py".into(),
+            name: "union".into(),
+            version: None,
+        },
+        docs: Default::default(),
+        interfaces: Default::default(),
+        worlds: Default::default(),
+    });
+
+    let union_world = resolve.worlds.alloc(World {
+        name: "union".into(),
+        imports: Default::default(),
+        exports: Default::default(),
+        package: Some(union_package),
+        docs: Default::default(),
+        stability: Stability::Unknown,
+        includes: Default::default(),
+        include_names: Default::default(),
+    });
+
+    resolve.packages[union_package]
+        .worlds
+        .insert("union".into(), union_world);
+
+    let mut clone_maps = CloneMaps::default();
+    for &world in &worlds {
+        resolve.merge_worlds(world, union_world, &mut clone_maps)?;
+    }
+
+    let (mut bindings, metadata) = wit_dylib::create_with_metadata(
+        &resolve,
+        union_world,
+        Some(&mut DylibOpts {
+            interpreter: Some("libcomponentize_py_runtime.so".into()),
+            async_: Default::default(),
+        }),
+    );
+
+    CustomSection {
+        name: Cow::Borrowed("component-type:componentize-py-union"),
+        data: Cow::Owned(metadata::encode(
+            &resolve,
+            union_world,
+            wit_component::StringEncoding::UTF8,
+            None,
+        )?),
+    }
+    .append_to(&mut bindings);
+
+    let imported_function_indexes = metadata
+        .import_funcs
+        .iter()
+        .enumerate()
+        .map(|(index, func)| ((func.interface.as_deref(), func.name.as_str()), index))
+        .collect::<HashMap<_, _>>();
+
     let summary = Summary::try_new(
         &resolve,
         &worlds,
         &import_interface_names,
         &export_interface_names,
+        &imported_function_indexes,
     )?;
 
     libraries.push(Library {
         name: "libcomponentize_py_bindings.so".into(),
-        module: bindings::make_bindings(&resolve, &worlds, &summary)?,
+        module: bindings,
         dl_openable: false,
     });
 
@@ -362,7 +427,6 @@ pub async fn componentize(
         .stdout(stdout.clone())
         .stderr(stderr.clone())
         .env("PYTHONUNBUFFERED", "1")
-        .env("COMPONENTIZE_PY_APP_NAME", app_name)
         .env("PYTHONHOME", "/python")
         .preopened_dir(
             embedded_python_standard_lib.path(),
@@ -479,7 +543,7 @@ pub async fn componentize(
 
     // Generate a `Symbols` object containing metadata to be passed to the pre-init function.  The runtime library
     // will use this to look up types and functions that will later be referenced by the generated Wasm code.
-    let symbols = summary.collect_symbols(&locations);
+    let symbols = summary.collect_symbols(&locations, &metadata, &clone_maps);
 
     // Finally, pre-initialize the component, writing the result to `output_path`.
 

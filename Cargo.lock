@@ -474,14 +474,14 @@ checksum = "5b63caa9aa9397e2d9480a9b13673856c78d8ac123288526c37d7839f2a86990"
 [[package]]
 name = "component-init-transform"
 version = "0.2.0"
-source = "git+https://github.com/dicej/component-init?rev=3800ab6e#3800ab6ef88c4a9817119ccfe5fa9de8ff2afff1"
+source = "git+https://github.com/dicej/component-init?rev=3b9680fe#3b9680fe652421d4d80e3d00c93d8b5eecb8acdc"
 dependencies = [
  "anyhow",
  "async-trait",
  "futures",
- "wasm-encoder 0.238.1",
- "wasm-metadata 0.238.1",
- "wasmparser 0.238.1",
+ "wasm-encoder 0.240.0",
+ "wasm-metadata 0.240.0",
+ "wasmparser 0.240.0",
 ]
 
 [[package]]
@@ -496,7 +496,6 @@ dependencies = [
  "cap-std",
  "clap",
  "component-init-transform",
- "componentize-py-shared",
  "flate2",
  "fs_extra",
  "futures",
@@ -517,12 +516,13 @@ dependencies = [
  "test-generator",
  "tokio",
  "toml",
- "wasm-encoder 0.239.0",
- "wasmparser 0.239.0",
+ "wasm-encoder 0.240.0",
+ "wasmparser 0.240.0",
  "wasmtime",
  "wasmtime-wasi",
- "wit-component 0.239.0",
- "wit-parser 0.239.0",
+ "wit-component 0.240.0",
+ "wit-dylib",
+ "wit-parser 0.240.0",
  "zstd",
 ]
 
@@ -531,17 +531,13 @@ name = "componentize-py-runtime"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "componentize-py-shared",
  "num-bigint",
  "once_cell",
  "pyo3",
  "wit-bindgen 0.40.0",
  "wit-bindgen-rt",
+ "wit-dylib-ffi",
 ]
-
-[[package]]
-name = "componentize-py-shared"
-version = "0.1.0"
 
 [[package]]
 name = "core-foundation-sys"
@@ -2911,22 +2907,21 @@ dependencies = [
 
 [[package]]
 name = "wasm-encoder"
-version = "0.238.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d50d48c31c615f77679b61c607b8151378a5d03159616bf3d17e8e2005afdaf5"
-dependencies = [
- "leb128fmt",
- "wasmparser 0.238.1",
-]
-
-[[package]]
-name = "wasm-encoder"
 version = "0.239.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5be00faa2b4950c76fe618c409d2c3ea5a3c9422013e079482d78544bb2d184c"
 dependencies = [
  "leb128fmt",
  "wasmparser 0.239.0",
+]
+
+[[package]]
+name = "wasm-encoder"
+version = "0.240.0"
+source = "git+https://github.com/bytecodealliance/wasm-tools?rev=b1d8ff59#b1d8ff591bcb8c052b54c3c17495bbbef401897c"
+dependencies = [
+ "leb128fmt",
+ "wasmparser 0.240.0",
 ]
 
 [[package]]
@@ -2950,9 +2945,8 @@ dependencies = [
 
 [[package]]
 name = "wasm-metadata"
-version = "0.238.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00094573b000c92134f2ef0f8afa4f6f892de37e78442988c946243a8c44364e"
+version = "0.240.0"
+source = "git+https://github.com/bytecodealliance/wasm-tools?rev=b1d8ff59#b1d8ff591bcb8c052b54c3c17495bbbef401897c"
 dependencies = [
  "anyhow",
  "auditable-serde",
@@ -2963,20 +2957,8 @@ dependencies = [
  "serde_json",
  "spdx",
  "url",
- "wasm-encoder 0.238.1",
- "wasmparser 0.238.1",
-]
-
-[[package]]
-name = "wasm-metadata"
-version = "0.239.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20b3ec880a9ac69ccd92fbdbcf46ee833071cf09f82bb005b2327c7ae6025ae2"
-dependencies = [
- "anyhow",
- "indexmap",
- "wasm-encoder 0.239.0",
- "wasmparser 0.239.0",
+ "wasm-encoder 0.240.0",
+ "wasmparser 0.240.0",
 ]
 
 [[package]]
@@ -2993,9 +2975,9 @@ dependencies = [
 
 [[package]]
 name = "wasmparser"
-version = "0.238.1"
+version = "0.239.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fa99c8328024423875ae4a55345cfde8f0371327fb2d0f33b0f52a06fc44408"
+checksum = "8c9d90bb93e764f6beabf1d02028c70a2156a6583e63ac4218dd07ef733368b0"
 dependencies = [
  "bitflags",
  "hashbrown",
@@ -3006,9 +2988,8 @@ dependencies = [
 
 [[package]]
 name = "wasmparser"
-version = "0.239.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c9d90bb93e764f6beabf1d02028c70a2156a6583e63ac4218dd07ef733368b0"
+version = "0.240.0"
+source = "git+https://github.com/bytecodealliance/wasm-tools?rev=b1d8ff59#b1d8ff591bcb8c052b54c3c17495bbbef401897c"
 dependencies = [
  "bitflags",
  "hashbrown",
@@ -3042,6 +3023,7 @@ dependencies = [
  "cc",
  "cfg-if",
  "encoding_rs",
+ "futures",
  "fxprof-processed-profile",
  "gimli 0.32.2",
  "hashbrown",
@@ -3810,9 +3792,8 @@ dependencies = [
 
 [[package]]
 name = "wit-component"
-version = "0.239.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88a866b19dba2c94d706ec58c92a4c62ab63e482b4c935d2a085ac94caecb136"
+version = "0.240.0"
+source = "git+https://github.com/bytecodealliance/wasm-tools?rev=b1d8ff59#b1d8ff591bcb8c052b54c3c17495bbbef401897c"
 dependencies = [
  "anyhow",
  "bitflags",
@@ -3821,11 +3802,27 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
- "wasm-encoder 0.239.0",
- "wasm-metadata 0.239.0",
- "wasmparser 0.239.0",
- "wit-parser 0.239.0",
+ "wasm-encoder 0.240.0",
+ "wasm-metadata 0.240.0",
+ "wasmparser 0.240.0",
+ "wit-parser 0.240.0",
 ]
+
+[[package]]
+name = "wit-dylib"
+version = "0.240.0"
+source = "git+https://github.com/bytecodealliance/wasm-tools?rev=b1d8ff59#b1d8ff591bcb8c052b54c3c17495bbbef401897c"
+dependencies = [
+ "anyhow",
+ "indexmap",
+ "wasm-encoder 0.240.0",
+ "wit-parser 0.240.0",
+]
+
+[[package]]
+name = "wit-dylib-ffi"
+version = "0.1.0"
+source = "git+https://github.com/bytecodealliance/wasm-tools?rev=b1d8ff59#b1d8ff591bcb8c052b54c3c17495bbbef401897c"
 
 [[package]]
 name = "wit-parser"
@@ -3861,6 +3858,23 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser 0.239.0",
+]
+
+[[package]]
+name = "wit-parser"
+version = "0.240.0"
+source = "git+https://github.com/bytecodealliance/wasm-tools?rev=b1d8ff59#b1d8ff591bcb8c052b54c3c17495bbbef401897c"
+dependencies = [
+ "anyhow",
+ "id-arena",
+ "indexmap",
+ "log",
+ "semver",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "unicode-xid",
+ "wasmparser 0.240.0",
 ]
 
 [[package]]

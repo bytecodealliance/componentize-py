@@ -2,14 +2,8 @@ package componentize-py:init;
 
 world init {
     import wasi:cli/environment@0.2.0;
-
+    
     export exports: interface {
-        record bundled {
-            module: string,
-            protocol: string,
-            name: string
-        }
-
         record function {
             protocol: string,
             name: string
@@ -26,61 +20,83 @@ world init {
             name: string
         }
 
-        variant function-export {
-            bundled(bundled),
+        variant function-export-kind {
             freestanding(function),
             %constructor(%constructor),
             %method(string),
             %static(%static)
         }
 
-        record case {
-            name: string,
-            has-payload: bool,
+        variant return-style {
+            none,
+            normal,
+            %result,
         }
 
-        record local-resource {
-            new: u32,
-            rep: u32,
-            drop: u32
+        record function-export {
+           kind: function-export-kind,
+           return-style: return-style
         }
 
-        record remote-resource {
-            drop: u32
-        }
-        
         record %resource {
-            local: option<local-resource>,
-            remote: option<remote-resource>
-        }
-
-        variant owned-kind {
-            %record(list<string>),
-            %variant(list<case>),
-            %enum(u32),
-            %flags(u32),
-            %resource(%resource),
-        }
-
-        record owned-type {
-            kind: owned-kind,
             %package: string,
             name: string
         }
 
-        variant %type {
-            owned(owned-type),
-            %option,
-            nesting-option,
-            %result,
-            %tuple(u32),
-            handle
+        record %record {
+            %package: string,
+            name: string,
+            fields: list<string>
+        }
+
+        record %flags {
+            %package: string,
+            name: string,
+            u32-count: u32
+        }
+
+        record %tuple {
+            count: u32
+        }
+
+        record case {
+            name: string,
+            has-payload: bool
+        }
+
+        record %variant {
+            %package: string,
+            name: string,
+            cases: list<case>
+        }
+
+        record %enum {
+            %package: string,
+            name: string,
+            count: u32
+        }
+
+        enum option-kind {
+            non-nesting,
+            nesting
+        }
+
+        record result-record {
+            has-ok: bool,
+            has-err: bool,
         }
 
         record symbols {
             types-package: string,
             exports: list<function-export>,
-            types: list<%type>
+            resources: list<%resource>,
+            records: list<%record>,
+            %flags: list<%flags>,
+            tuples: list<%tuple>,
+            variants: list<%variant>,
+            enums: list<%enum>,
+            options: list<option-kind>,
+            results: list<result-record>,
         }
 
         init: func(app-name: string, symbols: symbols, stub-wasi: bool) -> result<_, string>;

@@ -1,17 +1,14 @@
 use {
     crate::{
-        abi::{self, MAX_FLAT_PARAMS, MAX_FLAT_RESULTS},
-        bindgen::{self, DISPATCHABLE_CORE_PARAM_COUNT},
         exports::exports::{
-            self, Case, Constructor, Function, FunctionExport, LocalResource, OwnedKind, OwnedType,
-            RemoteResource, Resource, Static, Symbols,
+            self, Case, Constructor, Function, FunctionExport, FunctionExportKind, ReturnStyle,
+            Static, Symbols,
         },
         util::Types as _,
     },
     anyhow::{Result, bail},
     heck::{ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase},
     indexmap::{IndexMap, IndexSet},
-    once_cell::sync,
     semver::Version,
     std::{
         collections::{HashMap, HashSet, hash_map::Entry},
@@ -19,14 +16,13 @@ use {
         fs::{self, File},
         io::Write as _,
         iter,
-        ops::Deref,
         path::Path,
         str,
     },
-    wasm_encoder::ValType,
+    wit_dylib::Metadata,
     wit_parser::{
-        Handle, InterfaceId, Resolve, Result_, Type, TypeDefKind, TypeId, TypeOwner, WorldId,
-        WorldItem, WorldKey,
+        CloneMaps, Handle, InterfaceId, Resolve, Result_, Type, TypeDef, TypeDefKind, TypeId,
+        TypeOwner, WorldId, WorldItem, WorldKey,
     },
 };
 
@@ -40,27 +36,19 @@ pub enum Direction {
 
 #[derive(Default, Copy, Clone)]
 struct ResourceInfo {
-    local_dispatch_index: Option<usize>,
-    remote_dispatch_index: Option<usize>,
+    local: bool,
+    remote: bool,
 }
 
 #[derive(Clone)]
-struct ResourceState<'a> {
+struct ResourceState {
     direction: Direction,
-    interface: Option<MyInterface<'a>>,
 }
 
 #[derive(Copy, Clone)]
 pub enum FunctionKind {
     Import,
-    ResourceNew,
-    ResourceRep,
-    ResourceDropLocal,
-    ResourceDropRemote,
     Export,
-    ExportFromCanon,
-    ExportToCanon,
-    ExportPostReturn,
 }
 
 #[derive(Copy, Clone)]
@@ -73,9 +61,8 @@ pub struct PackageName<'a> {
 #[derive(Clone)]
 pub struct MyInterface<'a> {
     pub id: InterfaceId,
-    pub name: &'a str,
+    pub key: &'a WorldKey,
     pub docs: Option<&'a str>,
-    pub resource_directions: im_rc::HashMap<TypeId, Direction>,
 }
 
 pub struct MyFunction<'a> {
@@ -94,80 +81,6 @@ impl MyFunction<'_> {
             WorldKey::Interface(interface.id)
         } else {
             WorldKey::Name(self.name.into())
-        }
-    }
-
-    pub fn internal_name(&self, resolve: &Resolve) -> String {
-        if let Some(interface) = &self.interface {
-            format!(
-                "{}#{}{}",
-                if let Some(name) = resolve.id_of(interface.id) {
-                    name
-                } else {
-                    interface.name.to_owned()
-                },
-                self.name,
-                match self.kind {
-                    FunctionKind::Import => "-import",
-                    FunctionKind::ResourceNew => "-resource-new",
-                    FunctionKind::ResourceRep => "-resource-rep",
-                    FunctionKind::ResourceDropLocal => "-resource-drop-local",
-                    FunctionKind::ResourceDropRemote => "-resource-drop-remote",
-                    FunctionKind::Export => "-export",
-                    FunctionKind::ExportFromCanon => "-from-canon",
-                    FunctionKind::ExportToCanon => "-to-canon",
-                    FunctionKind::ExportPostReturn => "-post-return",
-                }
-            )
-        } else {
-            self.name.to_owned()
-        }
-    }
-
-    pub fn core_import_type(&self, resolve: &Resolve) -> (Vec<ValType>, Vec<ValType>) {
-        let mut params =
-            abi::record_abi_limit(resolve, self.params.types(), MAX_FLAT_PARAMS).flattened;
-
-        let mut results = abi::record_abi(resolve, self.result.types()).flattened;
-
-        if results.len() > MAX_FLAT_RESULTS {
-            params.push(ValType::I32);
-            results = Vec::new();
-        };
-
-        (params, results)
-    }
-
-    pub fn core_export_type(&self, resolve: &Resolve) -> (Vec<ValType>, Vec<ValType>) {
-        match self.kind {
-            FunctionKind::Export => (
-                abi::record_abi_limit(resolve, self.params.types(), MAX_FLAT_PARAMS).flattened,
-                abi::record_abi_limit(resolve, self.result.types(), MAX_FLAT_RESULTS).flattened,
-            ),
-            FunctionKind::Import
-            | FunctionKind::ResourceNew
-            | FunctionKind::ResourceRep
-            | FunctionKind::ResourceDropLocal
-            | FunctionKind::ResourceDropRemote
-            | FunctionKind::ExportFromCanon
-            | FunctionKind::ExportToCanon => (
-                vec![ValType::I32; DISPATCHABLE_CORE_PARAM_COUNT],
-                Vec::new(),
-            ),
-            FunctionKind::ExportPostReturn => (vec![ValType::I32], Vec::new()),
-        }
-    }
-
-    pub fn is_dispatchable(&self) -> bool {
-        match self.kind {
-            FunctionKind::Import
-            | FunctionKind::ResourceNew
-            | FunctionKind::ResourceRep
-            | FunctionKind::ResourceDropLocal
-            | FunctionKind::ResourceDropRemote
-            | FunctionKind::ExportFromCanon
-            | FunctionKind::ExportToCanon => true,
-            FunctionKind::Export | FunctionKind::ExportPostReturn => false,
         }
     }
 }
@@ -221,14 +134,14 @@ pub struct Summary<'a> {
     pub option_type: Option<TypeId>,
     pub nesting_option_type: Option<TypeId>,
     pub result_type: Option<TypeId>,
-    resource_state: Option<ResourceState<'a>>,
+    resource_state: Option<ResourceState>,
     resource_directions: im_rc::HashMap<TypeId, Direction>,
     resource_info: HashMap<TypeId, ResourceInfo>,
-    dispatch_count: usize,
     world_types: HashMap<WorldId, HashSet<TypeId>>,
     world_keys: HashMap<WorldId, HashSet<(Direction, WorldKey)>>,
     imported_interface_names: HashMap<InterfaceId, String>,
     exported_interface_names: HashMap<InterfaceId, String>,
+    imported_function_indexes: &'a HashMap<(Option<&'a str>, &'a str), usize>,
 }
 
 impl<'a> Summary<'a> {
@@ -237,6 +150,7 @@ impl<'a> Summary<'a> {
         worlds: &IndexSet<WorldId>,
         import_interface_names: &HashMap<&str, &str>,
         export_interface_names: &HashMap<&str, &str>,
+        imported_function_indexes: &'a HashMap<(Option<&'a str>, &'a str), usize>,
     ) -> Result<Self> {
         let mut me = Self {
             resolve,
@@ -251,11 +165,11 @@ impl<'a> Summary<'a> {
             resource_state: None,
             resource_directions: im_rc::HashMap::new(),
             resource_info: HashMap::new(),
-            dispatch_count: 0,
             world_types: HashMap::new(),
             world_keys: HashMap::new(),
             imported_interface_names: HashMap::new(),
             exported_interface_names: HashMap::new(),
+            imported_function_indexes,
         };
 
         let mut import_keys_seen = HashSet::new();
@@ -290,9 +204,6 @@ impl<'a> Summary<'a> {
     }
 
     fn push_function(&mut self, function: MyFunction<'a>) {
-        if function.is_dispatchable() {
-            self.dispatch_count += 1;
-        }
         self.functions.push(function);
     }
 
@@ -335,7 +246,7 @@ impl<'a> Summary<'a> {
                         self.types.insert(id);
                     }
                     TypeDefKind::Option(some) => {
-                        if abi::is_option(self.resolve, *some) {
+                        if is_option(self.resolve, *some) {
                             if self.nesting_option_type.is_none() {
                                 self.nesting_option_type = Some(id);
                             }
@@ -381,73 +292,13 @@ impl<'a> Summary<'a> {
                             self.resource_directions.insert(id, state.direction);
                             let info = self.resource_info.entry(id).or_default();
 
-                            let make = |kind, params, result| MyFunction {
-                                kind,
-                                interface: state.interface.clone(),
-                                name: ty.name.as_deref().unwrap(),
-                                docs: None,
-                                params,
-                                result,
-                                wit_kind: wit_parser::FunctionKind::Freestanding,
-                            };
-
                             match state.direction {
                                 Direction::Import => {
-                                    info.remote_dispatch_index = Some(self.dispatch_count);
-
-                                    static DROP_PARAMS: sync::Lazy<[(String, Type); 1]> =
-                                        sync::Lazy::new(|| [("handle".to_string(), Type::U32)]);
-
-                                    static DROP_RESULTS: sync::Lazy<Option<Type>> =
-                                        sync::Lazy::new(|| None);
-
-                                    self.push_function(make(
-                                        FunctionKind::ResourceDropRemote,
-                                        DROP_PARAMS.deref(),
-                                        &DROP_RESULTS,
-                                    ));
+                                    info.remote = true;
                                 }
 
                                 Direction::Export => {
-                                    info.local_dispatch_index = Some(self.dispatch_count);
-
-                                    // The order these functions are added must match the `LocalResource` field
-                                    // initialization order in `summarize_type`.
-                                    // TODO: make this less fragile.
-
-                                    static NEW_PARAMS: sync::Lazy<[(String, Type); 1]> =
-                                        sync::Lazy::new(|| [("rep".to_string(), Type::U32)]);
-
-                                    static NEW_RESULTS: Option<Type> = Some(Type::U32);
-
-                                    self.push_function(make(
-                                        FunctionKind::ResourceNew,
-                                        NEW_PARAMS.deref(),
-                                        &NEW_RESULTS,
-                                    ));
-
-                                    static REP_PARAMS: sync::Lazy<[(String, Type); 1]> =
-                                        sync::Lazy::new(|| [("handle".to_string(), Type::U32)]);
-
-                                    static REP_RESULTS: Option<Type> = Some(Type::U32);
-
-                                    self.push_function(make(
-                                        FunctionKind::ResourceRep,
-                                        REP_PARAMS.deref(),
-                                        &REP_RESULTS,
-                                    ));
-
-                                    static DROP_PARAMS: sync::Lazy<[(String, Type); 1]> =
-                                        sync::Lazy::new(|| [("handle".to_string(), Type::U32)]);
-
-                                    static DROP_RESULTS: sync::Lazy<Option<Type>> =
-                                        sync::Lazy::new(|| None);
-
-                                    self.push_function(make(
-                                        FunctionKind::ResourceDropLocal,
-                                        DROP_PARAMS.deref(),
-                                        DROP_RESULTS.deref(),
-                                    ));
+                                    info.local = true;
                                 }
                             }
                         }
@@ -494,22 +345,7 @@ impl<'a> Summary<'a> {
                 self.push_function(make(FunctionKind::Import));
             }
             Direction::Export => {
-                // NB: We rely on this order when compiling, so please don't change it:
-                // todo: make this less fragile
                 self.push_function(make(FunctionKind::Export));
-                self.push_function(make(FunctionKind::ExportFromCanon));
-                self.push_function(make(FunctionKind::ExportToCanon));
-                if abi::record_abi(self.resolve, result.types())
-                    .flattened
-                    .len()
-                    > MAX_FLAT_RESULTS
-                {
-                    self.push_function(make(FunctionKind::ExportPostReturn));
-                } else {
-                    // As of this writing, no type involving heap allocation can fit into `MAX_FLAT_RESULTS`, so
-                    // nothing to do.  We'll need to revisit this if `MAX_FLAT_RESULTS` changes or if new types are
-                    // added.
-                }
             }
         }
     }
@@ -567,15 +403,7 @@ impl<'a> Summary<'a> {
                         docs: interface.docs.contents.as_deref(),
                     };
 
-                    self.resource_state = Some(ResourceState {
-                        direction,
-                        interface: Some(MyInterface {
-                            name: item_name,
-                            id: *id,
-                            docs: interface.docs.contents.as_deref(),
-                            resource_directions: Default::default(),
-                        }),
-                    });
+                    self.resource_state = Some(ResourceState { direction });
                     for id in interface.types.values() {
                         self.visit_type(Type::Id(*id), world);
                     }
@@ -588,10 +416,9 @@ impl<'a> Summary<'a> {
                     for (func_name, func) in &interface.functions {
                         self.visit_function(
                             Some(MyInterface {
-                                name: item_name,
                                 id: *id,
+                                key,
                                 docs: interface.docs.contents.as_deref(),
-                                resource_directions: self.resource_directions.clone(),
                             }),
                             func_name,
                             func.docs.contents.as_deref(),
@@ -623,91 +450,178 @@ impl<'a> Summary<'a> {
         Ok(())
     }
 
-    fn summarize_type(&self, id: TypeId, world_module: &str) -> exports::Type {
-        let ty = &self.resolve.types[id];
-        if let Some(package) = self.package(ty.owner, world_module) {
+    fn package_and_name(
+        &self,
+        id: TypeId,
+        ty: &TypeDef,
+        world_module: &str,
+        reverse_cloned_interfaces: &HashMap<InterfaceId, InterfaceId>,
+    ) -> Option<(String, String)> {
+        if let Some(package) = self.package(ty.owner, world_module, reverse_cloned_interfaces) {
             let name = if let Some(name) = &ty.name {
                 name.to_upper_camel_case().escape()
             } else {
                 format!("AnonymousType{}", self.types.get_index_of(&id).unwrap())
             };
-            let kind = match &ty.kind {
-                TypeDefKind::Record(record) => OwnedKind::Record(
-                    record
-                        .fields
-                        .iter()
-                        .map(|f| f.name.to_snake_case().escape())
-                        .collect(),
-                ),
-                TypeDefKind::Variant(variant) => OwnedKind::Variant(
-                    variant
-                        .cases
-                        .iter()
-                        .map(|c| Case {
-                            name: format!("{name}_{}", c.name.to_upper_camel_case().escape()),
-                            has_payload: c.ty.is_some(),
-                        })
-                        .collect(),
-                ),
-                TypeDefKind::Enum(en) => OwnedKind::Enum(en.cases.len().try_into().unwrap()),
-                TypeDefKind::Flags(flags) => {
-                    OwnedKind::Flags(flags.repr().count().try_into().unwrap())
-                }
-                TypeDefKind::Tuple(_) | TypeDefKind::Option(_) | TypeDefKind::Result(_) => {
-                    return self.summarize_unowned_type(id);
-                }
-                TypeDefKind::Resource => {
-                    let info = &self.resource_info[&id];
-                    OwnedKind::Resource(Resource {
-                        local: info
-                            .local_dispatch_index
-                            .map(|dispatch_index| LocalResource {
-                                // This must match the order the functions are added in `visit_type`:
-                                new: u32::try_from(dispatch_index).unwrap(),
-                                rep: u32::try_from(dispatch_index + 1).unwrap(),
-                                drop: u32::try_from(dispatch_index + 2).unwrap(),
-                            }),
-                        remote: info
-                            .remote_dispatch_index
-                            .map(|dispatch_index| RemoteResource {
-                                drop: u32::try_from(dispatch_index).unwrap(),
-                            }),
-                    })
-                }
-                kind => todo!("{kind:?}"),
-            };
 
-            exports::Type::Owned(OwnedType {
-                package,
-                name,
-                kind,
-            })
+            Some((package, name))
         } else {
-            self.summarize_unowned_type(id)
+            None
         }
     }
 
-    fn summarize_unowned_type(&self, id: TypeId) -> exports::Type {
+    fn summarize_resource(
+        &self,
+        id: TypeId,
+        world_module: &str,
+        reverse_cloned_interfaces: &HashMap<InterfaceId, InterfaceId>,
+    ) -> exports::Resource {
         let ty = &self.resolve.types[id];
-        match &ty.kind {
-            TypeDefKind::Tuple(tuple) => {
-                exports::Type::Tuple(tuple.types.len().try_into().unwrap())
-            }
-            TypeDefKind::Option(some) => {
-                if abi::is_option(self.resolve, *some) {
-                    exports::Type::NestingOption
-                } else {
-                    exports::Type::Option
-                }
-            }
-            TypeDefKind::Result(_) => exports::Type::Result,
-            TypeDefKind::Handle(_) => exports::Type::Handle,
-            kind => todo!("{kind:?}"),
+        assert!(matches!(ty.kind, TypeDefKind::Resource));
+        let (package, name) = self
+            .package_and_name(id, ty, world_module, reverse_cloned_interfaces)
+            .unwrap();
+
+        exports::Resource { package, name }
+    }
+
+    fn summarize_record(
+        &self,
+        id: TypeId,
+        world_module: &str,
+        reverse_cloned_interfaces: &HashMap<InterfaceId, InterfaceId>,
+    ) -> exports::Record {
+        let ty = &self.resolve.types[id];
+        let TypeDefKind::Record(record) = &ty.kind else {
+            unreachable!()
+        };
+        let (package, name) = self
+            .package_and_name(id, ty, world_module, reverse_cloned_interfaces)
+            .unwrap();
+
+        exports::Record {
+            package,
+            name,
+            fields: record
+                .fields
+                .iter()
+                .map(|f| f.name.to_snake_case().escape())
+                .collect(),
         }
     }
 
-    pub fn collect_symbols(&self, locations: &Locations) -> Symbols {
-        let mut exports = Vec::new();
+    fn summarize_flags(
+        &self,
+        id: TypeId,
+        world_module: &str,
+        reverse_cloned_interfaces: &HashMap<InterfaceId, InterfaceId>,
+    ) -> exports::Flags {
+        let ty = &self.resolve.types[id];
+        let TypeDefKind::Flags(flags) = &ty.kind else {
+            unreachable!()
+        };
+        let (package, name) = self
+            .package_and_name(id, ty, world_module, reverse_cloned_interfaces)
+            .unwrap();
+
+        exports::Flags {
+            package,
+            name,
+            u32_count: flags.repr().count().try_into().unwrap(),
+        }
+    }
+
+    fn summarize_variant(
+        &self,
+        id: TypeId,
+        world_module: &str,
+        reverse_cloned_interfaces: &HashMap<InterfaceId, InterfaceId>,
+    ) -> exports::Variant {
+        let ty = &self.resolve.types[id];
+        let TypeDefKind::Variant(variant) = &ty.kind else {
+            unreachable!()
+        };
+        let (package, name) = self
+            .package_and_name(id, ty, world_module, reverse_cloned_interfaces)
+            .unwrap();
+
+        let cases = variant
+            .cases
+            .iter()
+            .map(|c| Case {
+                name: format!("{name}_{}", c.name.to_upper_camel_case().escape()),
+                has_payload: c.ty.is_some(),
+            })
+            .collect();
+
+        exports::Variant {
+            package,
+            name,
+            cases,
+        }
+    }
+
+    fn summarize_enum(
+        &self,
+        id: TypeId,
+        world_module: &str,
+        reverse_cloned_interfaces: &HashMap<InterfaceId, InterfaceId>,
+    ) -> exports::Enum {
+        let ty = &self.resolve.types[id];
+        let TypeDefKind::Enum(enum_) = &ty.kind else {
+            unreachable!()
+        };
+        let (package, name) = self
+            .package_and_name(id, ty, world_module, reverse_cloned_interfaces)
+            .unwrap();
+
+        exports::Enum {
+            package,
+            name,
+            count: enum_.cases.len().try_into().unwrap(),
+        }
+    }
+
+    fn summarize_tuple(&self, id: TypeId) -> exports::Tuple {
+        let TypeDefKind::Tuple(tuple) = &self.resolve.types[id].kind else {
+            unreachable!()
+        };
+
+        exports::Tuple {
+            count: tuple.types.len().try_into().unwrap(),
+        }
+    }
+
+    fn summarize_option(&self, id: TypeId) -> exports::OptionKind {
+        let TypeDefKind::Option(some) = &self.resolve.types[id].kind else {
+            unreachable!()
+        };
+
+        if is_option(self.resolve, *some) {
+            exports::OptionKind::Nesting
+        } else {
+            exports::OptionKind::NonNesting
+        }
+    }
+
+    fn summarize_result(&self, id: TypeId) -> exports::ResultRecord {
+        let TypeDefKind::Result(result) = &self.resolve.types[id].kind else {
+            unreachable!()
+        };
+
+        exports::ResultRecord {
+            has_ok: result.ok.is_some(),
+            has_err: result.err.is_some(),
+        }
+    }
+
+    pub fn collect_symbols(
+        &self,
+        locations: &Locations,
+        metadata: &Metadata,
+        clone_maps: &CloneMaps,
+    ) -> Symbols {
+        let mut map = HashMap::new();
         for function in &self.functions {
             if let FunctionKind::Export = function.kind {
                 let scope = if let Some(interface) = &function.interface {
@@ -716,52 +630,180 @@ impl<'a> Summary<'a> {
                     locations.keys.get(&function.key()).unwrap()
                 };
 
-                exports.push(match function.wit_kind {
-                    wit_parser::FunctionKind::Freestanding => {
-                        FunctionExport::Freestanding(Function {
-                            protocol: scope.to_upper_camel_case().escape(),
-                            name: self.function_name(function),
-                        })
-                    }
-                    wit_parser::FunctionKind::Constructor(id) => {
-                        FunctionExport::Constructor(Constructor {
-                            module: scope.to_snake_case().escape(),
-                            protocol: self.resolve.types[id]
-                                .name
-                                .as_deref()
-                                .unwrap()
-                                .to_upper_camel_case()
-                                .escape(),
-                        })
-                    }
-                    wit_parser::FunctionKind::Method(_) => {
-                        FunctionExport::Method(self.function_name(function))
-                    }
-                    wit_parser::FunctionKind::Static(id) => FunctionExport::Static(Static {
-                        module: scope.to_snake_case().escape(),
-                        protocol: self.resolve.types[id]
-                            .name
-                            .as_deref()
-                            .unwrap()
-                            .to_upper_camel_case()
-                            .escape(),
-                        name: self.function_name(function),
-                    }),
-                    _ => todo!("handle async functions"),
-                });
+                map.insert(
+                    (
+                        function
+                            .interface
+                            .as_ref()
+                            .map(|v| self.resolve.name_world_key(v.key)),
+                        function.name,
+                    ),
+                    FunctionExport {
+                        kind: match function.wit_kind {
+                            wit_parser::FunctionKind::Freestanding => {
+                                FunctionExportKind::Freestanding(Function {
+                                    protocol: scope.to_upper_camel_case().escape(),
+                                    name: self.function_name(function),
+                                })
+                            }
+                            wit_parser::FunctionKind::Constructor(id) => {
+                                FunctionExportKind::Constructor(Constructor {
+                                    module: scope.to_snake_case().escape(),
+                                    protocol: self.resolve.types[id]
+                                        .name
+                                        .as_deref()
+                                        .unwrap()
+                                        .to_upper_camel_case()
+                                        .escape(),
+                                })
+                            }
+                            wit_parser::FunctionKind::Method(_) => {
+                                FunctionExportKind::Method(self.function_name(function))
+                            }
+                            wit_parser::FunctionKind::Static(id) => {
+                                FunctionExportKind::Static(Static {
+                                    module: scope.to_snake_case().escape(),
+                                    protocol: self.resolve.types[id]
+                                        .name
+                                        .as_deref()
+                                        .unwrap()
+                                        .to_upper_camel_case()
+                                        .escape(),
+                                    name: self.function_name(function),
+                                })
+                            }
+                            _ => todo!("handle async functions"),
+                        },
+                        return_style: match function.result {
+                            None => ReturnStyle::None,
+                            &Some(Type::Id(id))
+                                if matches!(
+                                    &self.resolve.types[id].kind,
+                                    TypeDefKind::Result(_)
+                                ) =>
+                            {
+                                ReturnStyle::Result
+                            }
+                            _ => ReturnStyle::Normal,
+                        },
+                    },
+                );
             }
         }
 
-        let mut types = Vec::new();
-        for ty in &self.types {
-            types.push(self.summarize_type(*ty, &locations.types.get(ty).unwrap().module));
+        let exports = metadata
+            .export_funcs
+            .iter()
+            .map(|function| {
+                map.remove(&(function.interface.clone(), &function.name))
+                    .unwrap()
+            })
+            .collect();
+
+        assert!(map.is_empty());
+
+        let mut reverse_cloned_types = HashMap::new();
+        for (&original, &clone) in clone_maps.types() {
+            assert!(reverse_cloned_types.insert(clone, original).is_none());
         }
+
+        let original = |ty| {
+            if let Some(&original) = reverse_cloned_types.get(&ty) {
+                original
+            } else {
+                ty
+            }
+        };
+
+        let module = |ty| &locations.types.get(&ty).unwrap().module;
+
+        let mut reverse_cloned_interfaces = HashMap::new();
+        for (&original, &clone) in clone_maps.interfaces() {
+            assert!(reverse_cloned_interfaces.insert(clone, original).is_none());
+        }
+
+        let resources = metadata
+            .resources
+            .iter()
+            .map(|ty| original(ty.id))
+            .map(|ty| self.summarize_resource(ty, module(ty), &reverse_cloned_interfaces))
+            .collect();
+
+        let records = metadata
+            .records
+            .iter()
+            .map(|ty| original(ty.id))
+            .map(|ty| self.summarize_record(ty, module(ty), &reverse_cloned_interfaces))
+            .collect();
+
+        let flags = metadata
+            .flags
+            .iter()
+            .map(|ty| original(ty.id))
+            .map(|ty| self.summarize_flags(ty, module(ty), &reverse_cloned_interfaces))
+            .collect();
+
+        let tuples = metadata
+            .tuples
+            .iter()
+            .map(|ty| original(ty.id))
+            .map(|ty| self.summarize_tuple(ty))
+            .collect();
+
+        let variants = metadata
+            .variants
+            .iter()
+            .map(|ty| original(ty.id))
+            .map(|ty| self.summarize_variant(ty, module(ty), &reverse_cloned_interfaces))
+            .collect();
+
+        let enums = metadata
+            .enums
+            .iter()
+            .map(|ty| original(ty.id))
+            .map(|ty| self.summarize_enum(ty, module(ty), &reverse_cloned_interfaces))
+            .collect();
+
+        let options = metadata
+            .options
+            .iter()
+            .map(|ty| original(ty.id))
+            .map(|ty| self.summarize_option(ty))
+            .collect();
+
+        let results = metadata
+            .results
+            .iter()
+            .map(|ty| original(ty.id))
+            .map(|ty| self.summarize_result(ty))
+            .collect();
 
         Symbols {
             types_package: format!("{}.types", locations.types_module.as_ref().unwrap()),
             exports,
-            types,
+            resources,
+            records,
+            flags,
+            tuples,
+            variants,
+            enums,
+            options,
+            results,
         }
+    }
+
+    fn imported_function_index(&self, function: &MyFunction) -> usize {
+        *self
+            .imported_function_indexes
+            .get(&(
+                function
+                    .interface
+                    .as_ref()
+                    .map(|v| self.resolve.name_world_key(v.key))
+                    .as_deref(),
+                function.name,
+            ))
+            .unwrap()
     }
 
     fn function_name(&self, function: &MyFunction) -> String {
@@ -840,7 +882,7 @@ impl<'a> Summary<'a> {
                 TypeNames::new(self, TypeOwner::None).type_name(
                     ty,
                     &if let Type::Id(id) = ty {
-                        Some(bindgen::dealias(self.resolve, id))
+                        Some(dealias(self.resolve, id))
                     } else {
                         None
                     }
@@ -1021,13 +1063,7 @@ impl<'a> Summary<'a> {
 
                             let empty = &ResourceInfo::default();
 
-                            if self
-                                .resource_info
-                                .get(&id)
-                                .unwrap_or(empty)
-                                .remote_dispatch_index
-                                .is_some()
-                            {
+                            if self.resource_info.get(&id).unwrap_or(empty).remote {
                                 for function in &self.functions {
                                     if matches_resource(function, id, Direction::Import) {
                                         sort(function, sorted, visited);
@@ -1035,13 +1071,7 @@ impl<'a> Summary<'a> {
                                 }
                             }
 
-                            if self
-                                .resource_info
-                                .get(&id)
-                                .unwrap_or(empty)
-                                .local_dispatch_index
-                                .is_some()
-                            {
+                            if self.resource_info.get(&id).unwrap_or(empty).local {
                                 for function in &self.functions {
                                     if matches_resource(function, id, Direction::Export) {
                                         sort(function, sorted, visited);
@@ -1353,14 +1383,8 @@ class {camel}(Flag):
 
                         let empty = &ResourceInfo::default();
 
-                        let import = if self
-                            .resource_info
-                            .get(&id)
-                            .unwrap_or(empty)
-                            .remote_dispatch_index
-                            .is_some()
-                        {
-                            let method = |(index, function)| {
+                        let import = if self.resource_info.get(&id).unwrap_or(empty).remote {
+                            let method = |function| {
                                 let FunctionCode {
                                     snake,
                                     params,
@@ -1392,6 +1416,7 @@ class {camel}(Flag):
 "
                                         )
                                     } else {
+                                        let index = self.imported_function_index(function);
                                         format!(
                                             "
     def {snake}({params}){return_type}:
@@ -1409,6 +1434,7 @@ class {camel}(Flag):
         {docs}{NOT_IMPLEMENTED}"
                                     )
                                 } else {
+                                    let index = self.imported_function_index(function);
                                     format!(
                                         "{class_method}
     def {snake}({params}){return_type}:
@@ -1419,53 +1445,41 @@ class {camel}(Flag):
                             };
 
                             let methods = self
-                            .functions
-                            .iter()
-                            .filter_map({
-                                let mut index = 0;
-                                move |function| {
-                                    let result = matches_resource(function, id, Direction::Import)
-                                        .then_some((index, function));
-
-                                    if function.is_dispatchable() {
-                                        index += 1;
-                                    }
-
-                                    result
-                                }
-                            })
-                            .map(method)
-                            .chain(iter::once({
-                                let newline = '\n';
-                                let indent = "        ";
-                                let doc = "Release this resource.";
-                                let docs =
-                                    format!(r#""""{newline}{indent}{doc}{newline}{indent}"""{newline}{indent}"#);
-                                let enter = r#"
+                                .functions
+                                .iter()
+                                .filter(move |function| matches_resource(function, id, Direction::Import))
+                                .map(method)
+                                .chain(iter::once({
+                                    let newline = '\n';
+                                    let indent = "        ";
+                                    let doc = "Release this resource.";
+                                    let docs =
+                                        format!(r#""""{newline}{indent}{doc}{newline}{indent}"""{newline}{indent}"#);
+                                    let enter = r#"
     def __enter__(self) -> Self:
         """Returns self"""
         return self
                                 "#;
-                                if stub_runtime_calls {
-                                    format!(
-                                        "{enter}
+                                    if stub_runtime_calls {
+                                        format!(
+                                            "{enter}
     def __exit__(self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None) -> bool | None:
         {docs}{NOT_IMPLEMENTED}
 "
-                                    )
-                                } else {
-                                    format!(
-                                        "{enter}
+                                        )
+                                    } else {
+                                        format!(
+                                            "{enter}
     def __exit__(self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None) -> bool | None:
         {docs}(_, func, args, _) = self.finalizer.detach()
         self.handle = None
         func(args[0], args[1])
 "
-                                    )
-                                }
-                            }))
-                            .collect::<Vec<_>>()
-                            .concat();
+                                        )
+                                    }
+                                }))
+                                .collect::<Vec<_>>()
+                                .concat();
 
                             Some(format!(
                                 "
@@ -1477,13 +1491,7 @@ class {camel}:
                             None
                         };
 
-                        let export = if self
-                            .resource_info
-                            .get(&id)
-                            .unwrap_or(empty)
-                            .local_dispatch_index
-                            .is_some()
-                        {
+                        let export = if self.resource_info.get(&id).unwrap_or(empty).local {
                             let method = |function| {
                                 let FunctionCode {
                                     snake,
@@ -1640,7 +1648,6 @@ class {camel}(Protocol):
             seen.insert(id);
         }
 
-        let mut index = 0;
         for function in &self.functions {
             let key = function.key();
             let direction = if let FunctionKind::Import = &function.kind {
@@ -1704,6 +1711,7 @@ def {snake}({params}){return_type}:
 "
                                 )
                             } else {
+                                let index = self.imported_function_index(function);
                                 format!(
                                     "
 def {snake}({params}){return_type}:
@@ -1772,14 +1780,9 @@ def {snake}({params}){return_type}:
                                 definitions.alias_module = Some(module.clone());
                             }
                         }
-                        _ => unreachable!(),
                     }
                 }
                 _ => (),
-            }
-
-            if function.is_dispatchable() {
-                index += 1;
             }
         }
 
@@ -2019,9 +2022,17 @@ from .types import Result, Ok, Err, Some
         }
     }
 
-    fn package(&self, owner: TypeOwner, world_module: &str) -> Option<String> {
+    fn package(
+        &self,
+        owner: TypeOwner,
+        world_module: &str,
+        reverse_cloned_interfaces: &HashMap<InterfaceId, InterfaceId>,
+    ) -> Option<String> {
         match owner {
-            TypeOwner::Interface(interface) => {
+            TypeOwner::Interface(mut interface) => {
+                if let Some(&original) = reverse_cloned_interfaces.get(&interface) {
+                    interface = original;
+                }
                 let (module, package) = self.interface_package(interface);
                 Some(format!("{world_module}.{module}.{package}"))
             }
@@ -2080,7 +2091,7 @@ from .types import Result, Ok, Err, Some
                 TypeDefKind::Resource => {
                     let empty = &ResourceInfo::default();
                     let info = self.resource_info.get(&id).unwrap_or(empty);
-                    info.local_dispatch_index.is_some() && info.remote_dispatch_index.is_some()
+                    info.local && info.remote
                 }
                 kind => todo!("{kind:?}"),
             },
@@ -2156,7 +2167,7 @@ impl<'a> TypeNames<'a> {
                         }
                     }
                     TypeDefKind::Option(some) => {
-                        if abi::is_option(self.summary.resolve, *some) {
+                        if is_option(self.summary.resolve, *some) {
                             format!("Optional[Some[{}]]", self.type_name(*some, seen, resource))
                         } else {
                             format!("Optional[{}]", self.type_name(*some, seen, resource))
@@ -2278,5 +2289,26 @@ fn docstring(
         format!(r#""""{newline}{docs}{indent}"""{newline}{indent}"#)
     } else {
         String::new()
+    }
+}
+
+fn dealias(resolve: &Resolve, mut id: TypeId) -> TypeId {
+    loop {
+        match &resolve.types[id].kind {
+            TypeDefKind::Type(Type::Id(that_id)) => id = *that_id,
+            _ => break id,
+        }
+    }
+}
+
+fn is_option(resolve: &Resolve, ty: Type) -> bool {
+    if let Type::Id(id) = ty {
+        match &resolve.types[id].kind {
+            TypeDefKind::Option(_) => true,
+            TypeDefKind::Type(ty) => is_option(resolve, *ty),
+            _ => false,
+        }
+    } else {
+        false
     }
 }
