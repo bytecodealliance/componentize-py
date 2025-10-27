@@ -26,13 +26,13 @@ use {
     num_bigint::BigUint,
     once_cell::sync::OnceCell,
     pyo3::{
-        Bound, IntoPyObject, Py, PyAny, PyErr, PyResult, Python,
         exceptions::PyAssertionError,
         intern,
         types::{
             PyAnyMethods, PyBool, PyBytes, PyBytesMethods, PyDict, PyList, PyListMethods,
             PyMapping, PyMappingMethods, PyModule, PyModuleMethods, PyString, PyTuple,
         },
+        Bound, IntoPyObject, Py, PyAny, PyErr, PyResult, Python,
     },
     std::{
         alloc::{self, Layout},
