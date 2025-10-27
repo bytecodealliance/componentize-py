@@ -3,42 +3,50 @@
     clippy::useless_conversion,
     reason = "some pyo3 macros produce code that does this"
 )]
-#![allow(static_mut_refs, reason = "wit-bindgen produces code that does this")]
+#![allow(
+    static_mut_refs,
+    reason = "wit-bindgen::generate produces code that does this"
+)]
 #![allow(unknown_lints)]
 #![allow(
     unnecessary_transmutes,
     reason = "nightly warning but not supported on stable"
 )]
+#![allow(
+    clippy::not_unsafe_ptr_arg_deref,
+    reason = "wit_dylib_ffi::export produces code that does this"
+)]
 
 use {
     anyhow::{Error, Result},
-    componentize_py_shared::ReturnStyle,
     exports::exports::{
-        self as exp, Bundled, Constructor, Function, FunctionExport, Guest, LocalResource,
-        OwnedKind, OwnedType, RemoteResource, Resource, Static, Symbols,
+        self as exp, Constructor, FunctionExportKind, Guest, OptionKind, ResultRecord, ReturnStyle,
+        Static, Symbols,
     },
     num_bigint::BigUint,
     once_cell::sync::OnceCell,
     pyo3::{
         exceptions::PyAssertionError,
-        ffi, intern,
+        intern,
         types::{
-            PyAnyMethods, PyBool, PyBytes, PyBytesMethods, PyDict, PyFloat, PyInt, PyList,
-            PyListMethods, PyMapping, PyMappingMethods, PyModule, PyModuleMethods, PyString,
-            PyTuple,
+            PyAnyMethods, PyBool, PyBytes, PyBytesMethods, PyDict, PyList, PyListMethods,
+            PyMapping, PyMappingMethods, PyModule, PyModuleMethods, PyString, PyTuple,
         },
-        Borrowed, Bound, IntoPyObject, Py, PyAny, PyErr, PyResult, Python,
+        Bound, IntoPyObject, Py, PyAny, PyErr, PyResult, Python,
     },
     std::{
         alloc::{self, Layout},
-        ffi::c_void,
         iter,
-        mem::{self, MaybeUninit},
+        marker::PhantomData,
+        mem,
         ops::DerefMut,
-        ptr, slice, str,
+        slice, str,
         sync::{Mutex, Once},
     },
     wasi::cli::environment,
+    wit_dylib_ffi::{
+        self as wit, Call, ExportFunction, Interpreter, List, Type, Wit, WitOption, WitResult,
+    },
 };
 
 wit_bindgen::generate!({
@@ -49,9 +57,17 @@ wit_bindgen::generate!({
 
 export!(MyExports);
 
+static WIT: OnceCell<Wit> = OnceCell::new();
 static STUB_WASI: OnceCell<bool> = OnceCell::new();
 static EXPORTS: OnceCell<Vec<Export>> = OnceCell::new();
-static TYPES: OnceCell<Vec<Type>> = OnceCell::new();
+static RESOURCES: OnceCell<Vec<Resource>> = OnceCell::new();
+static RECORDS: OnceCell<Vec<Record>> = OnceCell::new();
+static FLAGS: OnceCell<Vec<Flags>> = OnceCell::new();
+static TUPLES: OnceCell<Vec<Tuple>> = OnceCell::new();
+static VARIANTS: OnceCell<Vec<Variant>> = OnceCell::new();
+static ENUMS: OnceCell<Vec<Enum>> = OnceCell::new();
+static OPTIONS: OnceCell<Vec<OptionKind>> = OnceCell::new();
+static RESULTS: OnceCell<Vec<ResultRecord>> = OnceCell::new();
 static ENVIRON: OnceCell<Py<PyMapping>> = OnceCell::new();
 static SOME_CONSTRUCTOR: OnceCell<Py<PyAny>> = OnceCell::new();
 static OK_CONSTRUCTOR: OnceCell<Py<PyAny>> = OnceCell::new();
@@ -62,14 +78,12 @@ static SEED: OnceCell<Py<PyAny>> = OnceCell::new();
 static ARGV: OnceCell<Py<PyList>> = OnceCell::new();
 
 struct Borrow {
-    handle: i32,
-    drop: u32,
+    value: Py<PyAny>,
+    handle: u32,
+    drop: unsafe extern "C" fn(u32),
 }
 
 static BORROWS: Mutex<Vec<Borrow>> = Mutex::new(Vec::new());
-
-const DISCRIMINANT_FIELD_INDEX: i32 = 0;
-const PAYLOAD_FIELD_INDEX: i32 = 1;
 
 #[derive(Debug)]
 struct Case {
@@ -78,38 +92,47 @@ struct Case {
 }
 
 #[derive(Debug)]
-enum Type {
-    Record {
-        constructor: Py<PyAny>,
-        fields: Vec<String>,
-    },
-    Variant {
-        types_to_discriminants: Py<PyDict>,
-        cases: Vec<Case>,
-    },
-    Enum {
-        constructor: Py<PyAny>,
-        count: usize,
-    },
-    Flags {
-        constructor: Py<PyAny>,
-        u32_count: usize,
-    },
-    Option,
-    NestingOption,
-    Result,
-    Tuple(usize),
-    Handle,
-    Resource {
-        constructor: Py<PyAny>,
-        local: Option<LocalResource>,
-        #[allow(dead_code)]
-        remote: Option<RemoteResource>,
-    },
+struct Resource {
+    constructor: Py<PyAny>,
 }
 
 #[derive(Debug)]
-enum Export {
+struct Record {
+    constructor: Py<PyAny>,
+    fields: Vec<String>,
+}
+
+#[derive(Debug)]
+struct Flags {
+    constructor: Py<PyAny>,
+    u32_count: usize,
+}
+
+#[derive(Debug)]
+struct Tuple {
+    count: usize,
+}
+
+#[derive(Debug)]
+struct Variant {
+    types_to_discriminants: Py<PyDict>,
+    cases: Vec<Case>,
+}
+
+#[derive(Debug)]
+struct Enum {
+    constructor: Py<PyAny>,
+    count: usize,
+}
+
+#[derive(Debug)]
+struct Export {
+    kind: ExportKind,
+    return_style: ReturnStyle,
+}
+
+#[derive(Debug)]
+enum ExportKind {
     Freestanding {
         instance: Py<PyAny>,
         name: Py<PyString>,
@@ -136,55 +159,36 @@ impl<T: std::error::Error + Send + Sync + 'static> From<T> for Anyhow {
     }
 }
 
-#[link(wasm_import_module = "env")]
-extern "C" {
-    #[cfg_attr(target_arch = "wasm32", link_name = "componentize-py#CallIndirect")]
-    fn componentize_py_call_indirect(
-        context: *const c_void,
-        input: *const c_void,
-        output: *mut c_void,
-        index: u32,
-    );
-}
-
 #[pyo3::pyfunction]
 #[pyo3(pass_module)]
 fn call_import<'a>(
     module: Bound<'a, PyModule>,
     index: u32,
     params: Vec<Bound<'a, PyAny>>,
-    result_count: usize,
+    _result_count: usize,
 ) -> PyResult<Vec<Bound<'a, PyAny>>> {
-    let mut results = iter::repeat_with(MaybeUninit::<Bound<'a, PyAny>>::uninit)
-        .take(result_count)
-        .collect::<Vec<_>>();
-    unsafe {
-        componentize_py_call_indirect(
-            &module.py() as *const _ as _,
-            params.as_ptr() as _,
-            results.as_mut_ptr() as _,
-            index,
-        );
+    let func = WIT
+        .get()
+        .unwrap()
+        .import_func(usize::try_from(index).unwrap());
 
-        // todo: is this sound, or do we need to `.into_iter().map(MaybeUninit::assume_init).collect()` instead?
-        Ok(mem::transmute::<
-            Vec<MaybeUninit<Bound<'a, PyAny>>>,
-            Vec<Bound<'a, PyAny>>,
-        >(results))
+    if func.is_async() {
+        todo!()
+    } else {
+        let mut call = MyCall::new(params.into_iter().rev().map(|v| v.unbind()).collect());
+        func.call_import_sync(&mut call);
+        Ok(mem::take(&mut call.stack)
+            .into_iter()
+            .map(|v| v.into_bound(module.py()))
+            .collect())
     }
 }
 
 #[pyo3::pyfunction]
 #[pyo3(pass_module)]
-fn drop_resource(module: &Bound<PyModule>, index: u32, handle: usize) -> PyResult<()> {
-    let params = [handle];
+fn drop_resource(_module: &Bound<PyModule>, index: usize, handle: u32) -> PyResult<()> {
     unsafe {
-        componentize_py_call_indirect(
-            &module.py() as *const _ as _,
-            params.as_ptr() as _,
-            ptr::null_mut(),
-            index,
-        );
+        mem::transmute::<usize, unsafe extern "C" fn(u32)>(index)(handle);
     }
     Ok(())
 }
@@ -218,130 +222,166 @@ fn do_init(app_name: String, symbols: Symbols, stub_wasi: bool) -> Result<(), St
                     .exports
                     .iter()
                     .map(|export| {
-                        Ok(match export {
-                            FunctionExport::Bundled(Bundled {
-                                module,
-                                protocol,
-                                name,
-                            }) => Export::Freestanding {
-                                name: PyString::intern(py, name).into(),
-                                instance: py
-                                    .import(module.as_str())?
-                                    .getattr(protocol.as_str())?
-                                    .call0()?
-                                    .into(),
-                            },
-                            FunctionExport::Freestanding(Function { protocol, name }) => {
-                                Export::Freestanding {
+                        Ok(Export {
+                            kind: match &export.kind {
+                                FunctionExportKind::Freestanding(exp::Function {
+                                    protocol,
+                                    name,
+                                }) => ExportKind::Freestanding {
                                     name: PyString::intern(py, name).into(),
                                     instance: app.getattr(protocol.as_str())?.call0()?.into(),
-                                }
-                            }
-                            FunctionExport::Constructor(Constructor { module, protocol }) => {
-                                Export::Constructor(
+                                },
+                                FunctionExportKind::Constructor(Constructor {
+                                    module,
+                                    protocol,
+                                }) => ExportKind::Constructor(
                                     py.import(module.as_str())?
                                         .getattr(protocol.as_str())?
                                         .into(),
-                                )
-                            }
-                            FunctionExport::Method(name) => {
-                                Export::Method(PyString::intern(py, name).into())
-                            }
-                            FunctionExport::Static(Static {
-                                module,
-                                protocol,
-                                name,
-                            }) => Export::Static {
-                                name: PyString::intern(py, name).into(),
-                                class: py
-                                    .import(module.as_str())?
-                                    .getattr(protocol.as_str())?
-                                    .into(),
+                                ),
+                                FunctionExportKind::Method(name) => {
+                                    ExportKind::Method(PyString::intern(py, name).into())
+                                }
+                                FunctionExportKind::Static(Static {
+                                    module,
+                                    protocol,
+                                    name,
+                                }) => ExportKind::Static {
+                                    name: PyString::intern(py, name).into(),
+                                    class: py
+                                        .import(module.as_str())?
+                                        .getattr(protocol.as_str())?
+                                        .into(),
+                                },
                             },
+                            return_style: export.return_style,
                         })
                     })
                     .collect::<PyResult<_>>()?,
             )
             .unwrap();
 
-        TYPES
+        RESOURCES
             .set(
                 symbols
-                    .types
+                    .resources
                     .into_iter()
                     .map(|ty| {
-                        Ok(match ty {
-                            exp::Type::Owned(OwnedType {
-                                kind,
-                                package,
-                                name,
-                            }) => match kind {
-                                OwnedKind::Record(fields) => Type::Record {
-                                    constructor: py
-                                        .import(package.as_str())?
-                                        .getattr(name.as_str())?
-                                        .into(),
-                                    fields,
-                                },
-                                OwnedKind::Variant(cases) => {
-                                    let package = py.import(package.as_str())?;
-
-                                    let cases = cases
-                                        .iter()
-                                        .map(|case| {
-                                            Ok(Case {
-                                                constructor: package
-                                                    .getattr(case.name.as_str())?
-                                                    .into(),
-                                                has_payload: case.has_payload,
-                                            })
-                                        })
-                                        .collect::<PyResult<Vec<_>>>()?;
-
-                                    let types_to_discriminants = PyDict::new(py);
-                                    for (index, case) in cases.iter().enumerate() {
-                                        types_to_discriminants
-                                            .set_item(&case.constructor, index)?;
-                                    }
-
-                                    Type::Variant {
-                                        cases,
-                                        types_to_discriminants: types_to_discriminants.into(),
-                                    }
-                                }
-                                OwnedKind::Enum(count) => Type::Enum {
-                                    constructor: py
-                                        .import(package.as_str())?
-                                        .getattr(name.as_str())?
-                                        .into(),
-                                    count: count.try_into().unwrap(),
-                                },
-                                OwnedKind::Flags(u32_count) => Type::Flags {
-                                    constructor: py
-                                        .import(package.as_str())?
-                                        .getattr(name.as_str())?
-                                        .into(),
-                                    u32_count: u32_count.try_into().unwrap(),
-                                },
-                                OwnedKind::Resource(Resource { local, remote }) => Type::Resource {
-                                    constructor: py
-                                        .import(package.as_str())?
-                                        .getattr(name.as_str())?
-                                        .into(),
-                                    local,
-                                    remote,
-                                },
-                            },
-                            exp::Type::Option => Type::Option,
-                            exp::Type::NestingOption => Type::NestingOption,
-                            exp::Type::Result => Type::Result,
-                            exp::Type::Tuple(length) => Type::Tuple(length.try_into().unwrap()),
-                            exp::Type::Handle => Type::Handle,
+                        Ok(Resource {
+                            constructor: py
+                                .import(ty.package.as_str())?
+                                .getattr(ty.name.as_str())?
+                                .into(),
                         })
                     })
                     .collect::<PyResult<_>>()?,
             )
             .unwrap();
+
+        RECORDS
+            .set(
+                symbols
+                    .records
+                    .into_iter()
+                    .map(|ty| {
+                        Ok(Record {
+                            constructor: py
+                                .import(ty.package.as_str())?
+                                .getattr(ty.name.as_str())?
+                                .into(),
+                            fields: ty.fields,
+                        })
+                    })
+                    .collect::<PyResult<_>>()?,
+            )
+            .unwrap();
+
+        FLAGS
+            .set(
+                symbols
+                    .flags
+                    .into_iter()
+                    .map(|ty| {
+                        Ok(Flags {
+                            constructor: py
+                                .import(ty.package.as_str())?
+                                .getattr(ty.name.as_str())?
+                                .into(),
+                            u32_count: ty.u32_count.try_into().unwrap(),
+                        })
+                    })
+                    .collect::<PyResult<_>>()?,
+            )
+            .unwrap();
+
+        TUPLES
+            .set(
+                symbols
+                    .tuples
+                    .into_iter()
+                    .map(|ty| {
+                        Ok(Tuple {
+                            count: ty.count.try_into().unwrap(),
+                        })
+                    })
+                    .collect::<PyResult<_>>()?,
+            )
+            .unwrap();
+
+        VARIANTS
+            .set(
+                symbols
+                    .variants
+                    .into_iter()
+                    .map(|ty| {
+                        let package = py.import(ty.package.as_str())?;
+
+                        let cases = ty
+                            .cases
+                            .iter()
+                            .map(|case| {
+                                Ok(Case {
+                                    constructor: package.getattr(case.name.as_str())?.into(),
+                                    has_payload: case.has_payload,
+                                })
+                            })
+                            .collect::<PyResult<Vec<_>>>()?;
+
+                        let types_to_discriminants = PyDict::new(py);
+                        for (index, case) in cases.iter().enumerate() {
+                            types_to_discriminants.set_item(&case.constructor, index)?;
+                        }
+
+                        Ok(Variant {
+                            cases,
+                            types_to_discriminants: types_to_discriminants.into(),
+                        })
+                    })
+                    .collect::<PyResult<_>>()?,
+            )
+            .unwrap();
+
+        ENUMS
+            .set(
+                symbols
+                    .enums
+                    .into_iter()
+                    .map(|ty| {
+                        Ok(Enum {
+                            constructor: py
+                                .import(ty.package.as_str())?
+                                .getattr(ty.name.as_str())?
+                                .into(),
+                            count: ty.count.try_into().unwrap(),
+                        })
+                    })
+                    .collect::<PyResult<_>>()?,
+            )
+            .unwrap();
+
+        OPTIONS.set(symbols.options).unwrap();
+
+        RESULTS.set(symbols.results).unwrap();
 
         let types = py.import(symbols.types_package.as_str())?;
 
@@ -427,796 +467,856 @@ impl Guest for MyExports {
     }
 }
 
-/// # Safety
-/// TODO
-#[export_name = "componentize-py#Dispatch"]
-pub unsafe extern "C" fn componentize_py_dispatch(
-    export: usize,
-    from_canon: u32,
-    to_canon: u32,
-    param_count: u32,
-    return_style: ReturnStyle,
-    params_canon: *const c_void,
-    results_canon: *mut c_void,
-) {
-    Python::attach(|py| {
-        let mut params_py = vec![ptr::null_mut::<ffi::PyObject>(); param_count.try_into().unwrap()];
+struct MyInterpreter;
 
-        componentize_py_call_indirect(
-            &py as *const _ as _,
-            params_canon,
-            params_py.as_mut_ptr() as _,
-            from_canon,
-        );
+impl Interpreter for MyInterpreter {
+    type CallCx<'a> = MyCall<'a>;
 
-        let mut params_py = params_py
-            .into_iter()
-            .map(|p| Bound::from_borrowed_ptr(py, p));
+    fn initialize(wit: Wit) {
+        WIT.set(wit).map_err(drop).unwrap();
+    }
 
-        if !*STUB_WASI.get().unwrap() {
-            static ONCE: Once = Once::new();
-            ONCE.call_once(|| {
-                // We must call directly into the host to get the runtime environment since libc's version will only
-                // contain the build-time pre-init snapshot.
-                let environ = ENVIRON.get().unwrap().bind(py);
-                for (k, v) in environment::get_environment() {
-                    environ.set_item(k, v).unwrap();
-                }
+    fn export_start<'a>(_: Wit, _: ExportFunction) -> Box<MyCall<'a>> {
+        Box::new(MyCall::new(Vec::new()))
+    }
 
-                // Likewise for CLI arguments.
-                for arg in environment::get_arguments() {
-                    ARGV.get().unwrap().bind(py).append(arg).unwrap();
-                }
+    fn export_call(_: Wit, func: ExportFunction, cx: &mut MyCall<'_>) {
+        Python::attach(|py| {
+            if !*STUB_WASI.get().unwrap() {
+                static ONCE: Once = Once::new();
+                ONCE.call_once(|| {
+                    // We must call directly into the host to get the runtime
+                    // environment since libc's version will only contain the
+                    // build-time pre-init snapshot.
+                    let environ = ENVIRON.get().unwrap().bind(py);
+                    for (k, v) in environment::get_environment() {
+                        environ.set_item(k, v).unwrap();
+                    }
 
-                // Call `random.seed()` to ensure we get a fresh seed rather than the one that got baked in during
-                // pre-init.
-                SEED.get().unwrap().call0(py).unwrap();
-            });
-        }
+                    // Likewise for CLI arguments.
+                    for arg in environment::get_arguments() {
+                        ARGV.get().unwrap().bind(py).append(arg).unwrap();
+                    }
 
-        let export = &EXPORTS.get().unwrap()[export];
-        let result = match export {
-            Export::Freestanding { instance, name } => {
-                instance.call_method1(py, name, PyTuple::new(py, params_py).unwrap())
+                    // Call `random.seed()` to ensure we get a fresh seed rather
+                    // than the one that got baked in during pre-init.
+                    SEED.get().unwrap().call0(py).unwrap();
+                });
             }
-            Export::Constructor(class) => class.call1(py, PyTuple::new(py, params_py).unwrap()),
-            Export::Method(name) => params_py
-                // Call method on self with remaining iterator elements
-                .next()
-                .unwrap()
-                .call_method1(name, PyTuple::new(py, params_py).unwrap())
-                .map(|r| r.into()),
-            Export::Static { class, name } => class
-                .getattr(py, name)
-                .and_then(|function| function.call1(py, PyTuple::new(py, params_py).unwrap())),
-        };
 
-        let result = match return_style {
-            ReturnStyle::Normal => match result {
-                Ok(result) => result,
-                Err(error) => {
+            let mut params_py = mem::take(&mut cx.stack).into_iter();
+            let export = &EXPORTS.get().unwrap()[func.index()];
+            let result = match &export.kind {
+                ExportKind::Freestanding { instance, name } => {
+                    instance.call_method1(py, name, PyTuple::new(py, params_py).unwrap())
+                }
+                ExportKind::Constructor(class) => {
+                    class.call1(py, PyTuple::new(py, params_py).unwrap())
+                }
+                ExportKind::Method(name) => params_py
+                    // Call method on self with remaining iterator elements
+                    .next()
+                    .unwrap()
+                    .call_method1(py, name, PyTuple::new(py, params_py).unwrap())
+                    .map(|r| r.into()),
+                ExportKind::Static { class, name } => class
+                    .getattr(py, name)
+                    .and_then(|function| function.call1(py, PyTuple::new(py, params_py).unwrap())),
+            };
+
+            let result = match (result, export.return_style) {
+                (Ok(_), ReturnStyle::None) => None,
+                (Ok(result), ReturnStyle::Normal) => Some(result),
+                (Ok(result), ReturnStyle::Result) => {
+                    Some(OK_CONSTRUCTOR.get().unwrap().call1(py, (result,)).unwrap())
+                }
+                (Err(error), ReturnStyle::None | ReturnStyle::Normal) => {
                     error.print(py);
                     panic!("Python function threw an unexpected exception")
                 }
-            },
-            ReturnStyle::Result => match result {
-                Ok(result) => OK_CONSTRUCTOR.get().unwrap().call1(py, (result,)).unwrap(),
-                Err(result) => {
+                (Err(error), ReturnStyle::Result) => {
                     if ERR_CONSTRUCTOR
                         .get()
                         .unwrap()
                         .bind(py)
-                        .eq(result.get_type(py))
+                        .eq(error.get_type(py))
                         .unwrap()
                     {
-                        result.into_value(py).into_any()
+                        Some(error.into_value(py).into_any())
                     } else {
-                        result.print(py);
+                        error.print(py);
                         panic!("Python function threw an unexpected exception")
                     }
                 }
-            },
-        };
+            };
 
-        let result_array = [result];
-
-        componentize_py_call_indirect(
-            &py as *const _ as _,
-            result_array.as_ptr() as *const _ as _,
-            results_canon,
-            to_canon,
-        );
-
-        let borrows = mem::take(BORROWS.lock().unwrap().deref_mut());
-        for Borrow { handle, drop } in borrows {
-            let params = [handle];
-            unsafe {
-                componentize_py_call_indirect(
-                    &py as *const _ as _,
-                    params.as_ptr() as _,
-                    ptr::null_mut(),
-                    drop,
-                );
+            if let Some(result) = result {
+                cx.stack.push(result);
             }
-        }
-    });
-}
 
-/// # Safety
-/// TODO
-#[export_name = "componentize-py#Allocate"]
-pub unsafe extern "C" fn componentize_py_allocate(size: usize, align: usize) -> *mut u8 {
-    alloc::alloc(Layout::from_size_align(size, align).unwrap())
-}
+            let borrows = mem::take(BORROWS.lock().unwrap().deref_mut());
+            for Borrow {
+                value,
+                handle,
+                drop,
+            } in borrows
+            {
+                let value = value.bind(py);
 
-/// # Safety
-/// TODO
-#[export_name = "componentize-py#Free"]
-pub unsafe extern "C" fn componentize_py_free(ptr: *mut u8, size: usize, align: usize) {
-    alloc::dealloc(ptr, Layout::from_size_align(size, align).unwrap())
-}
+                value.delattr(intern!(py, "handle")).unwrap();
 
-#[export_name = "componentize-py#ToCanonBool"]
-pub extern "C" fn componentize_py_to_canon_bool(_py: &Python, value: Borrowed<PyAny>) -> u32 {
-    if value.is_truthy().unwrap() {
-        1
-    } else {
-        0
-    }
-}
+                value
+                    .getattr(intern!(py, "finalizer"))
+                    .unwrap()
+                    .call_method0(intern!(py, "detach"))
+                    .unwrap();
 
-#[export_name = "componentize-py#ToCanonI32"]
-pub extern "C" fn componentize_py_to_canon_i32(_py: &Python, value: Borrowed<PyAny>) -> i32 {
-    value.extract().unwrap()
-}
-
-#[export_name = "componentize-py#ToCanonU32"]
-pub extern "C" fn componentize_py_to_canon_u32(_py: &Python, value: Borrowed<PyAny>) -> u32 {
-    value.extract().unwrap()
-}
-
-#[export_name = "componentize-py#ToCanonI64"]
-pub extern "C" fn componentize_py_to_canon_i64(_py: &Python, value: Borrowed<PyAny>) -> i64 {
-    value.extract().unwrap()
-}
-
-#[export_name = "componentize-py#ToCanonU64"]
-pub extern "C" fn componentize_py_to_canon_u64(_py: &Python, value: Borrowed<PyAny>) -> u64 {
-    value.extract().unwrap()
-}
-
-#[export_name = "componentize-py#ToCanonF32"]
-pub extern "C" fn componentize_py_to_canon_f32(_py: &Python, value: Borrowed<PyAny>) -> f32 {
-    value.extract().unwrap()
-}
-
-#[export_name = "componentize-py#ToCanonF64"]
-pub extern "C" fn componentize_py_to_canon_f64(_py: &Python, value: Borrowed<PyAny>) -> f64 {
-    value.extract().unwrap()
-}
-
-#[export_name = "componentize-py#ToCanonChar"]
-pub extern "C" fn componentize_py_to_canon_char(_py: &Python, value: Borrowed<PyAny>) -> u32 {
-    let value = value.extract::<String>().unwrap();
-    assert!(value.chars().count() == 1);
-    value.chars().next().unwrap() as u32
-}
-
-/// # Safety
-/// TODO
-#[export_name = "componentize-py#ToCanonString"]
-pub unsafe extern "C" fn componentize_py_to_canon_string(
-    _py: &Python,
-    value: Borrowed<PyAny>,
-    destination: *mut (*const u8, usize),
-) {
-    let value = value.extract::<String>().unwrap().into_bytes();
-    unsafe {
-        let result = alloc::alloc(Layout::from_size_align(value.len(), 1).unwrap());
-        ptr::copy_nonoverlapping(value.as_ptr(), result, value.len());
-        destination.write((result, value.len()));
-    }
-}
-
-#[export_name = "componentize-py#GetField"]
-pub extern "C" fn componentize_py_get_field<'a>(
-    py: &'a Python,
-    value: Borrowed<'_, 'a, PyAny>,
-    ty: usize,
-    field: usize,
-) -> Bound<'a, PyAny> {
-    match &TYPES.get().unwrap()[ty] {
-        Type::Record { fields, .. } => value.getattr(fields[field].as_str()).unwrap(),
-        Type::Variant {
-            types_to_discriminants,
-            cases,
-        } => {
-            let discriminant = types_to_discriminants
-                .bind(*py)
-                .get_item(value.get_type())
-                .unwrap();
-
-            match i32::try_from(field).unwrap() {
-                DISCRIMINANT_FIELD_INDEX => discriminant,
-                PAYLOAD_FIELD_INDEX => {
-                    if cases[discriminant.extract::<usize>().unwrap()].has_payload {
-                        value.getattr("value").unwrap()
-                    } else {
-                        py.None().into_bound(*py)
-                    }
+                unsafe {
+                    drop(handle);
                 }
-                _ => unreachable!(),
+            }
+        });
+    }
+
+    async fn export_call_async(_: Wit, func: ExportFunction, cx: Box<MyCall<'static>>) {
+        _ = (func, cx);
+        todo!()
+    }
+
+    fn resource_dtor(ty: wit::Resource, handle: usize) {
+        _ = (ty, handle);
+        todo!()
+    }
+}
+
+struct MyCall<'a> {
+    _phantom: PhantomData<&'a ()>,
+    iter_stack: Vec<usize>,
+    deferred_deallocations: Vec<(*mut u8, Layout)>,
+    strings: Vec<String>,
+    stack: Vec<Py<PyAny>>,
+}
+
+impl MyCall<'_> {
+    fn new(stack: Vec<Py<PyAny>>) -> Self {
+        // TODO: tell py03 to attach (and detach on drop) this thread to the
+        // interpreter.
+        Self {
+            _phantom: PhantomData,
+            iter_stack: Vec::new(),
+            deferred_deallocations: Vec::new(),
+            strings: Vec::new(),
+            stack,
+        }
+    }
+}
+
+impl Drop for MyCall<'_> {
+    fn drop(&mut self) {
+        for &(ptr, layout) in &self.deferred_deallocations {
+            unsafe {
+                alloc::dealloc(ptr, layout);
             }
         }
-        Type::Enum { .. } => match i32::try_from(field).unwrap() {
-            DISCRIMINANT_FIELD_INDEX => value.getattr("value").unwrap(),
-            PAYLOAD_FIELD_INDEX => py.None().into_bound(*py),
-            _ => unreachable!(),
-        },
-        Type::Flags { u32_count, .. } => {
-            assert!(field < *u32_count);
-            let value = value
-                .getattr("value")
+    }
+}
+
+impl Call for MyCall<'_> {
+    unsafe fn defer_deallocate(&mut self, ptr: *mut u8, layout: Layout) {
+        self.deferred_deallocations.push((ptr, layout));
+    }
+
+    fn pop_u8(&mut self) -> u8 {
+        Python::attach(|py| self.stack.pop().unwrap().extract(py).unwrap())
+    }
+
+    fn pop_u16(&mut self) -> u16 {
+        Python::attach(|py| self.stack.pop().unwrap().extract(py).unwrap())
+    }
+
+    fn pop_u32(&mut self) -> u32 {
+        Python::attach(|py| self.stack.pop().unwrap().extract(py).unwrap())
+    }
+
+    fn pop_u64(&mut self) -> u64 {
+        Python::attach(|py| self.stack.pop().unwrap().extract(py).unwrap())
+    }
+
+    fn pop_s8(&mut self) -> i8 {
+        Python::attach(|py| self.stack.pop().unwrap().extract(py).unwrap())
+    }
+
+    fn pop_s16(&mut self) -> i16 {
+        Python::attach(|py| self.stack.pop().unwrap().extract(py).unwrap())
+    }
+
+    fn pop_s32(&mut self) -> i32 {
+        Python::attach(|py| self.stack.pop().unwrap().extract(py).unwrap())
+    }
+
+    fn pop_s64(&mut self) -> i64 {
+        Python::attach(|py| self.stack.pop().unwrap().extract(py).unwrap())
+    }
+
+    fn pop_bool(&mut self) -> bool {
+        Python::attach(|py| self.stack.pop().unwrap().is_truthy(py).unwrap())
+    }
+
+    fn pop_char(&mut self) -> char {
+        let value = Python::attach(|py| self.stack.pop().unwrap().extract::<String>(py).unwrap());
+        assert!(value.chars().count() == 1);
+        value.chars().next().unwrap()
+    }
+
+    fn pop_f32(&mut self) -> f32 {
+        Python::attach(|py| self.stack.pop().unwrap().extract(py).unwrap())
+    }
+
+    fn pop_f64(&mut self) -> f64 {
+        Python::attach(|py| self.stack.pop().unwrap().extract(py).unwrap())
+    }
+
+    fn pop_string(&mut self) -> &str {
+        let value = Python::attach(|py| self.stack.pop().unwrap().extract::<String>(py).unwrap());
+        self.strings.push(value);
+        self.strings.last().unwrap()
+    }
+
+    fn pop_borrow(&mut self, ty: wit::Resource) -> u32 {
+        Python::attach(|py| {
+            let value = self.stack.pop().unwrap();
+            if let Some(new) = ty.new() {
+                // exported resource type
+                exported_resource_to_canon(py, ty, new, value)
+            } else {
+                // imported resource type
+                imported_resource_to_canon(py, value)
+            }
+        })
+    }
+
+    fn pop_own(&mut self, ty: wit::Resource) -> u32 {
+        Python::attach(|py| {
+            let value = self.stack.pop().unwrap();
+            if let Some(new) = ty.new() {
+                // exported resource type
+                exported_resource_to_canon(py, ty, new, value)
+            } else {
+                // imported resource type
+                value
+                    .bind(py)
+                    .getattr(intern!(py, "finalizer"))
+                    .unwrap()
+                    .call_method0(intern!(py, "detach"))
+                    .unwrap();
+
+                imported_resource_to_canon(py, value)
+            }
+        })
+    }
+
+    fn pop_enum(&mut self, _ty: wit::Enum) -> u32 {
+        Python::attach(|py| {
+            let value = self.stack.pop().unwrap();
+            let value = value.bind(py);
+            value
+                .getattr(intern!(py, "value"))
+                .unwrap()
+                .extract()
+                .unwrap()
+        })
+    }
+
+    fn pop_flags(&mut self, _ty: wit::Flags) -> u32 {
+        Python::attach(|py| {
+            let value = self.stack.pop().unwrap();
+            let value = value.bind(py);
+            // See the comment in `Self::push_flags` about using `num-bigint`
+            // here to represent arbitrary bit lengths.
+            value
+                .getattr(intern!(py, "value"))
                 .unwrap()
                 .extract::<BigUint>()
                 .unwrap()
                 .iter_u32_digits()
-                .nth(field)
-                .unwrap_or(0);
+                .next()
+                .unwrap_or(0)
+        })
+    }
 
-            u32::cast_signed(value)
-                .into_pyobject(*py)
-                .unwrap()
-                .into_any()
-        }
-        Type::Option => match i32::try_from(field).unwrap() {
-            DISCRIMINANT_FIELD_INDEX => if value.is_none() { 0u32 } else { 1 }
-                .into_pyobject(*py)
-                .unwrap()
-                .into_any(),
-            PAYLOAD_FIELD_INDEX => unsafe {
-                // Avoid incrementing `value`'s refcount while returning it:
-                Bound::from_owned_ptr(*py, value.as_ptr())
-            },
-            _ => unreachable!(),
-        },
-        Type::NestingOption => match i32::try_from(field).unwrap() {
-            DISCRIMINANT_FIELD_INDEX => if value.is_none() { 0u32 } else { 1 }
-                .into_pyobject(*py)
-                .unwrap()
-                .into_any(),
-            PAYLOAD_FIELD_INDEX => {
-                if value.is_none() {
-                    unsafe {
-                        // Avoid incrementing `value`'s refcount while returning
-                        // it:
-                        Bound::from_owned_ptr(*py, value.as_ptr())
+    fn pop_future(&mut self, ty: wit::Future) -> u32 {
+        _ = ty;
+        todo!()
+    }
+
+    fn pop_stream(&mut self, ty: wit::Stream) -> u32 {
+        _ = ty;
+        todo!()
+    }
+
+    fn pop_option(&mut self, ty: WitOption) -> u32 {
+        Python::attach(|py| {
+            if self.stack.last().unwrap().is_none(py) {
+                self.stack.pop().unwrap();
+                0
+            } else {
+                match &OPTIONS.get().unwrap()[ty.index()] {
+                    OptionKind::NonNesting => {
+                        // Leave value on the stack as-is
                     }
-                } else {
-                    value.getattr("value").unwrap()
+                    OptionKind::Nesting => {
+                        let value = self.stack.pop().unwrap();
+                        self.stack
+                            .push(value.getattr(py, intern!(py, "value")).unwrap());
+                    }
                 }
+                1
             }
-            _ => unreachable!(),
-        },
-        Type::Result => match i32::try_from(field).unwrap() {
-            DISCRIMINANT_FIELD_INDEX => if OK_CONSTRUCTOR
+        })
+    }
+
+    fn pop_result(&mut self, ty: WitResult) -> u32 {
+        let &ResultRecord { has_ok, has_err } = &RESULTS.get().unwrap()[ty.index()];
+
+        Python::attach(|py| {
+            let value = self.stack.pop().unwrap();
+            let value = value.bind(py);
+
+            let (discriminant, has_payload) = if OK_CONSTRUCTOR
                 .get()
                 .unwrap()
-                .bind(*py)
+                .bind(py)
                 .eq(value.get_type())
                 .unwrap()
             {
-                0_i32
+                (0, has_ok)
             } else if ERR_CONSTRUCTOR
                 .get()
                 .unwrap()
-                .bind(*py)
+                .bind(py)
                 .eq(value.get_type())
                 .unwrap()
             {
-                1
+                (1, has_err)
             } else {
                 unreachable!()
+            };
+
+            if has_payload {
+                self.stack
+                    .push(value.getattr(intern!(py, "value")).unwrap().unbind());
             }
-            .into_pyobject(*py)
-            .unwrap()
-            .into_any(),
-            PAYLOAD_FIELD_INDEX => value.getattr("value").unwrap(),
-            _ => unreachable!(),
-        },
-        Type::Tuple(length) => {
-            assert!(field < *length);
-            value
-                .downcast::<PyTuple>()
-                .unwrap()
-                .get_item(field)
-                .unwrap()
-        }
-        Type::Handle | Type::Resource { .. } => unreachable!(),
+
+            discriminant
+        })
     }
-}
 
-#[export_name = "componentize-py#GetListLength"]
-pub extern "C" fn componentize_py_get_list_length(_py: &Python, value: Borrowed<PyAny>) -> usize {
-    if let Ok(bytes) = value.downcast::<PyBytes>() {
-        bytes.len().unwrap()
-    } else {
-        value.downcast::<PyList>().unwrap().len()
-    }
-}
+    fn pop_variant(&mut self, ty: wit::Variant) -> u32 {
+        let Variant {
+            types_to_discriminants,
+            cases,
+        } = &VARIANTS.get().unwrap()[ty.index()];
 
-#[export_name = "componentize-py#GetListElement"]
-pub extern "C" fn componentize_py_get_list_element<'a>(
-    _py: &Python<'a>,
-    value: Borrowed<'_, 'a, PyAny>,
-    index: usize,
-) -> Bound<'a, PyAny> {
-    value.downcast::<PyList>().unwrap().get_item(index).unwrap()
-}
+        Python::attach(|py| {
+            let value = self.stack.pop().unwrap();
+            let value = value.bind(py);
 
-#[export_name = "componentize-py#FromCanonBool"]
-pub extern "C" fn componentize_py_from_canon_bool<'a>(
-    py: &Python<'a>,
-    value: u32,
-) -> Bound<'a, PyBool> {
-    PyBool::new(*py, value != 0).to_owned()
-}
-
-#[export_name = "componentize-py#FromCanonI32"]
-pub extern "C" fn componentize_py_from_canon_i32<'a>(
-    py: &Python<'a>,
-    value: i32,
-) -> Bound<'a, PyInt> {
-    value.into_pyobject(*py).unwrap()
-}
-
-#[export_name = "componentize-py#FromCanonU32"]
-pub extern "C" fn componentize_py_from_canon_u32<'a>(
-    py: &Python<'a>,
-    value: u32,
-) -> Bound<'a, PyInt> {
-    value.into_pyobject(*py).unwrap()
-}
-
-#[export_name = "componentize-py#FromCanonI64"]
-pub extern "C" fn componentize_py_from_canon_i64<'a>(
-    py: &Python<'a>,
-    value: i64,
-) -> Bound<'a, PyInt> {
-    value.into_pyobject(*py).unwrap()
-}
-
-#[export_name = "componentize-py#FromCanonU64"]
-pub extern "C" fn componentize_py_from_canon_u64<'a>(
-    py: &Python<'a>,
-    value: u64,
-) -> Bound<'a, PyInt> {
-    value.into_pyobject(*py).unwrap()
-}
-
-#[export_name = "componentize-py#FromCanonF32"]
-pub extern "C" fn componentize_py_from_canon_f32<'a>(
-    py: &Python<'a>,
-    value: f32,
-) -> Bound<'a, PyFloat> {
-    value.into_pyobject(*py).unwrap()
-}
-
-#[export_name = "componentize-py#FromCanonF64"]
-pub extern "C" fn componentize_py_from_canon_f64<'a>(
-    py: &Python<'a>,
-    value: f64,
-) -> Bound<'a, PyFloat> {
-    value.into_pyobject(*py).unwrap()
-}
-
-#[export_name = "componentize-py#FromCanonChar"]
-pub extern "C" fn componentize_py_from_canon_char<'a>(
-    py: &Python<'a>,
-    value: u32,
-) -> Bound<'a, PyString> {
-    char::from_u32(value)
-        .unwrap()
-        .to_string()
-        .into_pyobject(*py)
-        .unwrap()
-}
-
-/// # Safety
-/// TODO
-#[export_name = "componentize-py#FromCanonString"]
-pub unsafe extern "C" fn componentize_py_from_canon_string<'a>(
-    py: &Python<'a>,
-    data: *const u8,
-    len: usize,
-) -> Bound<'a, PyString> {
-    PyString::new(*py, unsafe {
-        str::from_utf8_unchecked(slice::from_raw_parts(data, len))
-    })
-}
-
-/// # Safety
-/// TODO
-#[export_name = "componentize-py#Init"]
-pub unsafe extern "C" fn componentize_py_init<'a>(
-    py: &Python<'a>,
-    ty: usize,
-    data: *const *mut ffi::PyObject,
-    len: usize,
-) -> Bound<'a, PyAny> {
-    match &TYPES.get().unwrap()[ty] {
-        Type::Record { constructor, .. } => {
-            let elements = slice::from_raw_parts(data, len)
-                .iter()
-                .map(|e| Bound::from_owned_ptr(*py, *e));
-            constructor
-                .call1(*py, PyTuple::new(*py, elements).unwrap())
+            let discriminant = types_to_discriminants
+                .bind(py)
+                .get_item(value.get_type())
                 .unwrap()
-                .into_bound(*py)
-        }
-        Type::Variant { cases, .. } => {
-            assert!(len == 2);
-            let discriminant = Bound::from_owned_ptr(
-                *py,
-                ptr::read(data.offset(isize::try_from(DISCRIMINANT_FIELD_INDEX).unwrap())),
-            )
-            .extract::<u32>()
-            .unwrap();
-            let case = &cases[usize::try_from(discriminant).unwrap()];
-            if case.has_payload {
-                case.constructor.call1(
-                    *py,
-                    (Bound::from_owned_ptr(
-                        *py,
-                        ptr::read(data.offset(isize::try_from(PAYLOAD_FIELD_INDEX).unwrap())),
-                    ),),
-                )
-            } else {
-                case.constructor.call1(*py, ())
+                .extract::<usize>()
+                .unwrap();
+
+            if cases[discriminant].has_payload {
+                self.stack
+                    .push(value.getattr(intern!(py, "value")).unwrap().unbind())
             }
-            .unwrap()
-            .into_bound(*py)
+
+            u32::try_from(discriminant).unwrap()
+        })
+    }
+
+    fn pop_record(&mut self, ty: wit::Record) {
+        let Record { fields, .. } = &RECORDS.get().unwrap()[ty.index()];
+
+        Python::attach(|py| {
+            let value = self.stack.pop().unwrap();
+            self.stack.extend(
+                fields
+                    .iter()
+                    .rev()
+                    .map(|name| value.getattr(py, name.as_str()).unwrap()),
+            );
+        });
+    }
+
+    fn pop_tuple(&mut self, ty: wit::Tuple) {
+        let &Tuple { count } = &TUPLES.get().unwrap()[ty.index()];
+
+        Python::attach(|py| {
+            let value = self.stack.pop().unwrap();
+            let value = value.cast_bound::<PyTuple>(py).unwrap();
+
+            self.stack.extend(
+                (0..count)
+                    .rev()
+                    .map(|index| value.get_item(index).unwrap().unbind()),
+            );
+        });
+    }
+
+    unsafe fn maybe_pop_list(&mut self, ty: List) -> Option<(*const u8, usize)> {
+        if let Type::U8 = ty.ty() {
+            Python::attach(|py| {
+                let src = self.stack.pop().unwrap();
+                let src = src.cast_bound::<PyBytes>(py).unwrap();
+                let len = src.len().unwrap();
+                let dst = alloc::alloc(Layout::from_size_align(len, 1).unwrap());
+                slice::from_raw_parts_mut(dst, len).copy_from_slice(src.as_bytes());
+                Some((dst as _, len))
+            })
+        } else {
+            None
         }
-        Type::Enum { constructor, count } => {
-            assert!(len == 2);
-            let discriminant = Bound::from_owned_ptr(
-                *py,
-                ptr::read(data.offset(isize::try_from(DISCRIMINANT_FIELD_INDEX).unwrap())),
-            )
-            .extract::<usize>()
-            .unwrap();
-            assert!(discriminant < *count);
-            constructor
-                .call1(*py, (discriminant,))
+    }
+
+    fn pop_list(&mut self, _ty: List) -> usize {
+        Python::attach(|py| {
+            self.iter_stack.push(0);
+            let value = self.stack.last().unwrap();
+            value.cast_bound::<PyList>(py).unwrap().len()
+        })
+    }
+
+    fn pop_iter_next(&mut self, _ty: List) {
+        Python::attach(|py| {
+            let index = *self.iter_stack.last().unwrap();
+            let element = self
+                .stack
+                .last()
                 .unwrap()
-                .into_bound(*py)
-        }
-        Type::Flags {
+                .cast_bound::<PyList>(py)
+                .unwrap()
+                .get_item(index)
+                .unwrap();
+            *self.iter_stack.last_mut().unwrap() = index + 1;
+            self.stack.push(element.into_any().unbind());
+        })
+    }
+
+    fn pop_iter(&mut self, _ty: List) {
+        self.iter_stack.pop().unwrap();
+        Python::attach(|py| {
+            self.stack.pop().unwrap().drop_ref(py);
+        })
+    }
+
+    fn push_bool(&mut self, val: bool) {
+        self.stack.push(Python::attach(|py| {
+            PyBool::new(py, val).to_owned().into_any().unbind()
+        }))
+    }
+
+    fn push_char(&mut self, val: char) {
+        self.stack.push(Python::attach(|py| {
+            val.to_string()
+                .into_pyobject(py)
+                .unwrap()
+                .into_any()
+                .unbind()
+        }))
+    }
+
+    fn push_u8(&mut self, val: u8) {
+        self.stack.push(Python::attach(|py| {
+            val.into_pyobject(py).unwrap().into_any().unbind()
+        }))
+    }
+
+    fn push_s8(&mut self, val: i8) {
+        self.stack.push(Python::attach(|py| {
+            val.into_pyobject(py).unwrap().into_any().unbind()
+        }))
+    }
+
+    fn push_u16(&mut self, val: u16) {
+        self.stack.push(Python::attach(|py| {
+            val.into_pyobject(py).unwrap().into_any().unbind()
+        }))
+    }
+
+    fn push_s16(&mut self, val: i16) {
+        self.stack.push(Python::attach(|py| {
+            val.into_pyobject(py).unwrap().into_any().unbind()
+        }))
+    }
+
+    fn push_u32(&mut self, val: u32) {
+        self.stack.push(Python::attach(|py| {
+            val.into_pyobject(py).unwrap().into_any().unbind()
+        }));
+    }
+
+    fn push_s32(&mut self, val: i32) {
+        self.stack.push(Python::attach(|py| {
+            val.into_pyobject(py).unwrap().into_any().unbind()
+        }))
+    }
+
+    fn push_u64(&mut self, val: u64) {
+        self.stack.push(Python::attach(|py| {
+            val.into_pyobject(py).unwrap().into_any().unbind()
+        }))
+    }
+
+    fn push_s64(&mut self, val: i64) {
+        self.stack.push(Python::attach(|py| {
+            val.into_pyobject(py).unwrap().into_any().unbind()
+        }))
+    }
+
+    fn push_f32(&mut self, val: f32) {
+        self.stack.push(Python::attach(|py| {
+            val.into_pyobject(py).unwrap().into_any().unbind()
+        }))
+    }
+
+    fn push_f64(&mut self, val: f64) {
+        self.stack.push(Python::attach(|py| {
+            val.into_pyobject(py).unwrap().into_any().unbind()
+        }))
+    }
+
+    fn push_string(&mut self, val: String) {
+        self.stack.push(Python::attach(|py| {
+            val.into_pyobject(py).unwrap().into_any().unbind()
+        }))
+    }
+
+    fn push_record(&mut self, ty: wit::Record) {
+        let Record {
+            constructor,
+            fields,
+        } = &RECORDS.get().unwrap()[ty.index()];
+
+        let elements = self
+            .stack
+            .drain(self.stack.len().checked_sub(fields.len()).unwrap()..);
+
+        let result = Python::attach(|py| {
+            constructor
+                .call1(py, PyTuple::new(py, elements).unwrap())
+                .unwrap()
+        });
+
+        self.stack.push(result);
+    }
+
+    fn push_tuple(&mut self, ty: wit::Tuple) {
+        let &Tuple { count } = &TUPLES.get().unwrap()[ty.index()];
+
+        let elements = self
+            .stack
+            .drain(self.stack.len().checked_sub(count).unwrap()..);
+
+        let result = Python::attach(|py| {
+            PyTuple::new(py, elements)
+                .unwrap()
+                .to_owned()
+                .into_any()
+                .unbind()
+        });
+
+        self.stack.push(result);
+    }
+
+    fn push_flags(&mut self, ty: wit::Flags, bits: u32) {
+        let Flags {
             constructor,
             u32_count,
-        } => {
-            assert!(len == *u32_count);
+        } = &FLAGS.get().unwrap()[ty.index()];
+
+        // Note that `componentize-py` was originally written when a component
+        // model `flags` type could have an arbitrary number of bits.  Since
+        // then, the spec was updated to only allow up to 32 bits, but we still
+        // support arbitrary sizes here.  See
+        // https://github.com/WebAssembly/component-model/issues/370 for
+        // details.
+        //
+        // TODO: If it's unlikely that the spec will ever support more than 32
+        // bits, remove the `num-bigint` dependency and simplify the code here
+        // and in `summary.rs`.
+        let result = Python::attach(|py| {
             constructor
                 .call1(
-                    *py,
+                    py,
                     (BigUint::new(
-                        slice::from_raw_parts(data, len)
-                            .iter()
-                            .map(|v| {
-                                i32::cast_unsigned(
-                                    Bound::from_owned_ptr(*py, *v).extract().unwrap(),
-                                )
-                            })
+                        iter::once(bits)
+                            .chain(iter::repeat(0))
+                            .take(*u32_count)
                             .collect(),
                     ),),
                 )
                 .unwrap()
-                .into_bound(*py)
-        }
-        Type::Option => {
-            assert!(len == 2);
-            let discriminant = Bound::from_owned_ptr(
-                *py,
-                ptr::read(data.offset(isize::try_from(DISCRIMINANT_FIELD_INDEX).unwrap())),
-            )
-            .extract::<u32>()
-            .unwrap();
-            match discriminant {
-                0 => py.None().into_bound(*py),
-                1 => Bound::from_owned_ptr(
-                    *py,
-                    ptr::read(data.offset(isize::try_from(PAYLOAD_FIELD_INDEX).unwrap())),
-                ),
-                _ => unreachable!(),
-            }
-        }
-        Type::NestingOption => {
-            assert!(len == 2);
-            let discriminant = Bound::from_owned_ptr(
-                *py,
-                ptr::read(data.offset(isize::try_from(DISCRIMINANT_FIELD_INDEX).unwrap())),
-            )
-            .extract::<u32>()
-            .unwrap();
+        });
 
-            match discriminant {
-                0 => py.None().into_bound(*py),
+        self.stack.push(result);
+    }
 
-                1 => SOME_CONSTRUCTOR
-                    .get()
+    fn push_enum(&mut self, ty: wit::Enum, discriminant: u32) {
+        let &Enum {
+            ref constructor,
+            count,
+        } = &ENUMS.get().unwrap()[ty.index()];
+
+        assert!(usize::try_from(discriminant).unwrap() < count);
+
+        let result = Python::attach(|py| constructor.call1(py, (discriminant,)).unwrap());
+
+        self.stack.push(result);
+    }
+
+    fn push_borrow(&mut self, ty: wit::Resource, handle: u32) {
+        Python::attach(|py| {
+            self.stack.push(if ty.rep().is_some() {
+                // exported resource type
+                unsafe { Py::<PyAny>::from_borrowed_ptr(py, handle as usize as _) }
+            } else {
+                // imported resource type
+                let value = imported_resource_from_canon(py, ty, handle);
+
+                BORROWS.lock().unwrap().push(Borrow {
+                    value: value.clone_ref(py),
+                    handle,
+                    drop: ty.drop(),
+                });
+
+                value
+            })
+        })
+    }
+
+    fn push_own(&mut self, ty: wit::Resource, handle: u32) {
+        Python::attach(|py| {
+            self.stack.push(if let Some(rep) = ty.rep() {
+                // exported resource type
+                let rep = unsafe { rep(handle) };
+                let value = unsafe { Py::<PyAny>::from_borrowed_ptr(py, rep as _) }.into_bound(py);
+
+                value
+                    .delattr(intern!(py, "__componentize_py_handle"))
+                    .unwrap();
+
+                value
+                    .getattr(intern!(py, "finalizer"))
                     .unwrap()
-                    .call1(
-                        *py,
-                        (Bound::from_owned_ptr(
-                            *py,
-                            ptr::read(data.offset(isize::try_from(PAYLOAD_FIELD_INDEX).unwrap())),
-                        ),),
-                    )
-                    .unwrap()
-                    .into_bound(*py),
+                    .call_method0(intern!(py, "detach"))
+                    .unwrap();
 
-                _ => unreachable!(),
-            }
-        }
-        Type::Result => {
-            assert!(len == 2);
-            let discriminant = Bound::from_owned_ptr(
-                *py,
-                ptr::read(data.offset(isize::try_from(DISCRIMINANT_FIELD_INDEX).unwrap())),
-            )
-            .extract::<u32>()
-            .unwrap();
+                value.unbind()
+            } else {
+                // imported resource type
+                imported_resource_from_canon(py, ty, handle)
+            });
+        })
+    }
 
-            match discriminant {
-                0 => OK_CONSTRUCTOR.get().unwrap(),
-                1 => ERR_CONSTRUCTOR.get().unwrap(),
-                _ => unreachable!(),
+    fn push_future(&mut self, ty: wit::Future, handle: u32) {
+        _ = (ty, handle);
+        todo!()
+    }
+
+    fn push_stream(&mut self, ty: wit::Stream, handle: u32) {
+        _ = (ty, handle);
+        todo!()
+    }
+
+    fn push_variant(&mut self, ty: wit::Variant, discriminant: u32) {
+        let Variant { cases, .. } = &VARIANTS.get().unwrap()[ty.index()];
+
+        let result = Python::attach(|py| {
+            let case = &cases[usize::try_from(discriminant).unwrap()];
+            if case.has_payload {
+                let payload = self.stack.pop().unwrap();
+                case.constructor.call1(py, (payload,))
+            } else {
+                case.constructor.call1(py, ())
             }
-            .call1(
-                *py,
-                (Bound::from_owned_ptr(
-                    *py,
-                    ptr::read(data.offset(isize::try_from(PAYLOAD_FIELD_INDEX).unwrap())),
-                ),),
-            )
             .unwrap()
-            .into_bound(*py)
+        });
+
+        self.stack.push(result);
+    }
+
+    fn push_option(&mut self, ty: WitOption, is_some: bool) {
+        Python::attach(|py| {
+            if is_some {
+                match &OPTIONS.get().unwrap()[ty.index()] {
+                    OptionKind::NonNesting => {
+                        // Leave payload on the stack as-is.
+                    }
+                    OptionKind::Nesting => {
+                        let payload = self.stack.pop().unwrap();
+                        self.stack.push(
+                            SOME_CONSTRUCTOR
+                                .get()
+                                .unwrap()
+                                .call1(py, (payload,))
+                                .unwrap(),
+                        );
+                    }
+                }
+            } else {
+                self.stack.push(py.None());
+            }
+        });
+    }
+
+    fn push_result(&mut self, ty: WitResult, is_err: bool) {
+        let &ResultRecord { has_ok, has_err } = &RESULTS.get().unwrap()[ty.index()];
+
+        Python::attach(|py| {
+            let (constructor, has_payload) = if is_err {
+                (ERR_CONSTRUCTOR.get().unwrap(), has_err)
+            } else {
+                (OK_CONSTRUCTOR.get().unwrap(), has_ok)
+            };
+
+            let payload = if has_payload {
+                self.stack.pop().unwrap()
+            } else {
+                py.None()
+            };
+
+            self.stack.push(constructor.call1(py, (payload,)).unwrap())
+        });
+    }
+
+    unsafe fn push_raw_list(&mut self, ty: List, src: *mut u8, len: usize) -> bool {
+        if let Type::U8 = ty.ty() {
+            self.stack.push(Python::attach(|py| {
+                let value = PyBytes::new(py, slice::from_raw_parts(src, len))
+                    .to_owned()
+                    .into_any()
+                    .unbind();
+                alloc::dealloc(src, Layout::from_size_align(len, 1).unwrap());
+                value
+            }));
+            true
+        } else {
+            false
         }
-        Type::Tuple(length) => {
-            assert!(*length == len);
-            let elements = slice::from_raw_parts(data, len)
-                .iter()
-                .map(|e| Bound::from_owned_ptr(*py, *e));
-            PyTuple::new(*py, elements).unwrap().into_any()
-        }
-        Type::Handle | Type::Resource { .. } => unreachable!(),
+    }
+
+    fn push_list(&mut self, _ty: List, _capacity: usize) {
+        self.stack.push(Python::attach(|py| {
+            PyList::empty(py).to_owned().into_any().unbind()
+        }));
+    }
+
+    fn list_append(&mut self, _ty: List) {
+        Python::attach(|py| {
+            let element = self.stack.pop().unwrap();
+            self.stack
+                .last()
+                .unwrap()
+                .cast_bound::<PyList>(py)
+                .unwrap()
+                .append(element)
+                .unwrap()
+        });
     }
 }
 
-#[export_name = "componentize-py#MakeList"]
-pub extern "C" fn componentize_py_make_list<'a>(py: &Python<'a>) -> Bound<'a, PyList> {
-    PyList::empty(*py)
+fn imported_resource_from_canon(py: Python<'_>, ty: wit::Resource, handle: u32) -> Py<PyAny> {
+    let Resource { constructor } = &RESOURCES.get().unwrap()[ty.index()];
+
+    let instance = constructor
+        .call_method1(
+            py,
+            intern!(py, "__new__"),
+            PyTuple::new(py, [constructor]).unwrap(),
+        )
+        .unwrap();
+
+    let handle = handle.into_pyobject(py).unwrap();
+
+    instance
+        .setattr(py, intern!(py, "handle"), handle.as_borrowed())
+        .unwrap();
+
+    let finalizer = FINALIZE
+        .get()
+        .unwrap()
+        .call1(
+            py,
+            (
+                instance.clone_ref(py),
+                DROP_RESOURCE.get().unwrap(),
+                (ty.drop() as usize).into_pyobject(py).unwrap(),
+                handle,
+            ),
+        )
+        .unwrap();
+
+    instance
+        .setattr(py, intern!(py, "finalizer"), finalizer)
+        .unwrap();
+
+    instance
 }
 
-#[export_name = "componentize-py#ListAppend"]
-pub extern "C" fn componentize_py_list_append(
-    _py: &Python,
-    list: Borrowed<PyList>,
-    element: Borrowed<PyAny>,
-) {
-    list.append(element).unwrap();
-}
-
-#[export_name = "componentize-py#None"]
-pub extern "C" fn componentize_py_none(py: &Python) -> Py<PyAny> {
-    py.None()
-}
-
-/// # Safety
-/// TODO
-#[export_name = "componentize-py#GetBytes"]
-pub unsafe extern "C" fn componentize_py_get_bytes(
-    _py: &Python,
-    src: Borrowed<PyBytes>,
-    dst: *mut u8,
-    len: usize,
-) {
-    assert_eq!(len, src.len().unwrap());
-    slice::from_raw_parts_mut(dst, len).copy_from_slice(src.as_bytes())
-}
-
-/// # Safety
-/// TODO
-#[export_name = "componentize-py#MakeBytes"]
-pub unsafe extern "C" fn componentize_py_make_bytes<'a>(
-    py: &Python<'a>,
-    src: *const u8,
-    len: usize,
-) -> Bound<'a, PyBytes> {
-    PyBytes::new(*py, slice::from_raw_parts(src, len))
-}
-
-#[export_name = "componentize-py#FromCanonHandle"]
-pub extern "C" fn componentize_py_from_canon_handle<'a>(
-    py: &Python<'a>,
-    value: i32,
-    borrow: i32,
-    local: i32,
-    resource: i32,
-) -> Bound<'a, PyAny> {
-    let ty = &TYPES.get().unwrap()[usize::try_from(resource).unwrap()];
-    let Type::Resource {
-        constructor,
-        local: resource_local,
-        remote: resource_remote,
-    } = ty
-    else {
-        panic!("expected resource, found {ty:?}");
-    };
-
-    if local != 0 {
-        if borrow != 0 {
-            unsafe { Py::<PyAny>::from_borrowed_ptr(*py, value as usize as _) }.into_bound(*py)
-        } else {
-            let Some(LocalResource { rep, .. }) = resource_local else {
-                panic!("expected local resource, found {ty:?}");
-            };
-
-            let rep = {
-                let params = [value];
-                let mut results = [MaybeUninit::<usize>::uninit()];
-                unsafe {
-                    componentize_py_call_indirect(
-                        py as *const _ as _,
-                        params.as_ptr() as _,
-                        results.as_mut_ptr() as _,
-                        *rep,
-                    );
-                    results[0].assume_init()
-                }
-            };
-
-            let value = unsafe { Py::<PyAny>::from_borrowed_ptr(*py, rep as _) }.into_bound(*py);
-
-            value
-                .delattr(intern!(*py, "__componentize_py_handle"))
-                .unwrap();
-
-            value
-                .getattr(intern!(*py, "finalizer"))
-                .unwrap()
-                .call_method0(intern!(*py, "detach"))
-                .unwrap();
-
-            value
-        }
+fn exported_resource_to_canon(
+    py: Python<'_>,
+    ty: wit::Resource,
+    new: unsafe extern "C" fn(usize) -> u32,
+    value: Py<PyAny>,
+) -> u32 {
+    let name = intern!(py, "__componentize_py_handle");
+    if value.bind(py).hasattr(name).unwrap() {
+        value.bind(py).getattr(name).unwrap().extract().unwrap()
     } else {
-        let Some(RemoteResource { drop }) = resource_remote else {
-            panic!("expected remote resource, found {ty:?}");
-        };
-
-        if borrow != 0 {
-            BORROWS.lock().unwrap().push(Borrow {
-                handle: value,
-                drop: *drop,
-            });
-        }
-
-        let instance = constructor
-            .call_method1(
-                *py,
-                intern!(*py, "__new__"),
-                PyTuple::new(*py, [constructor]).unwrap(),
-            )
-            .unwrap();
-
-        let handle = value.into_pyobject(*py).unwrap();
+        let rep = value.into_ptr();
+        let handle = unsafe { new(rep as usize) };
+        let instance = unsafe { Py::<PyAny>::from_borrowed_ptr(py, rep) };
 
         instance
-            .setattr(*py, intern!(*py, "handle"), handle.as_borrowed())
+            .setattr(py, name, handle.into_pyobject(py).unwrap())
             .unwrap();
 
         let finalizer = FINALIZE
             .get()
             .unwrap()
             .call1(
-                *py,
+                py,
                 (
-                    instance.clone_ref(*py),
+                    instance.clone_ref(py),
                     DROP_RESOURCE.get().unwrap(),
-                    drop.into_pyobject(*py).unwrap(),
+                    (ty.drop() as usize).into_pyobject(py).unwrap(),
                     handle,
                 ),
             )
             .unwrap();
 
         instance
-            .setattr(*py, intern!(*py, "finalizer"), finalizer)
+            .setattr(py, intern!(py, "finalizer"), finalizer)
             .unwrap();
 
-        instance.into_bound(*py)
+        handle
     }
 }
 
-#[export_name = "componentize-py#ToCanonHandle"]
-pub extern "C" fn componentize_py_to_canon_handle(
-    py: &Python,
-    value: Borrowed<PyAny>,
-    borrow: i32,
-    local: i32,
-    resource: i32,
-) -> u32 {
-    if local != 0 {
-        let ty = &TYPES.get().unwrap()[usize::try_from(resource).unwrap()];
-        let Type::Resource {
-            local: Some(LocalResource { new, drop, .. }),
-            ..
-        } = ty
-        else {
-            panic!("expected local resource, found {ty:?}");
-        };
-
-        let name = intern!(*py, "__componentize_py_handle");
-        if value.hasattr(name).unwrap() {
-            value.getattr(name).unwrap().extract().unwrap()
-        } else {
-            let rep = Py::<PyAny>::from(value.to_owned()).into_ptr();
-            let handle = {
-                let params = [rep as usize];
-                let mut results = [MaybeUninit::<u32>::uninit()];
-                unsafe {
-                    componentize_py_call_indirect(
-                        py as *const _ as _,
-                        params.as_ptr() as _,
-                        results.as_mut_ptr() as _,
-                        *new,
-                    );
-                    results[0].assume_init()
-                }
-            };
-
-            let instance = unsafe { Py::<PyAny>::from_borrowed_ptr(*py, rep) };
-
-            instance
-                .setattr(*py, name, handle.into_pyobject(*py).unwrap())
-                .unwrap();
-
-            let finalizer = FINALIZE
-                .get()
-                .unwrap()
-                .call1(
-                    *py,
-                    (
-                        instance.clone_ref(*py),
-                        DROP_RESOURCE.get().unwrap(),
-                        drop.into_pyobject(*py).unwrap(),
-                        handle,
-                    ),
-                )
-                .unwrap();
-
-            instance
-                .setattr(*py, intern!(*py, "finalizer"), finalizer)
-                .unwrap();
-
-            handle
-        }
-    } else {
-        if borrow == 0 {
-            value
-                .getattr(intern!(*py, "finalizer"))
-                .unwrap()
-                .call_method0(intern!(*py, "detach"))
-                .unwrap();
-        }
-
-        value
-            .getattr(intern!(*py, "handle"))
-            .unwrap()
-            .extract()
-            .unwrap()
-    }
+fn imported_resource_to_canon(py: Python<'_>, value: Py<PyAny>) -> u32 {
+    value
+        .bind(py)
+        .getattr(intern!(py, "handle"))
+        .unwrap()
+        .extract()
+        .unwrap()
 }
+
+wit_dylib_ffi::export!(MyInterpreter);
 
 // As of this writing, recent Rust `nightly` builds include a version of the `libc` crate that expects `wasi-libc`
 // to define the following global variables, but `wasi-libc` defines them as preprocessor constants which aren't
