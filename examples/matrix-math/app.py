@@ -5,7 +5,7 @@ import sys
 import numpy
 import wit_world
 from wit_world import exports
-from wit_world.types import Err
+from componentize_py_types import Err
 
 
 class WitWorld(wit_world.WitWorld):

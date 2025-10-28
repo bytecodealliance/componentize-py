@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use assert_cmd::Command;
+use assert_cmd::{Command, cargo};
 use flate2::bufread::GzDecoder;
 use fs_extra::dir::CopyOptions;
 use predicates::prelude::predicate;
@@ -22,7 +22,7 @@ fn cli_example() -> anyhow::Result<()> {
     )?;
     let path = dir.path().join("cli");
 
-    Command::cargo_bin("componentize-py")?
+    cargo::cargo_bin_cmd!("componentize-py")
         .current_dir(&path)
         .args([
             "-d",
@@ -50,21 +50,30 @@ fn cli_example() -> anyhow::Result<()> {
 
 #[test]
 fn http_example() -> anyhow::Result<()> {
+    test_http_example("http", "wasi:http/proxy@0.2.0", 8080)
+}
+
+#[test]
+fn http_p3_example() -> anyhow::Result<()> {
+    test_http_example("http-p3", "wasi:http/proxy@0.3.0-rc-2025-09-16", 8081)
+}
+
+fn test_http_example(name: &str, world: &str, port: u16) -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     fs_extra::copy_items(
-        &["./examples/http", "./wit"],
+        &[format!("./examples/{name}").as_str(), "./wit"],
         dir.path(),
         &CopyOptions::new(),
     )?;
-    let path = dir.path().join("http");
+    let path = dir.path().join(name);
 
-    Command::cargo_bin("componentize-py")?
+    cargo::cargo_bin_cmd!("componentize-py")
         .current_dir(&path)
         .args([
             "-d",
             "../wit",
             "-w",
-            "wasi:http/proxy@0.2.0",
+            world,
             "componentize",
             "app",
             "-o",
@@ -76,7 +85,13 @@ fn http_example() -> anyhow::Result<()> {
 
     let mut handle = std::process::Command::new("wasmtime")
         .current_dir(&path)
-        .args(["serve", "-Scli", "http.wasm"])
+        .args([
+            "serve",
+            &format!("--addr=0.0.0.0:{port}"),
+            "-Sp3,common",
+            "-Wcomponent-model-async",
+            "http.wasm",
+        ])
         .spawn()?;
 
     let content = "’Twas brillig, and the slithy toves
@@ -89,7 +104,7 @@ All mimsy were the borogoves,
 
     let text = retry(|| {
         Ok(client
-            .post("http://127.0.0.1:8080/echo")
+            .post(format!("http://127.0.0.1:{port}/echo"))
             .header("content-type", "text/plain")
             .body(content)
             .send()?
@@ -100,7 +115,7 @@ All mimsy were the borogoves,
 
     let text = retry(|| {
         Ok(client
-            .get("http://127.0.0.1:8080/hash-all")
+            .get(format!("http://127.0.0.1:{port}/hash-all"))
             .header("url", "https://webassembly.github.io/spec/core/")
             .header("url", "https://www.w3.org/groups/wg/wasm/")
             .header("url", "https://bytecodealliance.org/")
@@ -129,7 +144,7 @@ fn matrix_math_example() -> anyhow::Result<()> {
 
     install_numpy(&path)?;
 
-    Command::cargo_bin("componentize-py")?
+    cargo::cargo_bin_cmd!("componentize-py")
         .current_dir(&path)
         .args([
             "-d",
@@ -166,7 +181,7 @@ fn sandbox_example() -> anyhow::Result<()> {
     fs_extra::copy_items(&["./examples/sandbox"], dir.path(), &CopyOptions::new())?;
     let path = dir.path().join("sandbox");
 
-    Command::cargo_bin("componentize-py")?
+    cargo::cargo_bin_cmd!("componentize-py")
         .current_dir(&path)
         .args([
             "-d",
@@ -225,7 +240,7 @@ fn tcp_example() -> anyhow::Result<()> {
     )?;
     let path = dir.path().join("tcp");
 
-    Command::cargo_bin("componentize-py")?
+    cargo::cargo_bin_cmd!("componentize-py")
         .current_dir(&path)
         .args([
             "-d",

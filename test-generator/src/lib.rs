@@ -1,7 +1,7 @@
 #![deny(warnings)]
 
 use {
-    anyhow::{anyhow, Result},
+    anyhow::{Result, anyhow},
     proptest::{
         strategy::{Just, Strategy, ValueTree},
         test_runner::{Config, TestRng, TestRunner},
@@ -11,8 +11,9 @@ use {
 
 const DEFAULT_TEST_COUNT: usize = 10;
 const MAX_LIST_SIZE: usize = 100;
-// As of this writing, neither `Debug` nor `Strategy` are implemented for tuples of more than twelve elements.
-// Technically we could work around this, but it's probably more trouble than it's worth.
+// As of this writing, neither `Debug` nor `Strategy` are implemented for tuples
+// of more than twelve elements.  Technically we could work around this, but
+// it's probably more trouble than it's worth.
 const MAX_TUPLE_SIZE: usize = 12;
 // See note above about `MAX_TUPLE_SIZE`
 const MAX_PARAM_COUNT: usize = 12;

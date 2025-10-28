@@ -11,7 +11,7 @@ import asyncio
 import socket
 import subprocess
 
-from wit_world.types import Ok, Err
+from componentize_py_types import Ok, Err
 from wit_world.imports import types, streams, poll, outgoing_handler
 from wit_world.imports.types import (
     IncomingBody,

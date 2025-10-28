@@ -4,11 +4,15 @@ import resource_borrow_export
 import resource_aggregates
 import resource_alias1
 import resource_borrow_in_record
+import componentize_py_async_support
+
+from componentize_py_types import Result, Ok, Err
 from tests import exports, imports
 from tests.imports import resource_borrow_import
 from tests.imports import simple_import_and_export
+from tests.imports import simple_async_import_and_export
 from tests.exports import resource_alias2
-from tests.types import Result, Ok, Err
+from tests.exports import streams_and_futures
 from typing import Tuple, List, Optional
 from foo_sdk.wit import exports as foo_exports
 from foo_sdk.wit.imports.foo_interface import test as foo_test
@@ -22,6 +26,14 @@ class SimpleExport(exports.SimpleExport):
 class SimpleImportAndExport(exports.SimpleImportAndExport):
     def foo(self, v: int) -> int:
         return simple_import_and_export.foo(v) + 3
+
+class SimpleAsyncExport(exports.SimpleAsyncExport):
+    async def foo(self, v: int) -> int:
+        return v + 3
+
+class SimpleAsyncImportAndExport(exports.SimpleAsyncImportAndExport):
+    async def foo(self, v: int) -> int:
+        return (await simple_async_import_and_export.foo(v)) + 3
 
 class ResourceImportAndExport(exports.ResourceImportAndExport):
     pass
@@ -117,6 +129,42 @@ class ResourceBorrowInRecord(exports.ResourceBorrowInRecord):
                 )
             )
         )
+
+async def pipe_bytes(rx: ByteStreamReader, tx: ByteStreamWriter):
+    while not (rx.writer_dropped or tx.reader_dropped):
+        await tx.write_all(await rx.read(1024))
+
+async def pipe_strings(rx: FutureReader[str], tx: StreamReader[str]):
+    await tx.write(await rx.read())
+
+async def pipe_things(rx: StreamReader[streams_and_futures.Thing], tx: StreamWriter[streams_and_futures.Thing]):
+    # Read the things one at a time, forcing the host to re-take ownership of
+    # any unwritten items between writes.
+    things = []
+    while not rx.writer_dropped:
+        things += await rx.read(1)
+
+    # Write the things all at once.  The host will read them only one at a time,
+    # forcing us to re-take ownership of any unwritten items between writes.
+    await tx.write_all(things)
+        
+class StreamsAndFutures(exports.StreamsAndFutures):
+    async def echo_stream_u8(self, stream: ByteStreamReader) -> ByteStreamReader:
+        tx, rx = tests.byte_stream()
+        componentize_py_async_support.spawn(pipe_bytes(stream, tx))
+        return rx
+
+    async def echo_future_string(self, future: FutureReader[str]) -> FutureReader[str]:
+        def unreachable() -> str:
+            raise AssertionError
+        tx, rx = tests.string_future(unreachable)
+        componentize_py_async_support.spawn(pipe_strings(future, tx))
+        return rx
+
+    async def short_reads(self, stream: StreamReader[streams_and_futures.Thing]) -> StreamReader[streams_and_futures.Thing]:
+        tx, rx = tests.streams_and_futures_thing_stream()
+        componentize_py_async_support.spawn(pipe_things(stream, tx))
+        return rx
 
 class Tests(tests.Tests):
     def test_resource_borrow_import(self, v: int) -> int:

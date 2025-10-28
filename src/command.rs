@@ -52,21 +52,25 @@ pub struct Common {
     #[clap(long)]
     all_features: bool,
 
-    /// Specify names to use for imported interfaces.  May be specified more than once.
+    /// Specify names to use for imported interfaces.  May be specified more
+    /// than once.
     ///
-    /// By default, the python module name generated for a given interface will be the snake-case form of the WIT
-    /// interface name, possibly qualified with the package name and namespace and/or version if that name would
-    /// otherwise clash with another interface.  With this option, you may override that name with your own, unique
-    /// name.
+    /// By default, the python module name generated for a given interface will
+    /// be the snake-case form of the WIT interface name, possibly qualified
+    /// with the package name and namespace and/or version if that name would
+    /// otherwise clash with another interface.  With this option, you may
+    /// override that name with your own, unique name.
     #[arg(long, value_parser = parse_key_value)]
     pub import_interface_name: Vec<(String, String)>,
 
-    /// Specify names to use for exported interfaces.  May be specified more than once.
+    /// Specify names to use for exported interfaces.  May be specified more
+    /// than once.
     ///
-    /// By default, the python module name generated for a given interface will be the snake-case form of the WIT
-    /// interface name, possibly qualified with the package name and namespace and/or version if that name would
-    /// otherwise clash with another interface.  With this option, you may override that name with your own, unique
-    /// name.
+    /// By default, the python module name generated for a given interface will
+    /// be the snake-case form of the WIT interface name, possibly qualified
+    /// with the package name and namespace and/or version if that name would
+    /// otherwise clash with another interface.  With this option, you may
+    /// override that name with your own, unique name.
     #[arg(long, value_parser = parse_key_value)]
     pub export_interface_name: Vec<(String, String)>,
 
@@ -82,7 +86,8 @@ pub enum Command {
     /// Generate a component from the specified Python app and its dependencies.
     Componentize(Componentize),
 
-    /// Generate Python bindings for the world and write them to the specified directory.
+    /// Generate Python bindings for the world and write them to the specified
+    /// directory.
     Bindings(Bindings),
 }
 
@@ -90,29 +95,37 @@ pub enum Command {
 pub struct Componentize {
     /// The name of a Python module containing the app to wrap.
     ///
-    /// Note that this should not match (any of) the world name(s) you are targeting since `componentize-py` will
-    /// generate code using those name(s), and Python doesn't know how to load two top-level modules with the same
-    /// name.
+    /// Note that this should not match (any of) the world name(s) you are
+    /// targeting since `componentize-py` will generate code using those
+    /// name(s), and Python doesn't know how to load two top-level modules with
+    /// the same name.
     pub app_name: String,
 
-    /// Specify a directory containing the app and/or its dependencies.  May be specified more than once.
+    /// Specify a directory containing the app and/or its dependencies.  May be
+    /// specified more than once.
     ///
-    /// If a `VIRTUAL_ENV` environment variable is set, it will be interpreted as a directory name, and that
-    /// directory will be searched for a `site-packages` subdirectory, which will be appended to the path as a
-    /// convenience for `venv` users.  Alternatively, if `pipenv` is in `$PATH` and `pipenv --venv` produces a
-    /// non-empty result, it will be searched for a `site-packages` subdirectory, which will likewise be appended.
-    /// If the previous options fail, the `site` module in python will be used to get the `site-packages`
+    /// If a `VIRTUAL_ENV` environment variable is set, it will be interpreted
+    /// as a directory name, and that directory will be searched for a
+    /// `site-packages` subdirectory, which will be appended to the path as a
+    /// convenience for `venv` users.  Alternatively, if `pipenv` is in `$PATH`
+    /// and `pipenv --venv` produces a non-empty result, it will be searched for
+    /// a `site-packages` subdirectory, which will likewise be appended.  If the
+    /// previous options fail, the `site` module in python will be used to get
+    /// the `site-packages`
     #[arg(short = 'p', long, default_value = ".")]
     pub python_path: Vec<String>,
 
-    /// Specify which world to use with which Python module.  May be specified more than once.
+    /// Specify which world to use with which Python module.  May be specified
+    /// more than once.
     ///
-    /// Some Python modules (e.g. SDK wrappers around WIT APIs) may contain `componentize-py.toml` files which
-    /// point to embedded WIT files, and those may define multiple WIT worlds.  In this case, it may be necessary
+    /// Some Python modules (e.g. SDK wrappers around WIT APIs) may contain
+    /// `componentize-py.toml` files which point to embedded WIT files, and
+    /// those may define multiple WIT worlds.  In this case, it may be necessary
     /// to specify which world on a module-by-module basis.
     ///
-    /// Note that these must be specified in topological order (i.e. if a module containing WIT files depends on
-    /// other modules containing WIT files, it must be listed after all its dependencies).
+    /// Note that these must be specified in topological order (i.e. if a module
+    /// containing WIT files depends on other modules containing WIT files, it
+    /// must be listed after all its dependencies).
     #[arg(short = 'm', long, value_parser = parse_key_value)]
     pub module_worlds: Vec<(String, String)>,
 
@@ -122,9 +135,11 @@ pub struct Componentize {
 
     /// If set, replace all WASI imports with trapping stubs.
     ///
-    /// PLEASE NOTE: This has the effect of baking whatever PRNG seed is generated at build time into the
-    /// component, meaning Python's `random` module will return the exact same sequence each time the component is
-    /// run.  Do *not* use this option in situations where a secure source of randomness is required.
+    /// PLEASE NOTE: This has the effect of baking whatever PRNG seed is
+    /// generated at build time into the component, meaning Python's `random`
+    /// module will return the exact same sequence each time the component is
+    /// run.  Do *not* use this option in situations where a secure source of
+    /// randomness is required.
     #[arg(short = 's', long)]
     pub stub_wasi: bool,
 }
@@ -423,7 +438,8 @@ mod tests {
 
     #[test]
     fn unstable_features_used_in_componentize() -> Result<()> {
-        // Given bindings to a WIT file with gated features and a Python file that uses them
+        // Given bindings to a WIT file with gated features and a Python file
+        // that uses them
         let wit = gated_x_wit_file()?;
         let out_dir = tempfile::tempdir()?;
         let common = Common {

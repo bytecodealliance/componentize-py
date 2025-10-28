@@ -3,11 +3,25 @@
 use {
     super::{Ctx, SEED, Tester},
     anyhow::{Error, Result, anyhow},
+    exports::componentize_py::test::streams_and_futures,
+    futures::FutureExt,
     once_cell::sync::Lazy,
-    std::str,
+    std::{
+        mem,
+        ops::DerefMut,
+        pin::Pin,
+        str,
+        sync::{Arc, Mutex},
+        task::{self, Context, Poll},
+        time::Duration,
+    },
     wasmtime::{
-        Store,
-        component::{HasSelf, InstancePre, Linker, Resource, ResourceAny},
+        Store, StoreContextMut,
+        component::{
+            Accessor, Destination, FutureConsumer, FutureProducer, FutureReader, HasSelf,
+            InstancePre, Lift, Linker, Resource, ResourceAny, Source, StreamConsumer,
+            StreamProducer, StreamReader, StreamResult, VecBuffer,
+        },
     },
     wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder, WasiView},
 };
@@ -16,16 +30,16 @@ wasmtime::component::bindgen!({
     path: "src/test/wit",
     world: "tests",
     imports: { default: async | trappable },
-    exports: { default: async },
+    exports: { default: async | task_exit },
     with: {
-        "componentize-py:test/resource-import-and-export/thing": ThingU32,
-        "componentize-py:test/resource-borrow-import/thing": ThingU32,
-        "componentize-py:test/resource-with-lists/thing": ThingList,
-        "componentize-py:test/resource-aggregates/thing": ThingU32,
-        "componentize-py:test/resource-alias1/thing": ThingString,
-        "componentize-py:test/resource-floats/float": MyFloat,
-        "resource-floats-imports/float": MyFloat,
-        "componentize-py:test/resource-borrow-in-record/thing": ThingString,
+        "componentize-py:test/resource-import-and-export.thing": ThingU32,
+        "componentize-py:test/resource-borrow-import.thing": ThingU32,
+        "componentize-py:test/resource-with-lists.thing": ThingList,
+        "componentize-py:test/resource-aggregates.thing": ThingU32,
+        "componentize-py:test/resource-alias1.thing": ThingString,
+        "componentize-py:test/resource-floats.float": MyFloat,
+        "resource-floats-imports.float": MyFloat,
+        "componentize-py:test/resource-borrow-in-record.thing": ThingString,
     },
 });
 
@@ -83,7 +97,8 @@ const GUEST_CODE: &[(&str, &str)] = load_guest_code!(
     "resource_aggregates.py",
     "resource_alias1.py",
     "resource_floats_exports.py",
-    "resource_borrow_in_record.py"
+    "resource_borrow_in_record.py",
+    "streams_and_futures.py"
 );
 
 struct Host;
@@ -164,6 +179,29 @@ fn simple_export() -> Result<()> {
 }
 
 #[test]
+fn simple_async_export() -> Result<()> {
+    TESTER.test(|world, store, runtime| {
+        assert_eq!(
+            42 + 3,
+            runtime
+                .block_on(async {
+                    store
+                        .run_concurrent(async |store| {
+                            world
+                                .componentize_py_test_simple_async_export()
+                                .call_foo(store, 42)
+                                .await
+                        })
+                        .await?
+                })?
+                .0
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
 fn simple_import_and_export() -> Result<()> {
     impl componentize_py::test::simple_import_and_export::Host for Ctx {
         async fn foo(&mut self, v: u32) -> Result<u32> {
@@ -179,6 +217,38 @@ fn simple_import_and_export() -> Result<()> {
                     .componentize_py_test_simple_import_and_export()
                     .call_foo(store, 42)
             )?
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+fn simple_async_import_and_export() -> Result<()> {
+    impl componentize_py::test::simple_async_import_and_export::Host for Ctx {}
+
+    impl componentize_py::test::simple_async_import_and_export::HostWithStore for HasSelf<Ctx> {
+        async fn foo<T>(_: &Accessor<T, Self>, v: u32) -> Result<u32> {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            Ok(v + 2)
+        }
+    }
+
+    TESTER.test(|world, store, runtime| {
+        assert_eq!(
+            42 + 2 + 3,
+            runtime
+                .block_on(async {
+                    store
+                        .run_concurrent(async |store| {
+                            world
+                                .componentize_py_test_simple_async_import_and_export()
+                                .call_foo(store, 42)
+                                .await
+                        })
+                        .await?
+                })?
+                .0
         );
 
         Ok(())
@@ -814,5 +884,348 @@ fn filesystem() -> Result<()> {
 
             Ok(())
         })
+    })
+}
+
+struct VecProducer<T> {
+    source: Vec<T>,
+    sleep: Pin<Box<dyn Future<Output = ()> + Send>>,
+}
+
+impl<T> VecProducer<T> {
+    fn new(source: Vec<T>, delay: bool) -> Self {
+        Self {
+            source,
+            sleep: if delay {
+                tokio::time::sleep(Duration::from_millis(10)).boxed()
+            } else {
+                async {}.boxed()
+            },
+        }
+    }
+}
+
+impl<D, T: Lift + Unpin + 'static> StreamProducer<D> for VecProducer<T> {
+    type Item = T;
+    type Buffer = VecBuffer<T>;
+
+    fn poll_produce(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        _: StoreContextMut<D>,
+        mut destination: Destination<Self::Item, Self::Buffer>,
+        _: bool,
+    ) -> Poll<Result<StreamResult>> {
+        let sleep = &mut self.as_mut().get_mut().sleep;
+        task::ready!(sleep.as_mut().poll(cx));
+        *sleep = async {}.boxed();
+
+        destination.set_buffer(mem::take(&mut self.get_mut().source).into());
+        Poll::Ready(Ok(StreamResult::Dropped))
+    }
+}
+
+struct VecConsumer<T> {
+    destination: Arc<Mutex<Vec<T>>>,
+    sleep: Pin<Box<dyn Future<Output = ()> + Send>>,
+}
+
+impl<T> VecConsumer<T> {
+    fn new(destination: Arc<Mutex<Vec<T>>>, delay: bool) -> Self {
+        Self {
+            destination,
+            sleep: if delay {
+                tokio::time::sleep(Duration::from_millis(10)).boxed()
+            } else {
+                async {}.boxed()
+            },
+        }
+    }
+}
+
+impl<D, T: Lift + 'static> StreamConsumer<D> for VecConsumer<T> {
+    type Item = T;
+
+    fn poll_consume(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        store: StoreContextMut<D>,
+        mut source: Source<Self::Item>,
+        _: bool,
+    ) -> Poll<Result<StreamResult>> {
+        let sleep = &mut self.as_mut().get_mut().sleep;
+        task::ready!(sleep.as_mut().poll(cx));
+        *sleep = async {}.boxed();
+
+        source.read(store, self.destination.lock().unwrap().deref_mut())?;
+        Poll::Ready(Ok(StreamResult::Completed))
+    }
+}
+
+#[test]
+fn echo_stream_u8() -> Result<()> {
+    test_echo_stream_u8(false)
+}
+
+#[test]
+fn echo_stream_u8_with_delay() -> Result<()> {
+    test_echo_stream_u8(true)
+}
+
+fn test_echo_stream_u8(delay: bool) -> Result<()> {
+    TESTER.test(|world, store, runtime| {
+        runtime.block_on(async {
+            store
+                .run_concurrent(async |store| {
+                    let expected =
+                        b"Beware the Jubjub bird, and shun\n\tThe frumious Bandersnatch!";
+                    let stream = store.with(|store| {
+                        StreamReader::new(store, VecProducer::new(expected.to_vec(), delay))
+                    });
+
+                    let (stream, task) = world
+                        .componentize_py_test_streams_and_futures()
+                        .call_echo_stream_u8(store, stream)
+                        .await?;
+
+                    let received = Arc::new(Mutex::new(Vec::with_capacity(expected.len())));
+                    store.with(|store| {
+                        stream.pipe(store, VecConsumer::new(received.clone(), delay))
+                    });
+
+                    task.block(store).await;
+
+                    assert_eq!(expected, &received.lock().unwrap()[..]);
+
+                    anyhow::Ok(())
+                })
+                .await?
+        })?;
+
+        Ok(())
+    })
+}
+
+struct OptionProducer<T> {
+    source: Option<T>,
+    sleep: Pin<Box<dyn Future<Output = ()> + Send>>,
+}
+
+impl<T> OptionProducer<T> {
+    fn new(source: Option<T>, delay: bool) -> Self {
+        Self {
+            source,
+            sleep: if delay {
+                tokio::time::sleep(Duration::from_millis(10)).boxed()
+            } else {
+                async {}.boxed()
+            },
+        }
+    }
+}
+
+impl<D, T: Unpin + Send + 'static> FutureProducer<D> for OptionProducer<T> {
+    type Item = T;
+
+    fn poll_produce(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        _: StoreContextMut<D>,
+        _: bool,
+    ) -> Poll<Result<Option<T>>> {
+        let sleep = &mut self.as_mut().get_mut().sleep;
+        task::ready!(sleep.as_mut().poll(cx));
+        *sleep = async {}.boxed();
+
+        Poll::Ready(Ok(self.get_mut().source.take()))
+    }
+}
+
+struct OptionConsumer<T> {
+    destination: Arc<Mutex<Option<T>>>,
+    sleep: Pin<Box<dyn Future<Output = ()> + Send>>,
+}
+
+impl<T> OptionConsumer<T> {
+    fn new(destination: Arc<Mutex<Option<T>>>, delay: bool) -> Self {
+        Self {
+            destination,
+            sleep: if delay {
+                tokio::time::sleep(Duration::from_millis(10)).boxed()
+            } else {
+                async {}.boxed()
+            },
+        }
+    }
+}
+
+impl<D, T: Lift + 'static> FutureConsumer<D> for OptionConsumer<T> {
+    type Item = T;
+
+    fn poll_consume(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        store: StoreContextMut<D>,
+        mut source: Source<Self::Item>,
+        _: bool,
+    ) -> Poll<Result<()>> {
+        let sleep = &mut self.as_mut().get_mut().sleep;
+        task::ready!(sleep.as_mut().poll(cx));
+        *sleep = async {}.boxed();
+
+        source.read(store, self.destination.lock().unwrap().deref_mut())?;
+        Poll::Ready(Ok(()))
+    }
+}
+
+#[test]
+fn echo_future_string() -> Result<()> {
+    test_echo_future_string(false)
+}
+
+#[test]
+fn echo_future_string_with_delay() -> Result<()> {
+    test_echo_future_string(true)
+}
+
+fn test_echo_future_string(delay: bool) -> Result<()> {
+    TESTER.test(|world, store, runtime| {
+        runtime.block_on(async {
+            store
+                .run_concurrent(async |store| {
+                    let expected = "Beware the Jubjub bird, and shun\n\tThe frumious Bandersnatch!";
+                    let future = store.with(|store| {
+                        FutureReader::new(
+                            store,
+                            OptionProducer::new(Some(expected.to_string()), delay),
+                        )
+                    });
+
+                    let (future, task) = world
+                        .componentize_py_test_streams_and_futures()
+                        .call_echo_future_string(store, future)
+                        .await?;
+
+                    let received = Arc::new(Mutex::new(None::<String>));
+                    store.with(|store| {
+                        future.pipe(store, OptionConsumer::new(received.clone(), delay))
+                    });
+
+                    task.block(store).await;
+
+                    assert_eq!(
+                        expected,
+                        received.lock().unwrap().as_ref().unwrap().as_str()
+                    );
+
+                    anyhow::Ok(())
+                })
+                .await?
+        })?;
+
+        Ok(())
+    })
+}
+
+struct OneAtATime<T> {
+    destination: Arc<Mutex<Vec<T>>>,
+    sleep: Pin<Box<dyn Future<Output = ()> + Send>>,
+}
+
+impl<T> OneAtATime<T> {
+    fn new(destination: Arc<Mutex<Vec<T>>>, delay: bool) -> Self {
+        Self {
+            destination,
+            sleep: if delay {
+                tokio::time::sleep(Duration::from_millis(10)).boxed()
+            } else {
+                async {}.boxed()
+            },
+        }
+    }
+}
+
+impl<D, T: Lift + 'static> StreamConsumer<D> for OneAtATime<T> {
+    type Item = T;
+
+    fn poll_consume(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        store: StoreContextMut<D>,
+        mut source: Source<Self::Item>,
+        _: bool,
+    ) -> Poll<Result<StreamResult>> {
+        let sleep = &mut self.as_mut().get_mut().sleep;
+        task::ready!(sleep.as_mut().poll(cx));
+        *sleep = async {}.boxed();
+
+        let value = &mut None;
+        source.read(store, value)?;
+        self.destination.lock().unwrap().push(value.take().unwrap());
+        Poll::Ready(Ok(StreamResult::Completed))
+    }
+}
+
+#[test]
+fn short_reads() -> Result<()> {
+    test_short_reads(false)
+}
+
+#[test]
+fn short_reads_with_delay() -> Result<()> {
+    test_short_reads(true)
+}
+
+fn test_short_reads(delay: bool) -> Result<()> {
+    TESTER.test(|world, mut store, runtime| {
+        runtime.block_on(async {
+            let instance = world.componentize_py_test_streams_and_futures();
+            let thing = instance.thing();
+
+            let strings = ["a", "b", "c", "d", "e"];
+            let mut things = Vec::with_capacity(strings.len());
+            for string in strings {
+                things.push(thing.call_constructor(&mut store, string).await?);
+            }
+
+            store
+                .run_concurrent(async |store| {
+                    let count = things.len();
+                    let stream = store
+                        .with(|store| StreamReader::new(store, VecProducer::new(things, delay)));
+
+                    let (stream, task) = instance.call_short_reads(store, stream).await?;
+
+                    let received_things = Arc::new(Mutex::new(
+                        Vec::<streams_and_futures::Thing>::with_capacity(count),
+                    ));
+                    store.with(|store| {
+                        stream.pipe(store, OneAtATime::new(received_things.clone(), delay))
+                    });
+
+                    task.block(store).await;
+
+                    assert_eq!(count, received_things.lock().unwrap().len());
+
+                    let mut received_strings = Vec::with_capacity(strings.len());
+                    let received_things = mem::take(received_things.lock().unwrap().deref_mut());
+                    for it in received_things {
+                        received_strings.push(thing.call_get(store, it).await?.0);
+                    }
+
+                    assert_eq!(
+                        &strings[..],
+                        &received_strings
+                            .iter()
+                            .map(|s| s.as_str())
+                            .collect::<Vec<_>>()
+                    );
+
+                    anyhow::Ok(())
+                })
+                .await?
+        })?;
+
+        Ok(())
     })
 }

@@ -1,5 +1,5 @@
 import wit_world
-from wit_world.types import Err
+from componentize_py_types import Err
 import json
 
 

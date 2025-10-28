@@ -1,38 +1,32 @@
 #![deny(warnings)]
-#![allow(
+#![expect(
     clippy::useless_conversion,
     reason = "some pyo3 macros produce code that does this"
 )]
-#![allow(
-    static_mut_refs,
-    reason = "wit-bindgen::generate produces code that does this"
-)]
-#![allow(unknown_lints)]
-#![allow(
-    unnecessary_transmutes,
-    reason = "nightly warning but not supported on stable"
-)]
-#![allow(
+#![expect(
     clippy::not_unsafe_ptr_arg_deref,
     reason = "wit_dylib_ffi::export produces code that does this"
 )]
 
 use {
     anyhow::{Error, Result},
-    exports::exports::{
-        self as exp, Constructor, FunctionExportKind, Guest, OptionKind, ResultRecord, ReturnStyle,
-        Static, Symbols,
+    bindings::{
+        exports::exports::{
+            self as exp, Constructor, FunctionExportKind, Guest, OptionKind, ResultRecord,
+            ReturnStyle, Static, Symbols,
+        },
+        wasi::cli0_2_0::environment,
     },
     num_bigint::BigUint,
     once_cell::sync::OnceCell,
     pyo3::{
+        Bound, IntoPyObject, Py, PyAny, PyErr, PyResult, Python,
         exceptions::PyAssertionError,
         intern,
         types::{
             PyAnyMethods, PyBool, PyBytes, PyBytesMethods, PyDict, PyList, PyListMethods,
             PyMapping, PyMappingMethods, PyModule, PyModuleMethods, PyString, PyTuple,
         },
-        Bound, IntoPyObject, Py, PyAny, PyErr, PyResult, Python,
     },
     std::{
         alloc::{self, Layout},
@@ -43,19 +37,26 @@ use {
         slice, str,
         sync::{Mutex, Once},
     },
-    wasi::cli::environment,
     wit_dylib_ffi::{
         self as wit, Call, ExportFunction, Interpreter, List, Type, Wit, WitOption, WitResult,
     },
 };
 
-wit_bindgen::generate!({
-    world: "init",
-    path: "../wit",
-    generate_all,
-});
+#[expect(
+    unsafe_op_in_unsafe_fn,
+    reason = "wit_bindgen::generate produces code that does this"
+)]
+mod bindings {
+    wit_bindgen::generate!({
+        world: "init",
+        path: "../wit",
+        generate_all,
+    });
 
-export!(MyExports);
+    use super::MyExports;
+
+    export!(MyExports);
+}
 
 static WIT: OnceCell<Wit> = OnceCell::new();
 static STUB_WASI: OnceCell<bool> = OnceCell::new();
@@ -159,29 +160,86 @@ impl<T: std::error::Error + Send + Sync + 'static> From<T> for Anyhow {
     }
 }
 
+fn release_borrows(py: Python) {
+    let borrows = mem::take(BORROWS.lock().unwrap().deref_mut());
+    for Borrow {
+        value,
+        handle,
+        drop,
+    } in borrows
+    {
+        let value = value.bind(py);
+
+        value.delattr(intern!(py, "handle")).unwrap();
+
+        value
+            .getattr(intern!(py, "finalizer"))
+            .unwrap()
+            .call_method0(intern!(py, "detach"))
+            .unwrap();
+
+        unsafe {
+            drop(handle);
+        }
+    }
+}
+
 #[pyo3::pyfunction]
 #[pyo3(pass_module)]
 fn call_import<'a>(
     module: Bound<'a, PyModule>,
     index: u32,
     params: Vec<Bound<'a, PyAny>>,
-    _result_count: usize,
-) -> PyResult<Vec<Bound<'a, PyAny>>> {
+) -> Bound<'a, PyAny> {
+    let py = module.py();
     let func = WIT
         .get()
         .unwrap()
         .import_func(usize::try_from(index).unwrap());
 
+    let mut call = MyCall::new(params.into_iter().rev().map(|v| v.unbind()).collect());
     if func.is_async() {
-        todo!()
+        #[cfg(feature = "async")]
+        {
+            if let Some(pending) = unsafe { func.call_import_async(&mut call) } {
+                ERR_CONSTRUCTOR
+                    .get()
+                    .unwrap()
+                    .call1(
+                        py,
+                        (PyTuple::new(
+                            py,
+                            [
+                                usize::try_from(pending.subtask).unwrap(),
+                                Box::into_raw(Box::new(async_::Promise::ImportCall {
+                                    index,
+                                    call,
+                                    buffer: pending.buffer,
+                                })) as usize,
+                            ],
+                        )
+                        .unwrap(),),
+                    )
+                    .unwrap()
+            } else {
+                assert!(call.stack.len() < 2);
+                OK_CONSTRUCTOR
+                    .get()
+                    .unwrap()
+                    .call1(py, (call.stack.pop().unwrap_or(py.None()),))
+                    .unwrap()
+            }
+        }
+        #[cfg(not(feature = "async"))]
+        {
+            panic!("async feature disabled")
+        }
     } else {
-        let mut call = MyCall::new(params.into_iter().rev().map(|v| v.unbind()).collect());
         func.call_import_sync(&mut call);
-        Ok(mem::take(&mut call.stack)
-            .into_iter()
-            .map(|v| v.into_bound(module.py()))
-            .collect())
+        assert!(call.stack.len() < 2);
+        call.stack.pop().unwrap_or(py.None())
     }
+    .into_bound(py)
 }
 
 #[pyo3::pyfunction]
@@ -193,11 +251,638 @@ fn drop_resource(_module: &Bound<PyModule>, index: usize, handle: u32) -> PyResu
     Ok(())
 }
 
+#[cfg(feature = "async")]
+mod async_ {
+    use {super::*, pyo3::exceptions::PyMemoryError};
+
+    const RETURN_CODE_BLOCKED: u32 = 0xFFFF_FFFF;
+    const RETURN_CODE_COMPLETED: u32 = 0x0;
+    const RETURN_CODE_DROPPED: u32 = 0x1;
+
+    pub static CALLBACK: OnceCell<Py<PyAny>> = OnceCell::new();
+    pub static BYTE_STREAM_READER_CONSTRUCTOR: OnceCell<Py<PyAny>> = OnceCell::new();
+    pub static STREAM_READER_CONSTRUCTOR: OnceCell<Py<PyAny>> = OnceCell::new();
+    pub static FUTURE_READER_CONSTRUCTOR: OnceCell<Py<PyAny>> = OnceCell::new();
+
+    pub struct EmptyResource {
+        pub value: Py<PyAny>,
+        pub handle: u32,
+        pub finalizer_args: Py<PyTuple>,
+    }
+
+    impl EmptyResource {
+        fn restore(&self, py: Python) {
+            self.value
+                .setattr(py, intern!(py, "handle"), self.handle)
+                .unwrap();
+
+            let finalizer = FINALIZE
+                .get()
+                .unwrap()
+                .call1(py, self.finalizer_args.clone_ref(py))
+                .unwrap();
+
+            self.value
+                .setattr(py, intern!(py, "finalizer"), finalizer)
+                .unwrap();
+        }
+    }
+
+    pub enum Promise {
+        ImportCall {
+            index: u32,
+            call: MyCall<'static>,
+            buffer: *mut u8,
+        },
+        StreamRead {
+            call: MyCall<'static>,
+            ty: wit::Stream,
+            buffer: *mut u8,
+        },
+        StreamWrite {
+            _values: Option<Py<PyBytes>>,
+            resources: Option<Vec<Vec<EmptyResource>>>,
+        },
+        FutureRead {
+            call: MyCall<'static>,
+            ty: wit::Future,
+            buffer: *mut u8,
+        },
+        FutureWrite {
+            _call: MyCall<'static>,
+        },
+    }
+
+    #[pyo3::pyfunction]
+    #[pyo3(pass_module)]
+    fn promise_get_result<'a>(
+        module: Bound<'a, PyModule>,
+        event: u32,
+        promise: usize,
+    ) -> Bound<'a, PyAny> {
+        let py = module.py();
+        let mut promise = unsafe { Box::from_raw(promise as *mut Promise) };
+
+        match *promise.as_mut() {
+            Promise::ImportCall {
+                index,
+                ref mut call,
+                buffer,
+            } => {
+                let func = WIT
+                    .get()
+                    .unwrap()
+                    .import_func(usize::try_from(index).unwrap());
+
+                unsafe { func.lift_import_async_result(call, buffer) };
+                assert!(call.stack.len() < 2);
+                call.stack.pop().unwrap_or(py.None()).into_bound(py)
+            }
+            Promise::StreamRead {
+                ref mut call,
+                ty,
+                buffer,
+            } => {
+                let count = usize::try_from(event >> 4).unwrap();
+                let code = event & 0xF;
+                PyTuple::new(
+                    py,
+                    [
+                        code.into_pyobject(py).unwrap().into_any(),
+                        if let Some(Type::U8 | Type::S8) = ty.ty() {
+                            unsafe { PyBytes::from_ptr(py, buffer, count) }.into_any()
+                        } else {
+                            let list = PyList::empty(py);
+                            for offset in 0..count {
+                                unsafe {
+                                    ty.lift(call, buffer.add(ty.abi_payload_size() * offset))
+                                };
+                                list.append(call.stack.pop().unwrap()).unwrap();
+                            }
+                            list.into_any()
+                        },
+                    ],
+                )
+                .unwrap()
+                .into_any()
+            }
+            Promise::StreamWrite { ref resources, .. } => {
+                let read_count = event >> 4;
+                let code = event & 0xF;
+
+                if let Some(resources) = resources {
+                    for resources in &resources[usize::try_from(read_count).unwrap()..] {
+                        for resource in resources {
+                            resource.restore(py)
+                        }
+                    }
+                }
+
+                PyTuple::new(py, [code, read_count]).unwrap().into_any()
+            }
+            Promise::FutureRead {
+                ref mut call,
+                ty,
+                buffer,
+            } => {
+                let code = event & 0xF;
+                if let RETURN_CODE_COMPLETED | RETURN_CODE_DROPPED = code {
+                    unsafe { ty.lift(call, buffer) }
+                }
+                call.stack.pop().unwrap_or(py.None()).into_bound(py)
+            }
+            Promise::FutureWrite { .. } => {
+                let count = event >> 4;
+                let code = event & 0xF;
+                PyTuple::new(py, [code, count]).unwrap().into_any()
+            }
+        }
+    }
+
+    #[pyo3::pyfunction]
+    fn waitable_set_new() -> u32 {
+        #[link(wasm_import_module = "$root")]
+        unsafe extern "C" {
+            #[link_name = "[waitable-set-new]"]
+            pub fn waitable_set_new() -> u32;
+        }
+
+        unsafe { waitable_set_new() }
+    }
+
+    #[pyo3::pyfunction]
+    fn waitable_join(waitable: u32, set: u32) {
+        #[link(wasm_import_module = "$root")]
+        unsafe extern "C" {
+            #[link_name = "[waitable-join]"]
+            pub fn waitable_join(waitable: u32, set: u32);
+        }
+
+        unsafe { waitable_join(waitable, set) }
+    }
+
+    #[pyo3::pyfunction]
+    fn context_set(value: Bound<PyAny>) {
+        #[link(wasm_import_module = "$root")]
+        unsafe extern "C" {
+            #[link_name = "[context-set-0]"]
+            pub fn context_set(value: u32);
+        }
+
+        unsafe {
+            context_set(if value.is_none() {
+                0
+            } else {
+                u32::try_from(value.into_ptr() as usize).unwrap()
+            })
+        }
+    }
+
+    #[pyo3::pyfunction]
+    #[pyo3(pass_module)]
+    fn context_get<'a>(module: Bound<'a, PyModule>) -> Bound<'a, PyAny> {
+        #[link(wasm_import_module = "$root")]
+        unsafe extern "C" {
+            #[link_name = "[context-get-0]"]
+            pub fn context_get() -> u32;
+        }
+        unsafe {
+            let value = context_get();
+            if value == 0 {
+                module.py().None().into_bound(module.py())
+            } else {
+                Bound::from_owned_ptr(
+                    module.py(),
+                    usize::try_from(value).unwrap() as *mut pyo3::ffi::PyObject,
+                )
+            }
+        }
+    }
+
+    #[pyo3::pyfunction]
+    fn subtask_drop(task: u32) {
+        #[link(wasm_import_module = "$root")]
+        unsafe extern "C" {
+            #[link_name = "[subtask-drop]"]
+            pub fn subtask_drop(task: u32);
+        }
+
+        unsafe { subtask_drop(task) }
+    }
+
+    #[pyo3::pyfunction]
+    fn waitable_set_drop(set: u32) {
+        #[link(wasm_import_module = "$root")]
+        unsafe extern "C" {
+            #[link_name = "[waitable-set-drop]"]
+            pub fn waitable_set_drop(set: u32);
+        }
+
+        unsafe { waitable_set_drop(set) }
+    }
+
+    #[pyo3::pyfunction]
+    #[pyo3(pass_module)]
+    fn call_task_return(module: Bound<PyModule>, index: u32, result: Bound<PyAny>) {
+        let py = module.py();
+        let index = usize::try_from(index).unwrap();
+        let func = WIT.get().unwrap().export_func(index);
+        let export = &EXPORTS.get().unwrap()[index];
+        let result = result.unbind();
+
+        let results = match export.return_style {
+            ReturnStyle::None => Vec::new(),
+            ReturnStyle::Normal => vec![result.getattr(py, intern!(py, "value")).unwrap()],
+            ReturnStyle::Result => vec![result],
+        };
+
+        let mut call = MyCall::new(results);
+        func.call_task_return(&mut call);
+        release_borrows(py);
+    }
+
+    #[pyo3::pyfunction]
+    fn stream_new(ty: usize) -> u64 {
+        unsafe { WIT.get().unwrap().stream(ty).new()() }
+    }
+
+    #[pyo3::pyfunction]
+    #[pyo3(pass_module)]
+    fn stream_read<'a>(
+        module: Bound<'a, PyModule>,
+        ty: usize,
+        handle: u32,
+        max_count: u32,
+    ) -> PyResult<Bound<'a, PyAny>> {
+        let py = module.py();
+        let ty = WIT.get().unwrap().stream(ty);
+        let mut call = MyCall::new(Vec::new());
+        let max_count = usize::try_from(max_count).unwrap();
+        let layout =
+            Layout::from_size_align(ty.abi_payload_size() * max_count, ty.abi_payload_align())
+                .unwrap();
+        let buffer = unsafe { std::alloc::alloc(layout) };
+        if buffer.is_null() {
+            Err(PyMemoryError::new_err(
+                "`stream.read` buffer allocation failed",
+            ))
+        } else {
+            unsafe { call.defer_deallocate(buffer, layout) };
+
+            let code = unsafe { ty.read()(handle, buffer.cast(), max_count) };
+
+            Ok(if code == RETURN_CODE_BLOCKED {
+                ERR_CONSTRUCTOR
+                    .get()
+                    .unwrap()
+                    .call1(
+                        py,
+                        (PyTuple::new(
+                            py,
+                            [
+                                usize::try_from(handle).unwrap(),
+                                Box::into_raw(Box::new(async_::Promise::StreamRead {
+                                    call,
+                                    ty,
+                                    buffer,
+                                })) as usize,
+                            ],
+                        )
+                        .unwrap(),),
+                    )
+                    .unwrap()
+            } else {
+                let count = usize::try_from(code >> 4).unwrap();
+                let code = code & 0xF;
+                OK_CONSTRUCTOR
+                    .get()
+                    .unwrap()
+                    .call1(
+                        py,
+                        (PyTuple::new(
+                            py,
+                            [
+                                code.into_pyobject(py).unwrap().into_any(),
+                                if let Some(Type::U8 | Type::S8) = ty.ty() {
+                                    unsafe { PyBytes::from_ptr(py, buffer, count) }.into_any()
+                                } else {
+                                    let list = PyList::empty(py);
+                                    for offset in 0..count {
+                                        unsafe {
+                                            ty.lift(
+                                                &mut call,
+                                                buffer.add(ty.abi_payload_size() * offset),
+                                            )
+                                        };
+                                        list.append(call.stack.pop().unwrap()).unwrap();
+                                    }
+                                    list.into_any()
+                                },
+                            ],
+                        )
+                        .unwrap(),),
+                    )
+                    .unwrap()
+            }
+            .into_bound(py))
+        }
+    }
+
+    #[pyo3::pyfunction]
+    #[pyo3(pass_module)]
+    fn stream_write<'a>(
+        module: Bound<'a, PyModule>,
+        ty: usize,
+        handle: u32,
+        values: Bound<'a, PyAny>,
+    ) -> PyResult<Bound<'a, PyAny>> {
+        let py = module.py();
+        let ty = WIT.get().unwrap().stream(ty);
+        if let Some(Type::U8 | Type::S8) = ty.ty() {
+            let values = values.cast_into::<PyBytes>().unwrap();
+            let code = unsafe {
+                ty.write()(
+                    handle,
+                    values.as_bytes().as_ptr().cast(),
+                    values.len().unwrap(),
+                )
+            };
+
+            Ok(if code == RETURN_CODE_BLOCKED {
+                ERR_CONSTRUCTOR
+                    .get()
+                    .unwrap()
+                    .call1(
+                        py,
+                        (PyTuple::new(
+                            py,
+                            [
+                                usize::try_from(handle).unwrap(),
+                                Box::into_raw(Box::new(async_::Promise::StreamWrite {
+                                    _values: Some(values.unbind()),
+                                    resources: None,
+                                })) as usize,
+                            ],
+                        )
+                        .unwrap(),),
+                    )
+                    .unwrap()
+            } else {
+                let count = code >> 4;
+                let code = code & 0xF;
+                OK_CONSTRUCTOR
+                    .get()
+                    .unwrap()
+                    .call1(py, (PyTuple::new(py, [code, count]).unwrap(),))
+                    .unwrap()
+            }
+            .into_bound(py))
+        } else {
+            let values = values.cast_into::<PyList>().unwrap();
+            let write_count = values.len();
+            let mut call = MyCall::new(Vec::new());
+            let layout = Layout::from_size_align(
+                ty.abi_payload_size() * write_count,
+                ty.abi_payload_align(),
+            )
+            .unwrap();
+            let buffer = unsafe { std::alloc::alloc(layout) };
+            if buffer.is_null() {
+                Err(PyMemoryError::new_err(
+                    "`future.write` buffer allocation failed",
+                ))
+            } else {
+                unsafe { call.defer_deallocate(buffer, layout) };
+
+                let mut resources = Vec::with_capacity(write_count);
+                let mut need_restore_resources = false;
+                for offset in 0..write_count {
+                    call.stack.push(values.get_item(offset).unwrap().unbind());
+                    call.resources = Some(Vec::new());
+                    unsafe { ty.lower(&mut call, buffer.add(ty.abi_payload_size() * offset)) };
+                    let res = call.resources.take().unwrap();
+                    if !res.is_empty() {
+                        need_restore_resources = true;
+                    }
+                    resources.push(res);
+                }
+
+                let code = unsafe { ty.write()(handle, buffer.cast(), write_count) };
+
+                Ok(if code == RETURN_CODE_BLOCKED {
+                    ERR_CONSTRUCTOR
+                        .get()
+                        .unwrap()
+                        .call1(
+                            py,
+                            (PyTuple::new(
+                                py,
+                                [
+                                    usize::try_from(handle).unwrap(),
+                                    Box::into_raw(Box::new(async_::Promise::StreamWrite {
+                                        _values: None,
+                                        resources: need_restore_resources.then_some(resources),
+                                    })) as usize,
+                                ],
+                            )
+                            .unwrap(),),
+                        )
+                        .unwrap()
+                } else {
+                    let read_count = code >> 4;
+                    let code = code & 0xF;
+
+                    if need_restore_resources {
+                        for resources in &resources[usize::try_from(read_count).unwrap()..] {
+                            for resource in resources {
+                                resource.restore(py)
+                            }
+                        }
+                    }
+
+                    OK_CONSTRUCTOR
+                        .get()
+                        .unwrap()
+                        .call1(py, (PyTuple::new(py, [code, read_count]).unwrap(),))
+                        .unwrap()
+                }
+                .into_bound(py))
+            }
+        }
+    }
+
+    #[pyo3::pyfunction]
+    fn stream_drop_readable(ty: usize, handle: u32) {
+        unsafe { WIT.get().unwrap().stream(ty).drop_readable()(handle) };
+    }
+
+    #[pyo3::pyfunction]
+    fn stream_drop_writable(ty: usize, handle: u32) {
+        unsafe { WIT.get().unwrap().stream(ty).drop_writable()(handle) };
+    }
+
+    #[pyo3::pyfunction]
+    fn future_new(ty: usize) -> u64 {
+        unsafe { WIT.get().unwrap().future(ty).new()() }
+    }
+
+    #[pyo3::pyfunction]
+    #[pyo3(pass_module)]
+    fn future_read<'a>(
+        module: Bound<'a, PyModule>,
+        ty: usize,
+        handle: u32,
+    ) -> PyResult<Bound<'a, PyAny>> {
+        let py = module.py();
+        let ty = WIT.get().unwrap().future(ty);
+        let mut call = MyCall::new(Vec::new());
+        let layout =
+            Layout::from_size_align(ty.abi_payload_size(), ty.abi_payload_align()).unwrap();
+        let buffer = unsafe { std::alloc::alloc(layout) };
+        if buffer.is_null() {
+            Err(PyMemoryError::new_err(
+                "`future.read` buffer allocation failed",
+            ))
+        } else {
+            unsafe { call.defer_deallocate(buffer, layout) };
+
+            let code = unsafe { ty.read()(handle, buffer.cast()) };
+
+            Ok(if code == RETURN_CODE_BLOCKED {
+                ERR_CONSTRUCTOR
+                    .get()
+                    .unwrap()
+                    .call1(
+                        py,
+                        (PyTuple::new(
+                            py,
+                            [
+                                usize::try_from(handle).unwrap(),
+                                Box::into_raw(Box::new(async_::Promise::FutureRead {
+                                    call,
+                                    ty,
+                                    buffer,
+                                })) as usize,
+                            ],
+                        )
+                        .unwrap(),),
+                    )
+                    .unwrap()
+            } else {
+                let code = code & 0xF;
+                if let RETURN_CODE_COMPLETED | RETURN_CODE_DROPPED = code {
+                    unsafe { ty.lift(&mut call, buffer) }
+                }
+                OK_CONSTRUCTOR
+                    .get()
+                    .unwrap()
+                    .call1(py, (call.stack.pop().unwrap_or(py.None()),))
+                    .unwrap()
+            }
+            .into_bound(py))
+        }
+    }
+
+    #[pyo3::pyfunction]
+    #[pyo3(pass_module)]
+    fn future_write<'a>(
+        module: Bound<'a, PyModule>,
+        ty: usize,
+        handle: u32,
+        value: Bound<'a, PyAny>,
+    ) -> PyResult<Bound<'a, PyAny>> {
+        let py = module.py();
+        let ty = WIT.get().unwrap().future(ty);
+        let mut call = MyCall::new(vec![value.unbind()]);
+        let layout =
+            Layout::from_size_align(ty.abi_payload_size(), ty.abi_payload_align()).unwrap();
+        let buffer = unsafe { std::alloc::alloc(layout) };
+        if buffer.is_null() {
+            Err(PyMemoryError::new_err(
+                "`future.write` buffer allocation failed",
+            ))
+        } else {
+            unsafe { call.defer_deallocate(buffer, layout) };
+
+            let code = unsafe {
+                ty.lower(&mut call, buffer);
+
+                ty.write()(handle, buffer.cast())
+            };
+
+            Ok(if code == RETURN_CODE_BLOCKED {
+                ERR_CONSTRUCTOR
+                    .get()
+                    .unwrap()
+                    .call1(
+                        py,
+                        (PyTuple::new(
+                            py,
+                            [
+                                usize::try_from(handle).unwrap(),
+                                Box::into_raw(Box::new(async_::Promise::FutureWrite {
+                                    _call: call,
+                                })) as usize,
+                            ],
+                        )
+                        .unwrap(),),
+                    )
+                    .unwrap()
+            } else {
+                let count = code >> 4;
+                let code = code & 0xF;
+                OK_CONSTRUCTOR
+                    .get()
+                    .unwrap()
+                    .call1(py, (PyTuple::new(py, [code, count]).unwrap(),))
+                    .unwrap()
+            }
+            .into_bound(py))
+        }
+    }
+
+    #[pyo3::pyfunction]
+    fn future_drop_readable(ty: usize, handle: u32) {
+        unsafe { WIT.get().unwrap().future(ty).drop_readable()(handle) };
+    }
+
+    #[pyo3::pyfunction]
+    fn future_drop_writable(ty: usize, handle: u32) {
+        unsafe { WIT.get().unwrap().future(ty).drop_writable()(handle) };
+    }
+
+    pub fn add_functions(module: &Bound<PyModule>) -> PyResult<()> {
+        module.add_function(pyo3::wrap_pyfunction!(promise_get_result, module)?)?;
+        module.add_function(pyo3::wrap_pyfunction!(waitable_set_new, module)?)?;
+        module.add_function(pyo3::wrap_pyfunction!(waitable_join, module)?)?;
+        module.add_function(pyo3::wrap_pyfunction!(context_get, module)?)?;
+        module.add_function(pyo3::wrap_pyfunction!(context_set, module)?)?;
+        module.add_function(pyo3::wrap_pyfunction!(subtask_drop, module)?)?;
+        module.add_function(pyo3::wrap_pyfunction!(waitable_set_drop, module)?)?;
+        module.add_function(pyo3::wrap_pyfunction!(call_task_return, module)?)?;
+        module.add_function(pyo3::wrap_pyfunction!(stream_new, module)?)?;
+        module.add_function(pyo3::wrap_pyfunction!(stream_read, module)?)?;
+        module.add_function(pyo3::wrap_pyfunction!(stream_write, module)?)?;
+        module.add_function(pyo3::wrap_pyfunction!(stream_drop_readable, module)?)?;
+        module.add_function(pyo3::wrap_pyfunction!(stream_drop_writable, module)?)?;
+        module.add_function(pyo3::wrap_pyfunction!(future_new, module)?)?;
+        module.add_function(pyo3::wrap_pyfunction!(future_read, module)?)?;
+        module.add_function(pyo3::wrap_pyfunction!(future_write, module)?)?;
+        module.add_function(pyo3::wrap_pyfunction!(future_drop_readable, module)?)?;
+        module.add_function(pyo3::wrap_pyfunction!(future_drop_writable, module)?)
+    }
+}
+
 #[pyo3::pymodule]
 #[pyo3(name = "componentize_py_runtime")]
 fn componentize_py_module(_py: Python<'_>, module: &Bound<PyModule>) -> PyResult<()> {
     module.add_function(pyo3::wrap_pyfunction!(call_import, module)?)?;
-    module.add_function(pyo3::wrap_pyfunction!(drop_resource, module)?)
+    module.add_function(pyo3::wrap_pyfunction!(drop_resource, module)?)?;
+
+    #[cfg(feature = "async")]
+    async_::add_functions(module)?;
+
+    Ok(())
 }
 
 fn do_init(app_name: String, symbols: Symbols, stub_wasi: bool) -> Result<(), String> {
@@ -206,13 +891,7 @@ fn do_init(app_name: String, symbols: Symbols, stub_wasi: bool) -> Result<(), St
     Python::initialize();
 
     let init = |py: Python| {
-        let app = match py.import(app_name.as_str()) {
-            Ok(app) => app,
-            Err(e) => {
-                e.print(py);
-                return Err(e.into());
-            }
-        };
+        let app = py.import(app_name.as_str())?;
 
         STUB_WASI.set(stub_wasi).unwrap();
 
@@ -383,7 +1062,7 @@ fn do_init(app_name: String, symbols: Symbols, stub_wasi: bool) -> Result<(), St
 
         RESULTS.set(symbols.results).unwrap();
 
-        let types = py.import(symbols.types_package.as_str())?;
+        let types = py.import("componentize_py_types")?;
 
         SOME_CONSTRUCTOR.set(types.getattr("Some")?.into()).unwrap();
         OK_CONSTRUCTOR.set(types.getattr("Ok")?.into()).unwrap();
@@ -418,6 +1097,39 @@ fn do_init(app_name: String, symbols: Symbols, stub_wasi: bool) -> Result<(), St
         SEED.set(py.import("random")?.getattr("seed")?.into())
             .unwrap();
 
+        #[cfg(feature = "async")]
+        {
+            async_::CALLBACK
+                .set(
+                    py.import("componentize_py_async_support")
+                        .unwrap()
+                        .getattr("callback")
+                        .unwrap()
+                        .into(),
+                )
+                .unwrap();
+
+            let streams = py.import("componentize_py_async_support.streams").unwrap();
+
+            async_::BYTE_STREAM_READER_CONSTRUCTOR
+                .set(streams.getattr("ByteStreamReader").unwrap().into())
+                .unwrap();
+
+            async_::STREAM_READER_CONSTRUCTOR
+                .set(streams.getattr("StreamReader").unwrap().into())
+                .unwrap();
+
+            async_::FUTURE_READER_CONSTRUCTOR
+                .set(
+                    py.import("componentize_py_async_support.futures")
+                        .unwrap()
+                        .getattr("FutureReader")
+                        .unwrap()
+                        .into(),
+                )
+                .unwrap();
+        }
+
         let argv = py
             .import("sys")?
             .getattr("argv")?
@@ -433,7 +1145,14 @@ fn do_init(app_name: String, symbols: Symbols, stub_wasi: bool) -> Result<(), St
         Ok::<_, Error>(())
     };
 
-    Python::attach(|py| init(py).map_err(|e| format!("{e:?}")))
+    Python::attach(|py| {
+        init(py).map_err(|e| {
+            if let Some(e) = e.downcast_ref::<PyErr>() {
+                e.print(py);
+            }
+            format!("{e:?}")
+        })
+    })
 }
 
 struct MyExports;
@@ -442,19 +1161,21 @@ impl Guest for MyExports {
     fn init(app_name: String, symbols: Symbols, stub_wasi: bool) -> Result<(), String> {
         let result = do_init(app_name, symbols, stub_wasi);
 
-        // This tells the WASI Preview 1 component adapter to reset its state.  In particular, we want it to forget
-        // about any open handles and re-request the stdio handles at runtime since we'll be running under a brand
-        // new host.
+        // This tells the WASI Preview 1 component adapter to reset its state.
+        // In particular, we want it to forget about any open handles and
+        // re-request the stdio handles at runtime since we'll be running under
+        // a brand new host.
         #[link(wasm_import_module = "wasi_snapshot_preview1")]
-        extern "C" {
-            #[cfg_attr(target_arch = "wasm32", link_name = "reset_adapter_state")]
+        unsafe extern "C" {
+            #[link_name = "reset_adapter_state"]
             fn reset_adapter_state();
         }
 
-        // This tells wasi-libc to reset its preopen state, forcing re-initialization at runtime.
+        // This tells wasi-libc to reset its preopen state, forcing
+        // re-initialization at runtime.
         #[link(wasm_import_module = "env")]
-        extern "C" {
-            #[cfg_attr(target_arch = "wasm32", link_name = "__wasilibc_reset_preopens")]
+        unsafe extern "C" {
+            #[link_name = "__wasilibc_reset_preopens"]
             fn wasilibc_reset_preopens();
         }
 
@@ -469,18 +1190,8 @@ impl Guest for MyExports {
 
 struct MyInterpreter;
 
-impl Interpreter for MyInterpreter {
-    type CallCx<'a> = MyCall<'a>;
-
-    fn initialize(wit: Wit) {
-        WIT.set(wit).map_err(drop).unwrap();
-    }
-
-    fn export_start<'a>(_: Wit, _: ExportFunction) -> Box<MyCall<'a>> {
-        Box::new(MyCall::new(Vec::new()))
-    }
-
-    fn export_call(_: Wit, func: ExportFunction, cx: &mut MyCall<'_>) {
+impl MyInterpreter {
+    fn export_call_(func: ExportFunction, cx: &mut MyCall<'_>, async_: bool) -> u32 {
         Python::attach(|py| {
             if !*STUB_WASI.get().unwrap() {
                 static ONCE: Once = Once::new();
@@ -524,63 +1235,98 @@ impl Interpreter for MyInterpreter {
                     .and_then(|function| function.call1(py, PyTuple::new(py, params_py).unwrap())),
             };
 
-            let result = match (result, export.return_style) {
-                (Ok(_), ReturnStyle::None) => None,
-                (Ok(result), ReturnStyle::Normal) => Some(result),
-                (Ok(result), ReturnStyle::Result) => {
-                    Some(OK_CONSTRUCTOR.get().unwrap().call1(py, (result,)).unwrap())
-                }
-                (Err(error), ReturnStyle::None | ReturnStyle::Normal) => {
-                    error.print(py);
-                    panic!("Python function threw an unexpected exception")
-                }
-                (Err(error), ReturnStyle::Result) => {
-                    if ERR_CONSTRUCTOR
-                        .get()
-                        .unwrap()
-                        .bind(py)
-                        .eq(error.get_type(py))
-                        .unwrap()
-                    {
-                        Some(error.into_value(py).into_any())
-                    } else {
+            if async_ {
+                match result {
+                    Ok(result) => result.extract(py).unwrap(),
+                    Err(error) => {
                         error.print(py);
                         panic!("Python function threw an unexpected exception")
                     }
                 }
-            };
+            } else {
+                let result = match (result, export.return_style) {
+                    (Ok(_), ReturnStyle::None) => None,
+                    (Ok(result), ReturnStyle::Normal) => Some(result),
+                    (Ok(result), ReturnStyle::Result) => {
+                        Some(OK_CONSTRUCTOR.get().unwrap().call1(py, (result,)).unwrap())
+                    }
+                    (Err(error), ReturnStyle::None | ReturnStyle::Normal) => {
+                        error.print(py);
+                        panic!("Python function threw an unexpected exception")
+                    }
+                    (Err(error), ReturnStyle::Result) => {
+                        if ERR_CONSTRUCTOR
+                            .get()
+                            .unwrap()
+                            .bind(py)
+                            .eq(error.get_type(py))
+                            .unwrap()
+                        {
+                            Some(error.into_value(py).into_any())
+                        } else {
+                            error.print(py);
+                            panic!("Python function threw an unexpected exception")
+                        }
+                    }
+                };
 
-            if let Some(result) = result {
-                cx.stack.push(result);
-            }
-
-            let borrows = mem::take(BORROWS.lock().unwrap().deref_mut());
-            for Borrow {
-                value,
-                handle,
-                drop,
-            } in borrows
-            {
-                let value = value.bind(py);
-
-                value.delattr(intern!(py, "handle")).unwrap();
-
-                value
-                    .getattr(intern!(py, "finalizer"))
-                    .unwrap()
-                    .call_method0(intern!(py, "detach"))
-                    .unwrap();
-
-                unsafe {
-                    drop(handle);
+                if let Some(result) = result {
+                    cx.stack.push(result);
                 }
+
+                release_borrows(py);
+
+                0
             }
-        });
+        })
+    }
+}
+
+impl Interpreter for MyInterpreter {
+    type CallCx<'a> = MyCall<'a>;
+
+    fn initialize(wit: Wit) {
+        WIT.set(wit).map_err(drop).unwrap();
     }
 
-    async fn export_call_async(_: Wit, func: ExportFunction, cx: Box<MyCall<'static>>) {
-        _ = (func, cx);
-        todo!()
+    fn export_start<'a>(_: Wit, _: ExportFunction) -> Box<MyCall<'a>> {
+        Box::new(MyCall::new(Vec::new()))
+    }
+
+    fn export_call(_: Wit, func: ExportFunction, cx: &mut MyCall<'_>) {
+        Self::export_call_(func, cx, false);
+    }
+
+    fn export_async_start(_: Wit, func: ExportFunction, mut cx: Box<MyCall<'_>>) -> u32 {
+        #[cfg(feature = "async")]
+        {
+            Self::export_call_(func, &mut cx, true)
+        }
+        #[cfg(not(feature = "async"))]
+        {
+            _ = (func, &mut cx);
+            panic!("async feature disabled")
+        }
+    }
+
+    fn export_async_callback(event0: u32, event1: u32, event2: u32) -> u32 {
+        #[cfg(feature = "async")]
+        {
+            Python::attach(|py| {
+                async_::CALLBACK
+                    .get()
+                    .unwrap()
+                    .call1(py, (event0, event1, event2))
+                    .unwrap()
+                    .extract(py)
+                    .unwrap()
+            })
+        }
+        #[cfg(not(feature = "async"))]
+        {
+            _ = (event0, event1, event2);
+            panic!("async feature disabled")
+        }
     }
 
     fn resource_dtor(ty: wit::Resource, handle: usize) {
@@ -595,19 +1341,58 @@ struct MyCall<'a> {
     deferred_deallocations: Vec<(*mut u8, Layout)>,
     strings: Vec<String>,
     stack: Vec<Py<PyAny>>,
+    #[cfg(feature = "async")]
+    resources: Option<Vec<async_::EmptyResource>>,
 }
 
 impl MyCall<'_> {
     fn new(stack: Vec<Py<PyAny>>) -> Self {
-        // TODO: tell py03 to attach (and detach on drop) this thread to the
-        // interpreter.
         Self {
             _phantom: PhantomData,
             iter_stack: Vec::new(),
             deferred_deallocations: Vec::new(),
             strings: Vec::new(),
             stack,
+            #[cfg(feature = "async")]
+            resources: None,
         }
+    }
+
+    fn imported_resource_to_canon(&mut self, py: Python<'_>, value: Py<PyAny>, owned: bool) -> u32 {
+        let handle = value
+            .bind(py)
+            .getattr(intern!(py, "handle"))
+            .unwrap()
+            .extract()
+            .unwrap();
+
+        if owned {
+            value.bind(py).delattr(intern!(py, "handle")).unwrap();
+
+            let finalizer_args = value
+                .bind(py)
+                .getattr(intern!(py, "finalizer"))
+                .unwrap()
+                .call_method0(intern!(py, "detach"))
+                .unwrap();
+
+            #[cfg(feature = "async")]
+            {
+                if let Some(resources) = &mut self.resources {
+                    resources.push(async_::EmptyResource {
+                        value,
+                        handle,
+                        finalizer_args: finalizer_args.cast_into().unwrap().unbind(),
+                    });
+                }
+            }
+            #[cfg(not(feature = "async"))]
+            {
+                _ = finalizer_args;
+            }
+        }
+
+        handle
     }
 }
 
@@ -690,7 +1475,7 @@ impl Call for MyCall<'_> {
                 exported_resource_to_canon(py, ty, new, value)
             } else {
                 // imported resource type
-                imported_resource_to_canon(py, value)
+                self.imported_resource_to_canon(py, value, false)
             }
         })
     }
@@ -703,14 +1488,7 @@ impl Call for MyCall<'_> {
                 exported_resource_to_canon(py, ty, new, value)
             } else {
                 // imported resource type
-                value
-                    .bind(py)
-                    .getattr(intern!(py, "finalizer"))
-                    .unwrap()
-                    .call_method0(intern!(py, "detach"))
-                    .unwrap();
-
-                imported_resource_to_canon(py, value)
+                self.imported_resource_to_canon(py, value, true)
             }
         })
     }
@@ -744,14 +1522,20 @@ impl Call for MyCall<'_> {
         })
     }
 
-    fn pop_future(&mut self, ty: wit::Future) -> u32 {
-        _ = ty;
-        todo!()
+    fn pop_future(&mut self, _ty: wit::Future) -> u32 {
+        Python::attach(|py| {
+            let value = self.stack.pop().unwrap();
+
+            self.imported_resource_to_canon(py, value, true)
+        })
     }
 
-    fn pop_stream(&mut self, ty: wit::Stream) -> u32 {
-        _ = ty;
-        todo!()
+    fn pop_stream(&mut self, _ty: wit::Stream) -> u32 {
+        Python::attach(|py| {
+            let value = self.stack.pop().unwrap();
+
+            self.imported_resource_to_canon(py, value, true)
+        })
     }
 
     fn pop_option(&mut self, ty: WitOption) -> u32 {
@@ -867,13 +1651,16 @@ impl Call for MyCall<'_> {
     }
 
     unsafe fn maybe_pop_list(&mut self, ty: List) -> Option<(*const u8, usize)> {
-        if let Type::U8 = ty.ty() {
+        if let Type::U8 | Type::S8 = ty.ty() {
             Python::attach(|py| {
                 let src = self.stack.pop().unwrap();
                 let src = src.cast_bound::<PyBytes>(py).unwrap();
                 let len = src.len().unwrap();
-                let dst = alloc::alloc(Layout::from_size_align(len, 1).unwrap());
-                slice::from_raw_parts_mut(dst, len).copy_from_slice(src.as_bytes());
+                let dst = unsafe {
+                    let dst = alloc::alloc(Layout::from_size_align(len, 1).unwrap());
+                    slice::from_raw_parts_mut(dst, len).copy_from_slice(src.as_bytes());
+                    dst
+                };
                 Some((dst as _, len))
             })
         } else {
@@ -1123,13 +1910,46 @@ impl Call for MyCall<'_> {
     }
 
     fn push_future(&mut self, ty: wit::Future, handle: u32) {
-        _ = (ty, handle);
-        todo!()
+        #[cfg(feature = "async")]
+        {
+            let result = Python::attach(|py| {
+                async_::FUTURE_READER_CONSTRUCTOR
+                    .get()
+                    .unwrap()
+                    .call1(py, (ty.index(), handle))
+                    .unwrap()
+            });
+
+            self.stack.push(result);
+        }
+        #[cfg(not(feature = "async"))]
+        {
+            _ = (ty, handle);
+            panic!("async feature disabled")
+        }
     }
 
     fn push_stream(&mut self, ty: wit::Stream, handle: u32) {
-        _ = (ty, handle);
-        todo!()
+        #[cfg(feature = "async")]
+        {
+            let result = Python::attach(|py| {
+                if let Some(Type::U8 | Type::S8) = ty.ty() {
+                    async_::BYTE_STREAM_READER_CONSTRUCTOR.get()
+                } else {
+                    async_::STREAM_READER_CONSTRUCTOR.get()
+                }
+                .unwrap()
+                .call1(py, (ty.index(), handle))
+                .unwrap()
+            });
+
+            self.stack.push(result);
+        }
+        #[cfg(not(feature = "async"))]
+        {
+            _ = (ty, handle);
+            panic!("async feature disabled")
+        }
     }
 
     fn push_variant(&mut self, ty: wit::Variant, discriminant: u32) {
@@ -1194,8 +2014,8 @@ impl Call for MyCall<'_> {
     }
 
     unsafe fn push_raw_list(&mut self, ty: List, src: *mut u8, len: usize) -> bool {
-        if let Type::U8 = ty.ty() {
-            self.stack.push(Python::attach(|py| {
+        if let Type::U8 | Type::S8 = ty.ty() {
+            self.stack.push(Python::attach(|py| unsafe {
                 let value = PyBytes::new(py, slice::from_raw_parts(src, len))
                     .to_owned()
                     .into_any()
@@ -1307,33 +2127,27 @@ fn exported_resource_to_canon(
     }
 }
 
-fn imported_resource_to_canon(py: Python<'_>, value: Py<PyAny>) -> u32 {
-    value
-        .bind(py)
-        .getattr(intern!(py, "handle"))
-        .unwrap()
-        .extract()
-        .unwrap()
-}
-
 wit_dylib_ffi::export!(MyInterpreter);
 
-// As of this writing, recent Rust `nightly` builds include a version of the `libc` crate that expects `wasi-libc`
-// to define the following global variables, but `wasi-libc` defines them as preprocessor constants which aren't
-// visible at link time, so we need to define them somewhere.  Ideally, we should fix this upstream, but for now we
-// work around it:
+// As of this writing, recent Rust `nightly` builds include a version of the
+// `libc` crate that expects `wasi-libc` to define the following global
+// variables, but `wasi-libc` defines them as preprocessor constants which
+// aren't visible at link time, so we need to define them somewhere.  Ideally,
+// we should fix this upstream, but for now we work around it:
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 static _CLOCK_PROCESS_CPUTIME_ID: u8 = 2;
-#[no_mangle]
+#[unsafe(no_mangle)]
 static _CLOCK_THREAD_CPUTIME_ID: u8 = 3;
 
-// Traditionally, `wit-bindgen` would provide a `cabi_realloc` implementation, but recent versions use a weak
-// symbol trick to avoid conflicts when more than one `wit-bindgen` version is used, and that trick does not
-// currently play nice with how we build this library.  So for now, we just define it ourselves here:
+// Traditionally, `wit-bindgen` would provide a `cabi_realloc` implementation,
+// but recent versions use a weak symbol trick to avoid conflicts when more than
+// one `wit-bindgen` version is used, and that trick does not currently play
+// nice with how we build this library.  So for now, we just define it ourselves
+// here:
 /// # Safety
 /// TODO
-#[export_name = "cabi_realloc"]
+#[unsafe(export_name = "cabi_realloc")]
 pub unsafe extern "C" fn cabi_realloc(
     old_ptr: *mut u8,
     old_len: usize,
@@ -1343,5 +2157,5 @@ pub unsafe extern "C" fn cabi_realloc(
     assert!(old_ptr.is_null());
     assert!(old_len == 0);
 
-    alloc::alloc(Layout::from_size_align(new_size, align).unwrap())
+    unsafe { alloc::alloc(Layout::from_size_align(new_size, align).unwrap()) }
 }

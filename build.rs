@@ -52,7 +52,8 @@ fn stubs_for_clippy(out_dir: &Path) -> Result<()> {
     );
 
     let files = [
-        "libcomponentize_py_runtime.so.zst",
+        "libcomponentize_py_runtime_sync.so.zst",
+        "libcomponentize_py_runtime_async.so.zst",
         "libpython3.14.so.zst",
         "libc.so.zst",
         "libwasi-emulated-mman.so.zst",
@@ -103,62 +104,20 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
 
     make_pyo3_config(&repo_dir)?;
 
-    let mut cmd = Command::new("rustup");
-    cmd.current_dir("runtime")
-        .arg("run")
-        .arg("nightly")
-        .arg("cargo")
-        .arg("build")
-        .arg("-Z")
-        .arg("build-std=panic_abort,std")
-        .arg("--release")
-        .arg("--target=wasm32-wasip1");
-
-    for (key, _) in env::vars_os() {
-        if key
-            .to_str()
-            .map(|key| key.starts_with("RUST") || key.starts_with("CARGO"))
-            .unwrap_or(false)
-        {
-            cmd.env_remove(&key);
-        }
-    }
-
-    cmd.env(
-        "RUSTFLAGS",
-        "-C relocation-model=pic --cfg pyo3_disable_reference_pool",
-    )
-    .env("CARGO_TARGET_DIR", out_dir)
-    .env("PYO3_CONFIG_FILE", out_dir.join("pyo3-config.txt"));
-
-    let status = cmd.status()?;
-    assert!(status.success());
-    println!("cargo:rerun-if-changed=runtime");
-
-    let path = out_dir.join("wasm32-wasip1/release/libcomponentize_py_runtime.a");
-
-    if path.exists() {
-        let clang = wasi_sdk.join(format!("bin/{CLANG_EXECUTABLE}"));
-        if clang.exists() {
-            let name = "libcomponentize_py_runtime.so";
-
-            run(Command::new(clang)
-                .arg("-shared")
-                .arg("-o")
-                .arg(out_dir.join(name))
-                .arg("-Wl,--whole-archive")
-                .arg(&path)
-                .arg("-Wl,--no-whole-archive")
-                .arg(format!("-L{}", cpython_wasi_dir.to_str().unwrap()))
-                .arg("-lpython3.14"))?;
-
-            compress(out_dir, name, out_dir, false)?;
-        } else {
-            bail!("no such file: {}", clang.display())
-        }
-    } else {
-        bail!("no such file: {}", path.display())
-    }
+    make_runtime(
+        out_dir,
+        &wasi_sdk,
+        &cpython_wasi_dir,
+        false,
+        "libcomponentize_py_runtime_sync.so",
+    )?;
+    make_runtime(
+        out_dir,
+        &wasi_sdk,
+        &cpython_wasi_dir,
+        true,
+        "libcomponentize_py_runtime_async.so",
+    )?;
 
     let libraries = [
         "libc.so",
@@ -402,6 +361,79 @@ fn make_pyo3_config(repo_dir: &Path) -> Result<()> {
     fs::write(Path::new(&out_dir).join("pyo3-config.txt"), pyo3_config)?;
 
     println!("cargo:rerun-if-changed=pyo3-config.txt");
+
+    Ok(())
+}
+
+fn make_runtime(
+    out_dir: &Path,
+    wasi_sdk: &Path,
+    cpython_wasi_dir: &Path,
+    async_: bool,
+    name: &str,
+) -> Result<()> {
+    let mut cmd = Command::new("rustup");
+    cmd.current_dir("runtime")
+        .arg("run")
+        .arg("nightly")
+        .arg("cargo")
+        .arg("build")
+        .arg("-Z")
+        .arg("build-std=panic_abort,std")
+        .arg("--release")
+        .arg("--target=wasm32-wasip1");
+
+    if async_ {
+        cmd.arg("--features=async");
+    }
+
+    for (key, _) in env::vars_os() {
+        if key
+            .to_str()
+            .map(|key| key.starts_with("RUST") || key.starts_with("CARGO"))
+            .unwrap_or(false)
+        {
+            cmd.env_remove(&key);
+        }
+    }
+
+    let target = if async_ { "async" } else { "sync" };
+
+    cmd.env(
+        "RUSTFLAGS",
+        "-C relocation-model=pic --cfg pyo3_disable_reference_pool",
+    )
+    .env("CARGO_TARGET_DIR", out_dir.join(target))
+    .env("PYO3_CONFIG_FILE", out_dir.join("pyo3-config.txt"));
+
+    let status = cmd.status()?;
+    assert!(status.success());
+    println!("cargo:rerun-if-changed=runtime");
+
+    let path = out_dir
+        .join(target)
+        .join("wasm32-wasip1/release/libcomponentize_py_runtime.a");
+
+    if path.exists() {
+        let clang = wasi_sdk.join(format!("bin/{CLANG_EXECUTABLE}"));
+        if clang.exists() {
+            run(Command::new(clang)
+                .arg("-shared")
+                .arg("-o")
+                .arg(out_dir.join(name))
+                .arg("-Wl,--whole-archive")
+                .arg(&path)
+                .arg("-Wl,--no-whole-archive")
+                .arg(format!("-L{}", cpython_wasi_dir.to_str().unwrap()))
+                .arg("-lpython3.14"))?;
+
+            compress(out_dir, name, out_dir, false)?;
+        } else {
+            bail!("no such file: {}", clang.display())
+        }
+    } else {
+        bail!("no such file: {}", path.display())
+    }
 
     Ok(())
 }

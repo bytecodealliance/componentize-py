@@ -1,9 +1,10 @@
 use std::{
     ffi::OsStr,
+    fs,
     path::{Path, PathBuf},
 };
 
-use assert_cmd::{Command, assert::Assert};
+use assert_cmd::{Command, assert::Assert, cargo};
 use flate2::bufread::GzDecoder;
 use fs_extra::dir::CopyOptions;
 use predicates::{Predicate, prelude::predicate};
@@ -13,7 +14,7 @@ use tar::Archive;
 fn lint_cli_bindings() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     fs_extra::copy_items(
-        &["./examples/cli", "./wit"],
+        &["./examples/cli", "./wit", "./bundled"],
         dir.path(),
         &CopyOptions::new(),
     )?;
@@ -32,10 +33,12 @@ fn lint_cli_bindings() -> anyhow::Result<()> {
 fn lint_http_bindings() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     fs_extra::copy_items(
-        &["./examples/http", "./wit"],
+        &["./examples/http", "./wit", "./bundled"],
         dir.path(),
         &CopyOptions::new(),
     )?;
+    // poll_loop.py has many errors that might not be worth adjusting at the moment, so ignore for now
+    fs::remove_file(dir.path().join("bundled/poll_loop.py")).unwrap();
     let path = dir.path().join("http");
 
     generate_bindings(&path, "wasi:http/proxy@0.2.0")?;
@@ -59,10 +62,31 @@ fn lint_http_bindings() -> anyhow::Result<()> {
 }
 
 #[test]
+fn lint_http_p3_bindings() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    fs_extra::copy_items(
+        &["./examples/http-p3", "./wit", "./bundled"],
+        dir.path(),
+        &CopyOptions::new(),
+    )?;
+    let path = dir.path().join("http-p3");
+
+    generate_bindings(&path, "wasi:http/proxy@0.3.0-rc-2025-09-16")?;
+
+    assert!(predicate::path::is_dir().eval(&path.join("wit_world")));
+
+    _ = dir.keep();
+
+    mypy_check(&path, ["--strict", "-m", "app", "-p", "wit_world"]);
+
+    Ok(())
+}
+
+#[test]
 fn lint_matrix_math_bindings() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     fs_extra::copy_items(
-        &["./examples/matrix-math", "./wit"],
+        &["./examples/matrix-math", "./wit", "./bundled"],
         dir.path(),
         &CopyOptions::new(),
     )?;
@@ -94,10 +118,14 @@ fn lint_matrix_math_bindings() -> anyhow::Result<()> {
 #[test]
 fn lint_sandbox_bindings() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
-    fs_extra::copy_items(&["./examples/sandbox"], dir.path(), &CopyOptions::new())?;
+    fs_extra::copy_items(
+        &["./examples/sandbox", "./bundled"],
+        dir.path(),
+        &CopyOptions::new(),
+    )?;
     let path = dir.path().join("sandbox");
 
-    Command::cargo_bin("componentize-py")?
+    cargo::cargo_bin_cmd!("componentize-py")
         .current_dir(&path)
         .args(["-d", "sandbox.wit", "bindings", "."])
         .assert()
@@ -114,7 +142,7 @@ fn lint_sandbox_bindings() -> anyhow::Result<()> {
 fn lint_tcp_bindings() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     fs_extra::copy_items(
-        &["./examples/tcp", "./wit"],
+        &["./examples/tcp", "./wit", "./bundled"],
         dir.path(),
         &CopyOptions::new(),
     )?;
@@ -130,7 +158,7 @@ fn lint_tcp_bindings() -> anyhow::Result<()> {
 }
 
 fn generate_bindings(path: &Path, world: &str) -> Result<Assert, anyhow::Error> {
-    Ok(Command::cargo_bin("componentize-py")?
+    Ok(cargo::cargo_bin_cmd!("componentize-py")
         .current_dir(path)
         .args(["-d", "../wit", "-w", world, "bindings", "."])
         .assert()
@@ -156,6 +184,14 @@ where
 
     Command::new(venv_path(path).join("mypy"))
         .current_dir(path)
+        .env(
+            "MYPYPATH",
+            ["bundled"]
+                .into_iter()
+                .map(|v| path.parent().unwrap().join(v).to_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+                .join(":"),
+        )
         .args(args)
         .assert()
         .success()

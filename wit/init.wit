@@ -87,7 +87,6 @@ world init {
         }
 
         record symbols {
-            types-package: string,
             exports: list<function-export>,
             resources: list<%resource>,
             records: list<%record>,

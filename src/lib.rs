@@ -46,6 +46,8 @@ mod summary;
 mod test;
 mod util;
 
+const DEBUG_PYTHON_BINDINGS: bool = false;
+
 /// The default name of the Python module containing code generated from the
 /// specified WIT world.  This may be overriden programatically or via the CLI
 /// using the `--world-module` option.
@@ -189,17 +191,22 @@ pub fn generate_bindings(
     import_interface_names: &HashMap<&str, &str>,
     export_interface_names: &HashMap<&str, &str>,
 ) -> Result<()> {
-    // TODO: Split out and reuse the code responsible for finding and using componentize-py.toml files in the
-    // `componentize` function below, since that can affect the bindings we should be generating.
+    // TODO: Split out and reuse the code responsible for finding and using
+    // componentize-py.toml files in the `componentize` function below, since
+    // that can affect the bindings we should be generating.
 
     let (resolve, world) = parse_wit(wit_path, world, features, all_features)?;
     let import_function_indexes = &HashMap::new();
+    let export_function_indexes = &HashMap::new();
+    let stream_and_future_indexes = &HashMap::new();
     let summary = Summary::try_new(
         &resolve,
         &iter::once(world).collect(),
         import_interface_names,
         export_interface_names,
         import_function_indexes,
+        export_function_indexes,
+        stream_and_future_indexes,
     )?;
     let world_module = world_module.unwrap_or(DEFAULT_WORLD_MODULE);
     let world_dir = output_dir.join(world_module.replace('.', "/"));
@@ -231,7 +238,8 @@ pub async fn componentize(
     import_interface_names: &HashMap<&str, &str>,
     export_interface_names: &HashMap<&str, &str>,
 ) -> Result<()> {
-    // Remove non-existent elements from `python_path` so we don't choke on them later:
+    // Remove non-existent elements from `python_path` so we don't choke on them
+    // later:
     let python_path = &python_path
         .iter()
         .filter_map(|&s| Path::new(s).exists().then_some(s))
@@ -240,11 +248,11 @@ pub async fn componentize(
     let embedded_python_standard_lib = prelink::embedded_python_standard_library()?;
     let embedded_helper_utils = prelink::embedded_helper_utils()?;
 
-    let (configs, mut libraries) =
+    let (configs, libraries) =
         prelink::search_for_libraries_and_configs(python_path, module_worlds, world)?;
 
-    // Next, iterate over all the WIT directories, merging them into a single `Resolve`, and matching Python
-    // packages to `WorldId`s.
+    // Next, iterate over all the WIT directories, merging them into a single
+    // `Resolve`, and matching Python packages to `WorldId`s.
     let (mut resolve, mut main_world) = match wit_path {
         [] => (None, None),
         paths => {
@@ -305,8 +313,8 @@ pub async fn componentize(
     let mut resolve = if let Some(resolve) = resolve {
         resolve
     } else {
-        // If no WIT directory was provided as a parameter and none were referenced by Python packages, use
-        // the default values.
+        // If no WIT directory was provided as a parameter and none were
+        // referenced by Python packages, use the default values.
         let paths: &[&Path] = &[];
         let (my_resolve, world) = parse_wit(paths, world, features, all_features).context(
             "no WIT files found; please specify the directory or file \
@@ -316,8 +324,8 @@ pub async fn componentize(
         my_resolve
     };
 
-    // Extract relevant metadata from the `Resolve` into a `Summary` instance, which we'll use to generate Wasm-
-    // and Python-level bindings.
+    // Extract relevant metadata from the `Resolve` into a `Summary` instance,
+    // which we'll use to generate Wasm- and Python-level bindings.
 
     let worlds = configs
         .values()
@@ -390,7 +398,41 @@ pub async fn componentize(
         .iter()
         .enumerate()
         .map(|(index, func)| ((func.interface.as_deref(), func.name.as_str()), index))
-        .collect::<HashMap<_, _>>();
+        .collect();
+
+    let exported_function_indexes = metadata
+        .export_funcs
+        .iter()
+        .enumerate()
+        .map(|(index, func)| ((func.interface.as_deref(), func.name.as_str()), index))
+        .collect();
+
+    let mut reverse_cloned_types = HashMap::new();
+    for (&original, &clone) in clone_maps.types() {
+        assert!(reverse_cloned_types.insert(clone, original).is_none());
+    }
+
+    let original = |ty| {
+        if let Some(&original) = reverse_cloned_types.get(&ty) {
+            original
+        } else {
+            ty
+        }
+    };
+
+    let stream_and_future_indexes = metadata
+        .streams
+        .iter()
+        .enumerate()
+        .map(|(index, stream)| (original(stream.id), index))
+        .chain(
+            metadata
+                .futures
+                .iter()
+                .enumerate()
+                .map(|(index, future)| (original(future.id), index)),
+        )
+        .collect();
 
     let summary = Summary::try_new(
         &resolve,
@@ -398,7 +440,31 @@ pub async fn componentize(
         &import_interface_names,
         &export_interface_names,
         &imported_function_indexes,
+        &exported_function_indexes,
+        &stream_and_future_indexes,
     )?;
+
+    let need_async = summary.need_async();
+
+    // Now that we know whether to use the sync or async version of
+    // `libcomponentize_py_runtime.so`, update `libraries` accordingly.
+    //
+    // Note that we have two separate versions because older runtimes don't
+    // understand the new async ABI, so we only use the async version if it's
+    // actually needed.
+    let mut libraries = libraries
+        .into_iter()
+        .filter_map(|library| match (need_async, library.name.as_str()) {
+            (true, "libcomponentize_py_runtime_sync.so")
+            | (false, "libcomponentize_py_runtime_async.so") => None,
+            (true, "libcomponentize_py_runtime_async.so")
+            | (false, "libcomponentize_py_runtime_sync.so") => Some(Library {
+                name: "libcomponentize_py_runtime.so".into(),
+                ..library
+            }),
+            _ => Some(library),
+        })
+        .collect::<Vec<_>>();
 
     libraries.push(Library {
         name: "libcomponentize_py_bindings.so".into(),
@@ -414,10 +480,11 @@ pub async fn componentize(
         None
     };
 
-    // Pre-initialize the component by running it through `component_init_transform::initialize`.
-    // Currently, this is the application's first and only chance to load any standard or
-    // third-party modules since we do not yet include a virtual filesystem in the component to
-    // make those modules available at runtime.
+    // Pre-initialize the component by running it through
+    // `component_init_transform::initialize`.  Currently, this is the
+    // application's first and only chance to load any standard or third-party
+    // modules since we do not yet include a virtual filesystem in the component
+    // to make those modules available at runtime.
 
     let stdout = MemoryOutputPipe::new(10000);
     let stderr = MemoryOutputPipe::new(10000);
@@ -446,8 +513,9 @@ pub async fn componentize(
         wasi.preopened_dir(path, index.to_string(), DirPerms::all(), FilePerms::all())?;
     }
 
-    // For each Python package with a `componentize-py.toml` file that specifies where generated bindings for that
-    // package should be placed, generate the bindings and place them as indicated.
+    // For each Python package with a `componentize-py.toml` file that specifies
+    // where generated bindings for that package should be placed, generate the
+    // bindings and place them as indicated.
 
     let mut world_dir_mounts = Vec::new();
     let mut locations = Locations::default();
@@ -505,7 +573,8 @@ pub async fn componentize(
         ));
     }
 
-    // If the caller specified a world and we haven't already generated bindings for it above, do so now.
+    // If the caller specified a world and we haven't already generated bindings
+    // for it above, do so now.
     if let (Some(world), false) = (main_world, saw_main_world) {
         let module = world_module.unwrap_or(DEFAULT_WORLD_MODULE);
         let world_dir = tempfile::tempdir()?;
@@ -514,8 +583,9 @@ pub async fn componentize(
         summary.generate_code(&module_path, world, module, &mut locations, false)?;
         world_dir_mounts.push((vec!["world".to_owned()], world_dir));
 
-        // The helper utilities are hard-coded to assume the world module is named `wit_world`.  Here we replace
-        // that with the actual world module name.
+        // The helper utilities are hard-coded to assume the world module is
+        // named `wit_world`.  Here we replace that with the actual world module
+        // name.
         fn replace(path: &Path, pattern: &str, replacement: &str) -> Result<()> {
             if path.is_dir() {
                 for entry in fs::read_dir(path)? {
@@ -537,15 +607,25 @@ pub async fn componentize(
 
     for (mounts, world_dir) in world_dir_mounts.iter() {
         for mount in mounts {
+            if DEBUG_PYTHON_BINDINGS {
+                eprintln!("world dir path: {}", world_dir.path().display());
+            }
             wasi.preopened_dir(world_dir.path(), mount, DirPerms::all(), FilePerms::all())?;
         }
     }
 
-    // Generate a `Symbols` object containing metadata to be passed to the pre-init function.  The runtime library
-    // will use this to look up types and functions that will later be referenced by the generated Wasm code.
+    if DEBUG_PYTHON_BINDINGS {
+        // Prevent temporary directories from being deleted:
+        std::mem::forget(world_dir_mounts);
+    }
+
+    // Generate a `Symbols` object containing metadata to be passed to the
+    // pre-init function.  The runtime library will use this to look up types
+    // and functions that will later be referenced by the generated Wasm code.
     let symbols = summary.collect_symbols(&locations, &metadata, &clone_maps);
 
-    // Finally, pre-initialize the component, writing the result to `output_path`.
+    // Finally, pre-initialize the component, writing the result to
+    // `output_path`.
 
     let python_path = (0..python_path.len())
         .map(|index| format!("/{index}"))
@@ -562,6 +642,7 @@ pub async fn componentize(
 
     let mut config = Config::new();
     config.wasm_component_model(true);
+    config.wasm_component_model_async(true);
     config.async_support(true);
 
     let engine = Engine::new(&config)?;
@@ -623,8 +704,8 @@ fn parse_wit(
     features: &[String],
     all_features: bool,
 ) -> Result<(Resolve, WorldId)> {
-    // If no WIT directory was provided as a parameter and none were referenced by Python packages, use ./wit
-    // by default.
+    // If no WIT directory was provided as a parameter and none were referenced
+    // by Python packages, use ./wit by default.
     if paths.is_empty() {
         let paths = &[Path::new("wit")];
         return parse_wit(paths, world, features, all_features);
@@ -722,9 +803,10 @@ fn add_wasi_and_stubs(
 
     for (interface_name, stubs) in stubs {
         if let Some(interface_name) = interface_name {
-            // Note that we do _not_ stub interfaces which appear to be part of WASIp2 since those should be
-            // provided by the `wasmtime_wasi::add_to_linker_async` call above, and adding stubs to those same
-            // interfaces would just cause trouble.
+            // Note that we do _not_ stub interfaces which appear to be part of
+            // WASIp2 since those should be provided by the
+            // `wasmtime_wasi::add_to_linker_async` call above, and adding stubs
+            // to those same interfaces would just cause trouble.
             if !is_wasip2_cli(&interface_name)
                 && let Ok(mut instance) = linker.instance(&interface_name)
             {
@@ -733,7 +815,7 @@ fn add_wasi_and_stubs(
                     match stub {
                         Stub::Function(name) => instance.func_new(name, {
                             let name = name.clone();
-                            move |_, _, _| {
+                            move |_, _, _, _| {
                                 Err(anyhow!("called trapping stub: {interface_name}#{name}"))
                             }
                         }),
@@ -754,7 +836,7 @@ fn add_wasi_and_stubs(
                 match stub {
                     Stub::Function(name) => instance.func_new(name, {
                         let name = name.clone();
-                        move |_, _, _| Err(anyhow!("called trapping stub: {name}"))
+                        move |_, _, _, _| Err(anyhow!("called trapping stub: {name}"))
                     }),
                     Stub::Resource(name) => instance
                         .resource(name, ResourceType::host::<()>(), {
