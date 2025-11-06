@@ -28,6 +28,8 @@ use {
 
 const NOT_IMPLEMENTED: &str = "raise NotImplementedError";
 
+const ASYNC_START_PREFIX: &str = "_async_start_";
+
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Direction {
     Import,
@@ -99,7 +101,6 @@ struct FunctionCode {
     return_statement: String,
     class_method: &'static str,
     return_type: String,
-    result_count: usize,
     error: Option<String>,
 }
 
@@ -121,7 +122,6 @@ struct TypeLocation {
 pub struct Locations {
     types: HashMap<TypeId, TypeLocation>,
     keys: HashMap<WorldKey, String>,
-    types_module: Option<String>,
 }
 
 pub struct Summary<'a> {
@@ -142,6 +142,9 @@ pub struct Summary<'a> {
     imported_interface_names: HashMap<InterfaceId, String>,
     exported_interface_names: HashMap<InterfaceId, String>,
     imported_function_indexes: &'a HashMap<(Option<&'a str>, &'a str), usize>,
+    exported_function_indexes: &'a HashMap<(Option<&'a str>, &'a str), usize>,
+    stream_and_future_indexes: &'a HashMap<TypeId, usize>,
+    need_async: bool,
 }
 
 impl<'a> Summary<'a> {
@@ -151,6 +154,8 @@ impl<'a> Summary<'a> {
         import_interface_names: &HashMap<&str, &str>,
         export_interface_names: &HashMap<&str, &str>,
         imported_function_indexes: &'a HashMap<(Option<&'a str>, &'a str), usize>,
+        exported_function_indexes: &'a HashMap<(Option<&'a str>, &'a str), usize>,
+        stream_and_future_indexes: &'a HashMap<TypeId, usize>,
     ) -> Result<Self> {
         let mut me = Self {
             resolve,
@@ -170,6 +175,9 @@ impl<'a> Summary<'a> {
             imported_interface_names: HashMap::new(),
             exported_interface_names: HashMap::new(),
             imported_function_indexes,
+            exported_function_indexes,
+            stream_and_future_indexes,
+            need_async: false,
         };
 
         let mut import_keys_seen = HashSet::new();
@@ -201,6 +209,10 @@ impl<'a> Summary<'a> {
         );
 
         Ok(me)
+    }
+
+    pub fn need_async(&self) -> bool {
+        self.need_async
     }
 
     fn push_function(&mut self, function: MyFunction<'a>) {
@@ -281,8 +293,9 @@ impl<'a> Summary<'a> {
                         self.visit_type(*ty, world);
                     }
                     TypeDefKind::Type(ty) => {
-                        // When visiting a type alias, we must use the state already stored for any `use`d
-                        // resources rather than overwrite it.
+                        // When visiting a type alias, we must use the state
+                        // already stored for any `use`d resources rather than
+                        // overwrite it.
                         let resource_state = self.resource_state.take();
                         self.visit_type(*ty, world);
                         self.resource_state = resource_state;
@@ -301,6 +314,13 @@ impl<'a> Summary<'a> {
                                     info.local = true;
                                 }
                             }
+                        }
+                        self.types.insert(id);
+                    }
+                    TypeDefKind::Stream(ty) | TypeDefKind::Future(ty) => {
+                        self.need_async = true;
+                        if let Some(ty) = ty {
+                            self.visit_type(*ty, world);
                         }
                         self.types.insert(id);
                     }
@@ -339,6 +359,13 @@ impl<'a> Summary<'a> {
             result,
             wit_kind: wit_kind.clone(),
         };
+
+        if let wit_parser::FunctionKind::AsyncFreestanding
+        | wit_parser::FunctionKind::AsyncMethod(_)
+        | wit_parser::FunctionKind::AsyncStatic(_) = wit_kind
+        {
+            self.need_async = true;
+        }
 
         match direction {
             Direction::Import => {
@@ -640,10 +667,11 @@ impl<'a> Summary<'a> {
                     ),
                     FunctionExport {
                         kind: match function.wit_kind {
-                            wit_parser::FunctionKind::Freestanding => {
+                            wit_parser::FunctionKind::Freestanding
+                            | wit_parser::FunctionKind::AsyncFreestanding => {
                                 FunctionExportKind::Freestanding(Function {
                                     protocol: scope.to_upper_camel_case().escape(),
-                                    name: self.function_name(function),
+                                    name: self.function_name_for_call(function),
                                 })
                             }
                             wit_parser::FunctionKind::Constructor(id) => {
@@ -657,10 +685,12 @@ impl<'a> Summary<'a> {
                                         .escape(),
                                 })
                             }
-                            wit_parser::FunctionKind::Method(_) => {
-                                FunctionExportKind::Method(self.function_name(function))
+                            wit_parser::FunctionKind::Method(_)
+                            | wit_parser::FunctionKind::AsyncMethod(_) => {
+                                FunctionExportKind::Method(self.function_name_for_call(function))
                             }
-                            wit_parser::FunctionKind::Static(id) => {
+                            wit_parser::FunctionKind::Static(id)
+                            | wit_parser::FunctionKind::AsyncStatic(id) => {
                                 FunctionExportKind::Static(Static {
                                     module: scope.to_snake_case().escape(),
                                     protocol: self.resolve.types[id]
@@ -669,10 +699,9 @@ impl<'a> Summary<'a> {
                                         .unwrap()
                                         .to_upper_camel_case()
                                         .escape(),
-                                    name: self.function_name(function),
+                                    name: self.function_name_for_call(function),
                                 })
                             }
-                            _ => todo!("handle async functions"),
                         },
                         return_style: match function.result {
                             None => ReturnStyle::None,
@@ -779,7 +808,6 @@ impl<'a> Summary<'a> {
             .collect();
 
         Symbols {
-            types_package: format!("{}.types", locations.types_module.as_ref().unwrap()),
             exports,
             resources,
             records,
@@ -806,13 +834,43 @@ impl<'a> Summary<'a> {
             .unwrap()
     }
 
-    fn function_name(&self, function: &MyFunction) -> String {
-        self.function_name_with(&function.wit_kind, function.name)
+    fn exported_function_index(&self, function: &MyFunction) -> usize {
+        *self
+            .exported_function_indexes
+            .get(&(
+                function
+                    .interface
+                    .as_ref()
+                    .map(|v| self.resolve.name_world_key(v.key))
+                    .as_deref(),
+                function.name,
+            ))
+            .unwrap()
     }
 
-    fn function_name_with(&self, kind: &wit_parser::FunctionKind, name: &str) -> String {
+    fn function_name(&self, function: &MyFunction) -> String {
+        self.function_name_with(&function.wit_kind, function.name, "")
+    }
+
+    fn function_name_for_call(&self, function: &MyFunction) -> String {
+        self.function_name_with(&function.wit_kind, function.name, ASYNC_START_PREFIX)
+    }
+
+    fn function_name_with(
+        &self,
+        kind: &wit_parser::FunctionKind,
+        name: &str,
+        async_start_prefix: &str,
+    ) -> String {
         match kind {
             wit_parser::FunctionKind::Freestanding => name.to_snake_case().escape(),
+            wit_parser::FunctionKind::AsyncFreestanding => format!(
+                "{async_start_prefix}{}",
+                name.strip_prefix("[async]")
+                    .unwrap()
+                    .to_snake_case()
+                    .escape()
+            ),
             wit_parser::FunctionKind::Constructor(_) => "__init__".into(),
             wit_parser::FunctionKind::Method(id) => name
                 .strip_prefix(&format!(
@@ -822,6 +880,16 @@ impl<'a> Summary<'a> {
                 .unwrap()
                 .to_snake_case()
                 .escape(),
+            wit_parser::FunctionKind::AsyncMethod(id) => format!(
+                "{async_start_prefix}{}",
+                name.strip_prefix(&format!(
+                    "[async method]{}.",
+                    self.resolve.types[*id].name.as_deref().unwrap()
+                ))
+                .unwrap()
+                .to_snake_case()
+                .escape()
+            ),
             wit_parser::FunctionKind::Static(id) => name
                 .strip_prefix(&format!(
                     "[static]{}.",
@@ -830,7 +898,16 @@ impl<'a> Summary<'a> {
                 .unwrap()
                 .to_snake_case()
                 .escape(),
-            _ => todo!("support async functions"),
+            wit_parser::FunctionKind::AsyncStatic(id) => format!(
+                "{async_start_prefix}{}",
+                name.strip_prefix(&format!(
+                    "[async static]{}.",
+                    self.resolve.types[*id].name.as_deref().unwrap()
+                ))
+                .unwrap()
+                .to_snake_case()
+                .escape()
+            ),
         }
     }
 
@@ -863,11 +940,15 @@ impl<'a> Summary<'a> {
         let snake = self.function_name(function);
 
         let (skip_count, self_) = match function.wit_kind {
-            wit_parser::FunctionKind::Freestanding => (0, None),
+            wit_parser::FunctionKind::Freestanding
+            | wit_parser::FunctionKind::AsyncFreestanding => (0, None),
             wit_parser::FunctionKind::Constructor(_) => (0, Some("self")),
-            wit_parser::FunctionKind::Method(_) => (1, Some("self")),
-            wit_parser::FunctionKind::Static(_) => (0, Some("cls")),
-            _ => todo!("support async functions"),
+            wit_parser::FunctionKind::Method(_) | wit_parser::FunctionKind::AsyncMethod(_) => {
+                (1, Some("self"))
+            }
+            wit_parser::FunctionKind::Static(_) | wit_parser::FunctionKind::AsyncStatic(_) => {
+                (0, Some("cls"))
+            }
         };
 
         let mut type_name = |ty| names.type_name(ty, seen, resource);
@@ -916,7 +997,9 @@ impl<'a> Summary<'a> {
             if let wit_parser::FunctionKind::Constructor(_) = function.wit_kind {
                 ("return".to_owned(), "None".to_owned(), None)
             } else {
-                let indent = if let wit_parser::FunctionKind::Freestanding = function.wit_kind {
+                let indent = if let wit_parser::FunctionKind::Freestanding
+                | wit_parser::FunctionKind::AsyncFreestanding = function.wit_kind
+                {
                     ""
                 } else {
                     "    "
@@ -934,37 +1017,24 @@ impl<'a> Summary<'a> {
 
                             (
                                 format!(
-                                    "if isinstance(result[0], Err):
-{indent}        raise result[0]
+                                    "if isinstance(result, Err):
+{indent}        raise result
 {indent}    else:
-{indent}        return result[0].value"
+{indent}        return result.value"
                                 ),
                                 result.ok.map(type_name).unwrap_or_else(|| "None".into()),
                                 error,
                             )
                         }
-                        SpecialReturn::None => {
-                            ("return result[0]".to_owned(), type_name(*ty), None)
-                        }
+                        SpecialReturn::None => ("return result".to_owned(), type_name(*ty), None),
                     },
-                    _ => (
-                        "return result".to_owned(),
-                        format!(
-                            "({})",
-                            result_types
-                                .iter()
-                                .map(|ty| type_name(*ty))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        ),
-                        None,
-                    ),
+                    _ => unreachable!(),
                 }
             };
 
-        let result_count = result_types.len();
-
-        let class_method = if let wit_parser::FunctionKind::Static(_) = function.wit_kind {
+        let class_method = if let wit_parser::FunctionKind::Static(_)
+        | wit_parser::FunctionKind::AsyncStatic(_) = function.wit_kind
+        {
             "\n    @classmethod"
         } else {
             ""
@@ -977,7 +1047,6 @@ impl<'a> Summary<'a> {
             return_statement,
             class_method,
             return_type: format!(" -> {return_type}"),
-            result_count,
             error,
         }
     }
@@ -1082,6 +1151,12 @@ impl<'a> Summary<'a> {
                             sorted.insert(id);
                         }
                     }
+                    TypeDefKind::Stream(ty) | TypeDefKind::Future(ty) => {
+                        if let Some(ty) = ty {
+                            self.sort(*ty, sorted, visited);
+                        }
+                        sorted.insert(id);
+                    }
                     kind => todo!("{kind:?}"),
                 }
             }
@@ -1181,6 +1256,120 @@ impl<'a> Summary<'a> {
         names
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn generate_export_code(
+        &self,
+        stub_runtime_calls: bool,
+        function: &MyFunction,
+        class_method: &str,
+        snake: &str,
+        params: &str,
+        return_type: &str,
+        docs: &str,
+    ) -> String {
+        let (skip_count, async_prefix) = match function.wit_kind {
+            wit_parser::FunctionKind::Freestanding => (0, None),
+            wit_parser::FunctionKind::AsyncFreestanding => (0, Some("self.")),
+            wit_parser::FunctionKind::Constructor(_) => (0, None),
+            wit_parser::FunctionKind::Method(_) => (1, None),
+            wit_parser::FunctionKind::AsyncMethod(_) => (1, Some("self.")),
+            wit_parser::FunctionKind::Static(_) => (0, None),
+            wit_parser::FunctionKind::AsyncStatic(_) => (0, Some("cls.")),
+        };
+
+        let (async_, body) = if let Some(prefix) = async_prefix {
+            let args = function
+                .params
+                .iter()
+                .skip(skip_count)
+                .map(|(name, _)| name.to_snake_case().escape())
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            (
+                "async ",
+                if stub_runtime_calls {
+                    NOT_IMPLEMENTED.into()
+                } else {
+                    let index = self.exported_function_index(function);
+
+                    format!(
+                        "{NOT_IMPLEMENTED}
+
+{class_method}
+    def {ASYNC_START_PREFIX}{snake}({params}) -> int:
+        return componentize_py_async_support.first_poll({index}, {prefix}{snake}({args}))"
+                    )
+                },
+            )
+        } else {
+            ("", NOT_IMPLEMENTED.into())
+        };
+
+        format!(
+            "{class_method}
+    @abstractmethod
+    {async_}def {snake}({params}){return_type}:
+        {docs}{body}
+"
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn generate_import_code(
+        &self,
+        indent_level: usize,
+        stub_runtime_calls: bool,
+        function: &MyFunction,
+        class_method: &str,
+        snake: &str,
+        params: &str,
+        return_type: &str,
+        docs: &str,
+        args: &str,
+        return_statement: &str,
+    ) -> String {
+        let index = if stub_runtime_calls {
+            0
+        } else {
+            self.imported_function_index(function)
+        };
+
+        let indent = (0..indent_level)
+            .map(|_| "    ")
+            .collect::<Vec<_>>()
+            .concat();
+
+        let (async_, await_) = if let wit_parser::FunctionKind::AsyncFreestanding
+        | wit_parser::FunctionKind::AsyncMethod(_)
+        | wit_parser::FunctionKind::AsyncStatic(_) = function.wit_kind
+        {
+            (
+                "async ",
+                format!(
+                    "result = await componentize_py_async_support.await_result(result)\n{indent}    "
+                ),
+            )
+        } else {
+            ("", String::new())
+        };
+
+        if stub_runtime_calls {
+            format!(
+                "{class_method}
+{indent}{async_}def {snake}({params}){return_type}:
+{indent}    {docs}{NOT_IMPLEMENTED}"
+            )
+        } else {
+            format!(
+                "{class_method}
+{indent}{async_}def {snake}({params}){return_type}:
+{indent}    {docs}result = componentize_py_runtime.call_import({index}, [{args}])
+{indent}    {await_}{return_statement}"
+            )
+        }
+    }
+
     pub fn generate_code(
         &self,
         path: &Path,
@@ -1208,6 +1397,8 @@ impl<'a> Summary<'a> {
         let mut world_imports = Definitions::default();
         let mut world_exports = Definitions::default();
         let mut seen = HashSet::new();
+        let mut stream_payloads = HashSet::new();
+        let mut future_payloads = HashSet::new();
         for (index, id) in self.types.iter().copied().enumerate() {
             if !self
                 .world_types
@@ -1392,7 +1583,6 @@ class {camel}(Flag):
                                     return_type,
                                     return_statement,
                                     class_method,
-                                    result_count,
                                     error,
                                 } = self.function_code(
                                     Direction::Import,
@@ -1420,26 +1610,25 @@ class {camel}(Flag):
                                         format!(
                                             "
     def {snake}({params}){return_type}:
-        {docs}tmp = componentize_py_runtime.call_import({index}, [{args}], {result_count})[0]
+        {docs}tmp = componentize_py_runtime.call_import({index}, [{args}])
         (_, func, args, _) = tmp.finalizer.detach()
         self.handle = tmp.handle
         self.finalizer = weakref.finalize(self, func, args[0], args[1])
 "
                                         )
                                     }
-                                } else if stub_runtime_calls {
-                                    format!(
-                                        "{class_method}
-    def {snake}({params}){return_type}:
-        {docs}{NOT_IMPLEMENTED}"
-                                    )
                                 } else {
-                                    let index = self.imported_function_index(function);
-                                    format!(
-                                        "{class_method}
-    def {snake}({params}){return_type}:
-        {docs}result = componentize_py_runtime.call_import({index}, [{args}], {result_count})
-        {return_statement}"
+                                    self.generate_import_code(
+                                        1,
+                                        stub_runtime_calls,
+                                        function,
+                                        class_method,
+                                        &snake,
+                                        &params,
+                                        &return_type,
+                                        &docs,
+                                        &args,
+                                        &return_statement,
                                     )
                                 }
                             };
@@ -1512,12 +1701,14 @@ class {camel}:
                                 let docs =
                                     docstring(world_module, function.docs, 2, error.as_deref());
 
-                                format!(
-                                    "{class_method}
-    @abstractmethod
-    def {snake}({params}){return_type}:
-        {docs}{NOT_IMPLEMENTED}
-"
+                                self.generate_export_code(
+                                    stub_runtime_calls,
+                                    function,
+                                    class_method,
+                                    &snake,
+                                    &params,
+                                    &return_type,
+                                    &docs,
                                 )
                             };
 
@@ -1548,6 +1739,92 @@ class {camel}(Protocol):
                     | TypeDefKind::Option(_)
                     | TypeDefKind::Result(_)
                     | TypeDefKind::Handle(_) => (None, Vec::new()),
+                    TypeDefKind::Stream(ty) => {
+                        let code = if stream_payloads.contains(ty) {
+                            None
+                        } else {
+                            stream_payloads.insert(ty);
+
+                            Some(if let Some(Type::U8 | Type::S8) = ty {
+                                if stub_runtime_calls {
+                                    format!(
+                                        "
+def byte_stream() -> tuple[ByteStreamWriter, ByteStreamReader]:
+    {NOT_IMPLEMENTED}
+"
+                                    )
+                                } else {
+                                    let index = *self.stream_and_future_indexes.get(&id).unwrap();
+                                    format!(
+                                        "
+def byte_stream() -> tuple[ByteStreamWriter, ByteStreamReader]:
+    pair = componentize_py_runtime.stream_new({index})
+    return (ByteStreamWriter({index}, pair >> 32), ByteStreamReader({index}, pair & 0xFFFFFFFF))
+"
+                                    )
+                                }
+                            } else {
+                                let snake = ty
+                                    .map(|ty| names.mangle_name(ty))
+                                    .unwrap_or_else(|| "unit".into());
+                                let camel = ty
+                                    .map(|ty| names.type_name(ty, &seen, None))
+                                    .unwrap_or_else(|| "None".into());
+                                if stub_runtime_calls {
+                                    format!(
+                                        "
+def {snake}_stream() -> tuple[StreamWriter[{camel}], StreamReader[{camel}]]:
+    {NOT_IMPLEMENTED}
+"
+                                    )
+                                } else {
+                                    let index = *self.stream_and_future_indexes.get(&id).unwrap();
+                                    format!(
+                                        "
+def {snake}_stream() -> tuple[StreamWriter[{camel}], StreamReader[{camel}]]:
+    pair = componentize_py_runtime.stream_new({index})
+    return (StreamWriter({index}, pair >> 32), StreamReader({index}, pair & 0xFFFFFFFF))
+"
+                                    )
+                                }
+                            })
+                        };
+
+                        (code.map(Code::Shared), Vec::new())
+                    }
+                    TypeDefKind::Future(ty) => {
+                        let code = if future_payloads.contains(ty) {
+                            None
+                        } else {
+                            future_payloads.insert(ty);
+
+                            let snake = ty
+                                .map(|ty| names.mangle_name(ty))
+                                .unwrap_or_else(|| "unit".into());
+                            let camel = ty
+                                .map(|ty| names.type_name(ty, &seen, None))
+                                .unwrap_or_else(|| "None".into());
+                            Some(if stub_runtime_calls {
+                                format!(
+                                    "
+def {snake}_future(default: Callable[[], {camel}]) -> tuple[FutureWriter[{camel}], FutureReader[{camel}]]:
+    {NOT_IMPLEMENTED}
+"
+                                )
+                            } else {
+                                let index = *self.stream_and_future_indexes.get(&id).unwrap();
+                                format!(
+                                "
+def {snake}_future(default: Callable[[], {camel}]) -> tuple[FutureWriter[{camel}], FutureReader[{camel}]]:
+    pair = componentize_py_runtime.future_new({index})
+    return (FutureWriter({index}, pair >> 32, default), FutureReader({index}, pair & 0xFFFFFFFF))
+"
+                            )
+                            })
+                        };
+
+                        (code.map(Code::Shared), Vec::new())
+                    }
                     kind => todo!("{kind:?}"),
                 };
 
@@ -1623,7 +1900,7 @@ class {camel}(Protocol):
                             .collect(),
                     },
 
-                    TypeOwner::World(_) => {
+                    TypeOwner::World(_) | TypeOwner::None => {
                         let docs = self.resolve.worlds[world].docs.contents.as_deref();
                         match code {
                             Code::Shared(code) => vec![(code, (&mut world_exports, docs))],
@@ -1634,8 +1911,6 @@ class {camel}(Protocol):
                                 .collect(),
                         }
                     }
-
-                    TypeOwner::None => unreachable!(),
                 };
 
                 for (code, (definitions, docs)) in tuples {
@@ -1667,7 +1942,8 @@ class {camel}(Protocol):
             ) {
                 (
                     FunctionKind::Import | FunctionKind::Export,
-                    wit_parser::FunctionKind::Freestanding,
+                    wit_parser::FunctionKind::Freestanding
+                    | wit_parser::FunctionKind::AsyncFreestanding,
                     true,
                 ) => {
                     let mut names = TypeNames::new(
@@ -1687,7 +1963,6 @@ class {camel}(Protocol):
                         args,
                         return_type,
                         return_statement,
-                        result_count,
                         error,
                         ..
                     } = self.function_code(
@@ -1703,23 +1978,18 @@ class {camel}(Protocol):
                         FunctionKind::Import => {
                             let docs = docstring(world_module, function.docs, 1, error.as_deref());
 
-                            let code = if stub_runtime_calls {
-                                format!(
-                                    "
-def {snake}({params}){return_type}:
-    {docs}{NOT_IMPLEMENTED}
-"
-                                )
-                            } else {
-                                let index = self.imported_function_index(function);
-                                format!(
-                                    "
-def {snake}({params}){return_type}:
-    {docs}result = componentize_py_runtime.call_import({index}, [{args}], {result_count})
-    {return_statement}
-"
-                                )
-                            };
+                            let code = self.generate_import_code(
+                                0,
+                                stub_runtime_calls,
+                                function,
+                                "",
+                                &snake,
+                                &params,
+                                &return_type,
+                                &docs,
+                                &args,
+                                &return_statement,
+                            );
 
                             let (definitions, docs) = if let Some(interface) = &function.interface {
                                 (
@@ -1765,12 +2035,14 @@ def {snake}({params}){return_type}:
                                 let function_docs =
                                     docstring(world_module, function.docs, 2, error.as_deref());
 
-                                let code = format!(
-                                    "
-    @abstractmethod
-    def {snake}({params}){return_type}:
-        {function_docs}{NOT_IMPLEMENTED}
-"
+                                let code = self.generate_export_code(
+                                    stub_runtime_calls,
+                                    function,
+                                    "",
+                                    &snake,
+                                    &params,
+                                    &return_type,
+                                    &function_docs,
                                 );
 
                                 definitions.functions.push(code);
@@ -1787,7 +2059,7 @@ def {snake}({params}){return_type}:
         }
 
         let python_imports =
-            "from typing import TypeVar, Generic, Union, Optional, Protocol, Tuple, List, Any, Self
+            "from typing import TypeVar, Generic, Union, Optional, Protocol, Tuple, List, Any, Self, Callable
 from types import TracebackType
 from enum import Flag, Enum, auto
 from dataclasses import dataclass
@@ -1795,45 +2067,9 @@ from abc import abstractmethod
 import weakref
 ";
 
-        {
-            let mut file = File::create(path.join("types.py"))?;
-            if let Some(module) = locations.types_module.as_ref() {
-                writeln!(file, "{}", world_module_import(module, "peer"))?;
-                write!(
-                    file,
-                    "Some = peer.types.Some
-Ok = peer.types.Ok
-Err = peer.types.Err
-Result = peer.types.Result
-"
-                )?;
-            } else {
-                locations.types_module = Some(world_module.to_owned());
-
-                write!(
-                    file,
-                    "{file_header}{python_imports}
-
-S = TypeVar('S')
-@dataclass
-class Some(Generic[S]):
-    value: S
-
-T = TypeVar('T')
-@dataclass
-class Ok(Generic[T]):
-    value: T
-
-E = TypeVar('E')
-@dataclass(frozen=True)
-class Err(Generic[E], Exception):
-    value: E
-
-Result = Union[Ok[T], Err[E]]
-"
-                )?;
-            }
-        }
+        let async_imports = "import componentize_py_async_support
+from componentize_py_async_support.streams import StreamReader, StreamWriter, ByteStreamReader, ByteStreamWriter
+from componentize_py_async_support.futures import FutureReader, FutureWriter";
 
         let import = |prefix, interface| {
             let (module, package) = self.interface_package(interface);
@@ -1854,20 +2090,16 @@ Result = Union[Ok[T], Err[E]]
                     .type_imports
                     .union(&code.function_imports)
                     .map(|&interface| import("..", interface))
+                    .chain(self.need_async.then(|| async_imports.into()))
+                    .chain((!stub_runtime_calls).then(|| "import componentize_py_runtime".into()))
                     .collect::<Vec<_>>()
                     .join("\n");
                 let docs = docstring(world_module, code.docs, 0, None);
 
-                let imports = if stub_runtime_calls {
-                    imports
-                } else {
-                    format!("import componentize_py_runtime\n{imports}")
-                };
-
                 write!(
                     file,
                     "{file_header}{docs}{python_imports}
-from ..types import Result, Ok, Err, Some
+from componentize_py_types import Result, Ok, Err, Some
 {imports}
 {types}
 {functions}
@@ -1891,6 +2123,7 @@ from ..types import Result, Ok, Err, Some
                     .type_imports
                     .into_iter()
                     .map(|interface| import("..", interface))
+                    .chain(self.need_async.then(|| async_imports.into()))
                     .collect::<Vec<_>>()
                     .join("\n");
                 let docs = docstring(world_module, code.docs, 0, None);
@@ -1898,7 +2131,7 @@ from ..types import Result, Ok, Err, Some
                 write!(
                     file,
                     "{file_header}{docs}{python_imports}
-from ..types import Result, Ok, Err, Some
+from componentize_py_types import Result, Ok, Err, Some
 {imports}
 {types}
 "
@@ -1939,13 +2172,14 @@ class {camel}(Protocol):
             let imports = protocol_imports
                 .into_iter()
                 .map(|interface| import("..", interface))
+                .chain(self.need_async.then(|| async_imports.into()))
                 .collect::<Vec<_>>()
                 .join("\n");
 
             write!(
                 init,
                 "{file_header}{python_imports}
-from ..types import Result, Ok, Err, Some
+from componentize_py_types import Result, Ok, Err, Some
 {imports}
 {protocols}
 "
@@ -1983,21 +2217,17 @@ from ..types import Result, Ok, Err, Some
                         .collect(),
                 )
                 .map(|&interface| import(".", interface))
+                .chain(self.need_async.then(|| async_imports.into()))
+                .chain((!stub_runtime_calls).then(|| "import componentize_py_runtime".into()))
                 .collect::<Vec<_>>()
                 .join("\n");
 
             let docs = docstring(world_module, world_exports.docs, 0, None);
 
-            let imports = if stub_runtime_calls {
-                imports
-            } else {
-                format!("import componentize_py_runtime\n{imports}")
-            };
-
             write!(
                 file,
                 "{file_header}{docs}{python_imports}
-from .types import Result, Ok, Err, Some
+from componentize_py_types import Result, Ok, Err, Some
 {imports}
 {type_exports}
 {function_imports}
@@ -2093,6 +2323,9 @@ from .types import Result, Ok, Err, Some
                     let info = self.resource_info.get(&id).unwrap_or(empty);
                     info.local && info.remote
                 }
+                TypeDefKind::Stream(ty) | TypeDefKind::Future(ty) => ty
+                    .map(|ty| self.has_imported_and_exported_resource(ty))
+                    .unwrap_or(false),
                 kind => todo!("{kind:?}"),
             },
         }
@@ -2145,7 +2378,8 @@ impl<'a> TypeNames<'a> {
                                         self.imports.insert(interface);
                                         format!("{}.", self.summary.interface_package(interface).1)
                                     }
-                                    // todo: place anonymous types in types.py and import them from there
+                                    // todo: place anonymous types in types.py
+                                    // and import them from there
                                     _ => String::new(),
                                 }
                             };
@@ -2161,8 +2395,10 @@ impl<'a> TypeNames<'a> {
 
                             format!("{package}{name}")
                         } else {
-                            // As of this writing, there's no concept of forward declaration in Python, so we must
-                            // either use `Any` or `Self` for types which have not yet been fully declared.
+                            // As of this writing, there's no concept of forward
+                            // declaration in Python, so we must either use
+                            // `Any` or `Self` for types which have not yet been
+                            // fully declared.
                             if Some(id) == resource { "Self" } else { "Any" }.to_owned()
                         }
                     }
@@ -2198,17 +2434,126 @@ impl<'a> TypeNames<'a> {
                             .map(|ty| self.type_name(*ty, seen, resource))
                             .collect::<Vec<_>>()
                             .join(", ");
-                        let types = if types.is_empty() {
-                            "()".to_owned()
-                        } else {
-                            types
-                        };
                         format!("Tuple[{types}]")
                     }
                     TypeDefKind::Handle(Handle::Own(ty) | Handle::Borrow(ty)) => {
                         self.type_name(Type::Id(*ty), seen, resource)
                     }
                     TypeDefKind::Type(ty) => self.type_name(*ty, seen, resource),
+                    TypeDefKind::Stream(ty) => {
+                        if let Some(Type::U8 | Type::S8) = ty {
+                            "ByteStreamReader".into()
+                        } else {
+                            format!(
+                                "StreamReader[{}]",
+                                ty.map(|ty| self.type_name(ty, seen, resource))
+                                    .unwrap_or_else(|| "None".into())
+                            )
+                        }
+                    }
+                    TypeDefKind::Future(ty) => {
+                        format!(
+                            "FutureReader[{}]",
+                            ty.map(|ty| self.type_name(ty, seen, resource))
+                                .unwrap_or_else(|| "None".into())
+                        )
+                    }
+                    kind => todo!("{kind:?}"),
+                }
+            }
+        }
+    }
+
+    fn mangle_name(&mut self, ty: Type) -> String {
+        // TODO: Ensure the returned name is always distinct for distinct types
+        // (e.g. by incorporating interface version numbers and/or additional
+        // mangling as needed).
+        match ty {
+            Type::Bool => "bool".into(),
+            Type::U8 => "u8".into(),
+            Type::U16 => "u16".into(),
+            Type::U32 => "u32".into(),
+            Type::U64 => "u64".into(),
+            Type::S8 => "s8".into(),
+            Type::S16 => "s16".into(),
+            Type::S32 => "s32".into(),
+            Type::S64 => "s64".into(),
+            Type::ErrorContext => "error_context".into(),
+            Type::F32 => "f32".into(),
+            Type::F64 => "f64".into(),
+            Type::Char => "char".into(),
+            Type::String => "string".into(),
+            Type::Id(id) => {
+                let ty = &self.summary.resolve.types[id];
+                match &ty.kind {
+                    TypeDefKind::Record(_)
+                    | TypeDefKind::Variant(_)
+                    | TypeDefKind::Enum(_)
+                    | TypeDefKind::Flags(_)
+                    | TypeDefKind::Resource => {
+                        let package = if ty.owner == self.owner {
+                            String::new()
+                        } else {
+                            match ty.owner {
+                                TypeOwner::Interface(interface) => {
+                                    format!("{}_", self.summary.interface_package(interface).1)
+                                }
+                                _ => String::new(),
+                            }
+                        };
+
+                        let name = if let Some(name) = &ty.name {
+                            name.to_snake_case().escape()
+                        } else {
+                            format!("anon{}", self.summary.types.get_index_of(&id).unwrap())
+                        };
+
+                        format!("{package}{name}")
+                    }
+                    TypeDefKind::Option(some) => {
+                        format!("option_{}", self.mangle_name(*some))
+                    }
+                    TypeDefKind::Result(result) => format!(
+                        "result_{}_{}",
+                        result
+                            .ok
+                            .map(|ty| self.mangle_name(ty))
+                            .unwrap_or_else(|| "unit".into()),
+                        result
+                            .err
+                            .map(|ty| self.mangle_name(ty))
+                            .unwrap_or_else(|| "unit".into())
+                    ),
+                    TypeDefKind::List(ty) => {
+                        format!("list_{}", self.mangle_name(*ty))
+                    }
+                    TypeDefKind::Tuple(tuple) => {
+                        let types = tuple
+                            .types
+                            .iter()
+                            .map(|ty| self.mangle_name(*ty))
+                            .collect::<Vec<_>>()
+                            .join("_");
+                        format!("tuple{}_{types}", tuple.types.len())
+                    }
+                    TypeDefKind::Handle(Handle::Own(ty) | Handle::Borrow(ty)) => {
+                        self.mangle_name(Type::Id(*ty))
+                    }
+                    TypeDefKind::Type(ty) => self.mangle_name(*ty),
+                    TypeDefKind::Stream(ty) => {
+                        format!(
+                            "stream_{}",
+                            ty.map(|ty| self.mangle_name(ty))
+                                .unwrap_or_else(|| "unit".into())
+                        )
+                    }
+                    TypeDefKind::Future(ty) => {
+                        format!(
+                            "stream_{}",
+                            ty.map(|ty| self.mangle_name(ty))
+                                .unwrap_or_else(|| "unit".into())
+                        )
+                    }
                     kind => todo!("{kind:?}"),
                 }
             }
@@ -2222,8 +2567,8 @@ pub trait Escape {
 
 impl Escape for String {
     fn escape(self) -> Self {
-        // Escape Python keywords
-        // Source: https://docs.python.org/3/reference/lexical_analysis.html#keywords
+        // Escape Python keywords; source:
+        // https://docs.python.org/3/reference/lexical_analysis.html#keywords
         match self.as_str() {
             "False" | "None" | "True" | "and" | "as" | "assert" | "async" | "await" | "break"
             | "class" | "continue" | "def" | "del" | "elif" | "else" | "except" | "finally"
@@ -2240,11 +2585,13 @@ fn matches_resource(function: &MyFunction, resource: TypeId, direction: Directio
     match (direction, &function.kind) {
         (Direction::Import, FunctionKind::Import) | (Direction::Export, FunctionKind::Export) => {
             match &function.wit_kind {
-                wit_parser::FunctionKind::Freestanding => false,
+                wit_parser::FunctionKind::Freestanding
+                | wit_parser::FunctionKind::AsyncFreestanding => false,
                 wit_parser::FunctionKind::Method(id)
+                | wit_parser::FunctionKind::AsyncMethod(id)
                 | wit_parser::FunctionKind::Static(id)
+                | wit_parser::FunctionKind::AsyncStatic(id)
                 | wit_parser::FunctionKind::Constructor(id) => *id == resource,
-                _ => todo!("support async functions"),
             }
         }
         _ => false,

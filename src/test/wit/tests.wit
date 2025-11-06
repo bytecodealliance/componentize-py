@@ -4,8 +4,16 @@ interface simple-export {
      foo: func(v: u32) -> u32;
 }
 
+interface simple-async-export {
+     foo: async func(v: u32) -> u32;
+}
+
 interface simple-import-and-export {
     foo: func(v: u32) -> u32;
+}
+
+interface simple-async-import-and-export {
+    foo: async func(v: u32) -> u32;
 }
 
 interface resource-import-and-export {
@@ -134,6 +142,17 @@ interface resource-borrow-in-record {
   test: func(a: list<foo>) -> list<thing>;
 }
 
+interface streams-and-futures {
+  resource thing {
+    constructor(s: string);
+    get: async func() -> string;
+  }
+
+  echo-stream-u8: async func(s: stream<u8>) -> stream<u8>;
+  echo-future-string: async func(f: future<string>) -> future<string>;
+  short-reads: async func(s: stream<thing>) -> stream<thing>;
+}
+
 world tests {
   use resource-alias1.{thing};
   use resource-floats.{float};
@@ -141,6 +160,9 @@ world tests {
   export simple-export;
   import simple-import-and-export;
   export simple-import-and-export;
+  export simple-async-export;
+  import simple-async-import-and-export;
+  export simple-async-import-and-export;
   import resource-import-and-export;
   export resource-import-and-export;
   import resource-borrow-import;
@@ -155,6 +177,7 @@ world tests {
   export resource-alias2;
   import resource-borrow-in-record;
   export resource-borrow-in-record;
+  export streams-and-futures;
 
   export resource-floats-exports: interface {
     resource float {

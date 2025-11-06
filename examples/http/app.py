@@ -9,8 +9,8 @@ import asyncio
 import hashlib
 import poll_loop
 
+from componentize_py_types import Ok
 from wit_world import exports
-from wit_world.types import Ok
 from wit_world.imports import types
 from wit_world.imports.types import (
     Method_Get,

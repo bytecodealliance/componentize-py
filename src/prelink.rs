@@ -22,7 +22,8 @@ type ConfigsMatchedWorlds<'a> =
     IndexMap<String, (ConfigContext<ComponentizePyConfig>, Option<&'a str>)>;
 
 pub fn embedded_python_standard_library() -> Result<TempDir> {
-    // Untar the embedded copy of the Python standard library into a temporary directory
+    // Untar the embedded copy of the Python standard library into a temporary
+    // directory
     let stdlib = tempfile::tempdir()?;
 
     Archive::new(Decoder::new(Cursor::new(include_bytes!(concat!(
@@ -52,10 +53,18 @@ pub fn embedded_helper_utils() -> Result<TempDir> {
 pub fn bundle_libraries(library_path: Vec<(&str, Vec<PathBuf>)>) -> Result<Vec<Library>> {
     let mut libraries = vec![
         Library {
-            name: "libcomponentize_py_runtime.so".into(),
+            name: "libcomponentize_py_runtime_sync.so".into(),
             module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
                 env!("OUT_DIR"),
-                "/libcomponentize_py_runtime.so.zst"
+                "/libcomponentize_py_runtime_sync.so.zst"
+            ))))?,
+            dl_openable: false,
+        },
+        Library {
+            name: "libcomponentize_py_runtime_async.so".into(),
+            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/libcomponentize_py_runtime_async.so.zst"
             ))))?,
             dl_openable: false,
         },
@@ -167,12 +176,15 @@ pub fn search_for_libraries_and_configs<'a>(
 
     let libraries = bundle_libraries(library_path)?;
 
-    // Validate the paths parsed from any componentize-py.toml files discovered above and match them up with
-    // `module_worlds` entries.  Note that we use an `IndexMap` to preserve the order specified in `module_worlds`,
-    // which is required to be topologically sorted with respect to package dependencies.
+    // Validate the paths parsed from any componentize-py.toml files discovered
+    // above and match them up with `module_worlds` entries.  Note that we use
+    // an `IndexMap` to preserve the order specified in `module_worlds`, which
+    // is required to be topologically sorted with respect to package
+    // dependencies.
     //
-    // For any packages which contain componentize-py.toml files but no corresponding `module_worlds` entry, we use
-    // the `world` parameter as a default.
+    // For any packages which contain componentize-py.toml files but no
+    // corresponding `module_worlds` entry, we use the `world` parameter as a
+    // default.
     let configs: IndexMap<String, (ConfigContext<ComponentizePyConfig>, Option<&str>)> = {
         let mut configs = raw_configs
             .into_iter()
@@ -239,9 +251,11 @@ fn search_directory(
             let mut push = true;
             for existing in &mut *configs {
                 if path == existing.path.join("componentize-py.toml") {
-                    // When one directory in `PYTHON_PATH` is a subdirectory of the other, we consider the
-                    // subdirectory to be the true owner of the file.  This is important later, when we derive a
-                    // package name by stripping the root directory from the file path.
+                    // When one directory in `PYTHON_PATH` is a subdirectory of
+                    // the other, we consider the subdirectory to be the true
+                    // owner of the file.  This is important later, when we
+                    // derive a package name by stripping the root directory
+                    // from the file path.
                     if root > existing.root {
                         module.clone_into(&mut existing.module);
                         root.clone_into(&mut existing.root);
@@ -250,13 +264,15 @@ fn search_directory(
                     push = false;
                     break;
                 } else {
-                    // If we find a componentize-py.toml file under a Python module which will not be used because
-                    // we already found a version of that module in an earlier `PYTHON_PATH` directory, we'll
-                    // ignore the latest one.
+                    // If we find a componentize-py.toml file under a Python
+                    // module which will not be used because we already found a
+                    // version of that module in an earlier `PYTHON_PATH`
+                    // directory, we'll ignore the latest one.
                     //
-                    // For example, if the module `foo_sdk` appears twice in `PYTHON_PATH`, and both versions have
-                    // a componentize-py.toml file, we'll ignore the second one just as Python will ignore the
-                    // second module.
+                    // For example, if the module `foo_sdk` appears twice in
+                    // `PYTHON_PATH`, and both versions have a
+                    // componentize-py.toml file, we'll ignore the second one
+                    // just as Python will ignore the second module.
 
                     if modules_seen.contains(&module) {
                         bail!("multiple `componentize-py.toml` files found in module `{module}`");

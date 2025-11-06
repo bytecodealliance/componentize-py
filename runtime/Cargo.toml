@@ -1,7 +1,7 @@
 [package]
 name = "componentize-py-runtime"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [lib]
 crate-type = ["staticlib"]
@@ -14,4 +14,7 @@ num-bigint = "0.4.6"
 wit-bindgen = { version = "0.40.0", default-features = false, features = ["macros", "realloc"] }
 wit-bindgen-rt = { version = "0.40.0" }
 # TODO: switch to a release when available:
-wit-dylib-ffi = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "b1d8ff59", default-features = false }
+wit-dylib-ffi = { git = "https://github.com/dicej/wasm-tools", rev = "b072b0ca", features = ["async-raw"] }
+
+[features]
+async = []

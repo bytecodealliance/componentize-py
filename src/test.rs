@@ -38,6 +38,7 @@ static ENGINE: Lazy<Engine> = Lazy::new(|| {
     let mut config = Config::new();
     config.async_support(true);
     config.wasm_component_model(true);
+    config.wasm_component_model_async(true);
 
     Engine::new(&config).unwrap()
 });
@@ -127,9 +128,11 @@ impl<H: Host> Tester<H> {
         module_worlds: &[(&str, &str)],
         seed: [u8; 32],
     ) -> Result<Self> {
-        // TODO: create two versions of the component -- one with and one without an `add_to_linker` -- and run
-        // each test on each component in the `test` method (but probably not in the `proptest` method, since that
-        // would slow it down a lot).  This will help exercise the stub mechanism when pre-initializing.
+        // TODO: create two versions of the component -- one with and one
+        // without an `add_to_linker` -- and run each test on each component in
+        // the `test` method (but probably not in the `proptest` method, since
+        // that would slow it down a lot).  This will help exercise the stub
+        // mechanism when pre-initializing.
         let component = &Runtime::new()?.block_on(make_component(
             wit,
             world_module,
