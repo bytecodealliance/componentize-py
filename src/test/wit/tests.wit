@@ -142,7 +142,16 @@ interface resource-borrow-in-record {
   test: func(a: list<foo>) -> list<thing>;
 }
 
+interface host-thing-interface {
+  resource host-thing {
+    constructor(s: string);
+    get: async func() -> string;
+  }
+}
+
 interface streams-and-futures {
+  use host-thing-interface.{host-thing};
+
   resource thing {
     constructor(s: string);
     get: async func() -> string;
@@ -151,6 +160,9 @@ interface streams-and-futures {
   echo-stream-u8: async func(s: stream<u8>) -> stream<u8>;
   echo-future-string: async func(f: future<string>) -> future<string>;
   short-reads: async func(s: stream<thing>) -> stream<thing>;
+  short-reads-host: async func(s: stream<host-thing>) -> stream<host-thing>;
+  dropped-future-reader: async func(value: string) -> tuple<future<thing>, future<thing>>;
+  dropped-future-reader-host: async func(value: string) -> tuple<future<host-thing>, future<host-thing>>;
 }
 
 world tests {

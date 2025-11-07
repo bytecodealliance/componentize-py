@@ -310,6 +310,7 @@ mod async_ {
         },
         FutureWrite {
             _call: MyCall<'static>,
+            resources: Option<Vec<EmptyResource>>,
         },
     }
 
@@ -391,9 +392,16 @@ mod async_ {
                 }
                 call.stack.pop().unwrap_or(py.None()).into_bound(py)
             }
-            Promise::FutureWrite { .. } => {
+            Promise::FutureWrite { ref resources, .. } => {
                 let count = event >> 4;
                 let code = event & 0xF;
+
+                if let (RETURN_CODE_DROPPED, Some(resources)) = (code, resources) {
+                    for resource in resources {
+                        resource.restore(py)
+                    }
+                }
+
                 PyTuple::new(py, [code, count]).unwrap().into_any()
             }
         }
@@ -804,11 +812,16 @@ mod async_ {
         } else {
             unsafe { call.defer_deallocate(buffer, layout) };
 
+            call.resources = Some(Vec::new());
             let code = unsafe {
                 ty.lower(&mut call, buffer);
 
                 ty.write()(handle, buffer.cast())
             };
+            let resources = call
+                .resources
+                .take()
+                .and_then(|v| if v.is_empty() { None } else { Some(v) });
 
             Ok(if code == RETURN_CODE_BLOCKED {
                 ERR_CONSTRUCTOR
@@ -822,6 +835,7 @@ mod async_ {
                                 usize::try_from(handle).unwrap(),
                                 Box::into_raw(Box::new(async_::Promise::FutureWrite {
                                     _call: call,
+                                    resources,
                                 })) as usize,
                             ],
                         )
@@ -831,6 +845,13 @@ mod async_ {
             } else {
                 let count = code >> 4;
                 let code = code & 0xF;
+
+                if let (RETURN_CODE_DROPPED, Some(resources)) = (code, &resources) {
+                    for resource in resources {
+                        resource.restore(py)
+                    }
+                }
+
                 OK_CONSTRUCTOR
                     .get()
                     .unwrap()
@@ -1330,8 +1351,10 @@ impl Interpreter for MyInterpreter {
     }
 
     fn resource_dtor(ty: wit::Resource, handle: usize) {
+        // We don't currently include a `drop` function as part of the abstract
+        // base class we generate for an exported resource, so there's nothing
+        // to do here.  If/when that changes, we'll want to call `drop` here.
         _ = (ty, handle);
-        todo!()
     }
 }
 

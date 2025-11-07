@@ -40,6 +40,7 @@ wasmtime::component::bindgen!({
         "componentize-py:test/resource-floats.float": MyFloat,
         "resource-floats-imports.float": MyFloat,
         "componentize-py:test/resource-borrow-in-record.thing": ThingString,
+        "componentize-py:test/host-thing-interface.host-thing": ThingString,
     },
 });
 
@@ -1188,9 +1189,12 @@ fn test_short_reads(delay: bool) -> Result<()> {
                 things.push(thing.call_constructor(&mut store, string).await?);
             }
 
-            store
+            let received_things = store
                 .run_concurrent(async |store| {
                     let count = things.len();
+                    // Write the items all at once.  The receiver will only read them
+                    // one at a time, forcing us to retake ownership of the unwritten
+                    // items between writes.
                     let stream = store
                         .with(|store| StreamReader::new(store, VecProducer::new(things, delay)));
 
@@ -1199,6 +1203,8 @@ fn test_short_reads(delay: bool) -> Result<()> {
                     let received_things = Arc::new(Mutex::new(
                         Vec::<streams_and_futures::Thing>::with_capacity(count),
                     ));
+                    // Read only one item at a time, forcing the sender to retake
+                    // ownership of any unwritten items.
                     store.with(|store| {
                         stream.pipe(store, OneAtATime::new(received_things.clone(), delay))
                     });
@@ -1209,7 +1215,7 @@ fn test_short_reads(delay: bool) -> Result<()> {
 
                     let mut received_strings = Vec::with_capacity(strings.len());
                     let received_things = mem::take(received_things.lock().unwrap().deref_mut());
-                    for it in received_things {
+                    for &it in &received_things {
                         received_strings.push(thing.call_get(store, it).await?.0);
                     }
 
@@ -1221,7 +1227,212 @@ fn test_short_reads(delay: bool) -> Result<()> {
                             .collect::<Vec<_>>()
                     );
 
+                    anyhow::Ok(received_things)
+                })
+                .await??;
+
+            for it in received_things {
+                it.resource_drop_async::<()>(&mut store).await?;
+            }
+
+            anyhow::Ok(())
+        })?;
+
+        Ok(())
+    })
+}
+
+#[test]
+fn short_reads_host() -> Result<()> {
+    test_short_reads_host(false)
+}
+
+#[test]
+fn short_reads_host_with_delay() -> Result<()> {
+    test_short_reads_host(true)
+}
+
+fn test_short_reads_host(delay: bool) -> Result<()> {
+    use componentize_py::test::host_thing_interface::{
+        Host, HostHostThing, HostHostThingWithStore,
+    };
+
+    impl HostHostThingWithStore for HasSelf<Ctx> {
+        async fn get<T>(
+            accessor: &Accessor<T, Self>,
+            this: Resource<ThingString>,
+        ) -> Result<String> {
+            accessor.with(|mut store| Ok(store.get().table.get(&this)?.0.clone()))
+        }
+    }
+
+    impl HostHostThing for Ctx {
+        async fn new(&mut self, v: String) -> Result<Resource<ThingString>> {
+            Ok(self.ctx().table.push(ThingString(v))?)
+        }
+
+        async fn drop(&mut self, this: Resource<ThingString>) -> Result<()> {
+            Ok(self.ctx().table.delete(this).map(|_| ())?)
+        }
+    }
+
+    impl Host for Ctx {}
+
+    TESTER.test(|world, store, runtime| {
+        runtime.block_on(async {
+            let instance = world.componentize_py_test_streams_and_futures();
+
+            let strings = ["a", "b", "c", "d", "e"];
+            let mut things = Vec::with_capacity(strings.len());
+            for string in strings {
+                things.push(store.data_mut().table.push(ThingString(string.into()))?);
+            }
+
+            store
+                .run_concurrent(async |store| {
+                    let count = things.len();
+                    // Write the items all at once.  The receiver will only read them
+                    // one at a time, forcing us to retake ownership of the unwritten
+                    // items between writes.
+                    let stream = store
+                        .with(|store| StreamReader::new(store, VecProducer::new(things, delay)));
+
+                    let (stream, task) = instance.call_short_reads_host(store, stream).await?;
+
+                    let received_things = Arc::new(Mutex::new(
+                        Vec::<Resource<ThingString>>::with_capacity(count),
+                    ));
+                    // Read only one item at a time, forcing the sender to retake
+                    // ownership of any unwritten items.
+                    store.with(|store| {
+                        stream.pipe(store, OneAtATime::new(received_things.clone(), delay))
+                    });
+
+                    task.block(store).await;
+
+                    assert_eq!(count, received_things.lock().unwrap().len());
+
+                    let received_strings = store.with(|mut store| {
+                        mem::take(received_things.lock().unwrap().deref_mut())
+                            .into_iter()
+                            .map(|v| Ok(store.get().table.delete(v)?.0))
+                            .collect::<Result<Vec<_>>>()
+                    })?;
+
+                    assert_eq!(
+                        &strings[..],
+                        &received_strings
+                            .iter()
+                            .map(|s| s.as_str())
+                            .collect::<Vec<_>>()
+                    );
+
                     anyhow::Ok(())
+                })
+                .await?
+        })?;
+
+        Ok(())
+    })
+}
+
+#[test]
+fn dropped_future_reader() -> Result<()> {
+    test_dropped_future_reader(false)
+}
+
+#[test]
+fn dropped_future_reader_with_delay() -> Result<()> {
+    test_dropped_future_reader(true)
+}
+
+fn test_dropped_future_reader(delay: bool) -> Result<()> {
+    TESTER.test(|world, mut store, runtime| {
+        runtime.block_on(async {
+            let instance = world.componentize_py_test_streams_and_futures();
+            let thing = instance.thing();
+
+            let it = store
+                .run_concurrent(async |store| {
+                    let expected = "Beware the Jubjub bird, and shun\n\tThe frumious Bandersnatch!";
+                    let ((mut rx1, rx2), task) = instance
+                        .call_dropped_future_reader(store, expected.into())
+                        .await?;
+                    // Close the future without reading the value.  This will
+                    // force the sender to retake ownership of the value it
+                    // tried to write.
+                    rx1.close_with(store);
+
+                    let received = Arc::new(Mutex::new(None::<streams_and_futures::Thing>));
+                    store.with(|store| {
+                        rx2.pipe(store, OptionConsumer::new(received.clone(), delay))
+                    });
+
+                    task.block(store).await;
+
+                    let it = received.lock().unwrap().take().unwrap();
+
+                    assert_eq!(expected, &thing.call_get(store, it).await?.0);
+
+                    anyhow::Ok(it)
+                })
+                .await??;
+
+            it.resource_drop_async::<()>(&mut store).await?;
+
+            anyhow::Ok(())
+        })?;
+
+        Ok(())
+    })
+}
+
+#[test]
+fn dropped_future_reader_host() -> Result<()> {
+    test_dropped_future_reader_host(false)
+}
+
+#[test]
+fn dropped_future_reader_host_with_delay() -> Result<()> {
+    test_dropped_future_reader_host(true)
+}
+
+fn test_dropped_future_reader_host(delay: bool) -> Result<()> {
+    TESTER.test(|world, store, runtime| {
+        runtime.block_on(async {
+            let instance = world.componentize_py_test_streams_and_futures();
+
+            store
+                .run_concurrent(async |store| {
+                    let expected = "Beware the Jubjub bird, and shun\n\tThe frumious Bandersnatch!";
+                    let ((mut rx1, rx2), task) = instance
+                        .call_dropped_future_reader_host(store, expected.into())
+                        .await?;
+                    // Close the future without reading the value.  This will
+                    // force the sender to retake ownership of the value it
+                    // tried to write.
+                    rx1.close_with(store);
+
+                    let received = Arc::new(Mutex::new(None::<Resource<ThingString>>));
+                    store.with(|store| {
+                        rx2.pipe(store, OptionConsumer::new(received.clone(), delay))
+                    });
+
+                    task.block(store).await;
+
+                    let it = store.with(|mut store| {
+                        anyhow::Ok(
+                            store
+                                .get()
+                                .table
+                                .delete(received.lock().unwrap().take().unwrap())?
+                                .0,
+                        )
+                    })?;
+
+                    assert_eq!(expected, &it);
+
+                    anyhow::Ok(it)
                 })
                 .await?
         })?;
