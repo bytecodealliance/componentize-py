@@ -12,12 +12,15 @@ use {
     std::{
         borrow::Cow,
         collections::HashMap,
-        fs, iter,
+        fs,
+        io::Cursor,
+        iter,
         ops::Deref,
         path::{Path, PathBuf},
         str,
     },
     summary::{Escape, Locations, Summary},
+    tar::Archive,
     wasm_encoder::{CustomSection, Section as _},
     wasmtime::{
         Config, Engine, Store,
@@ -33,6 +36,7 @@ use {
         CloneMaps, Package, PackageName, Resolve, Stability, TypeDefKind, UnresolvedPackageGroup,
         World, WorldId, WorldItem, WorldKey,
     },
+    zstd::Decoder,
 };
 
 pub mod command;
@@ -218,6 +222,13 @@ pub fn generate_bindings(
         &mut Locations::default(),
         true,
     )?;
+
+    Archive::new(Decoder::new(Cursor::new(include_bytes!(concat!(
+        env!("OUT_DIR"),
+        "/bundled.tar.zst"
+    ))))?)
+    .unpack(output_dir)
+    .unwrap();
 
     Ok(())
 }

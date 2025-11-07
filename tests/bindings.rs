@@ -14,7 +14,7 @@ use tar::Archive;
 fn lint_cli_bindings() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     fs_extra::copy_items(
-        &["./examples/cli", "./wit", "./bundled"],
+        &["./examples/cli", "./wit"],
         dir.path(),
         &CopyOptions::new(),
     )?;
@@ -24,7 +24,7 @@ fn lint_cli_bindings() -> anyhow::Result<()> {
 
     assert!(predicate::path::is_dir().eval(&path.join("wit_world")));
 
-    mypy_check(&path, ["--strict", "."]);
+    mypy_check(&path, ["--strict", "-m", "app"]);
 
     Ok(())
 }
@@ -33,15 +33,16 @@ fn lint_cli_bindings() -> anyhow::Result<()> {
 fn lint_http_bindings() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     fs_extra::copy_items(
-        &["./examples/http", "./wit", "./bundled"],
+        &["./examples/http", "./wit"],
         dir.path(),
         &CopyOptions::new(),
     )?;
-    // poll_loop.py has many errors that might not be worth adjusting at the moment, so ignore for now
-    fs::remove_file(dir.path().join("bundled/poll_loop.py")).unwrap();
     let path = dir.path().join("http");
 
     generate_bindings(&path, "wasi:http/proxy@0.2.0")?;
+
+    // poll_loop.py has many errors that might not be worth adjusting at the moment, so ignore for now
+    fs::remove_file(path.join("poll_loop.py")).unwrap();
 
     assert!(predicate::path::is_dir().eval(&path.join("wit_world")));
 
@@ -53,8 +54,6 @@ fn lint_http_bindings() -> anyhow::Result<()> {
             "--ignore-missing-imports",
             "-m",
             "app",
-            "-p",
-            "wit_world",
         ],
     );
 
@@ -65,7 +64,7 @@ fn lint_http_bindings() -> anyhow::Result<()> {
 fn lint_http_p3_bindings() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     fs_extra::copy_items(
-        &["./examples/http-p3", "./wit", "./bundled"],
+        &["./examples/http-p3", "./wit"],
         dir.path(),
         &CopyOptions::new(),
     )?;
@@ -77,7 +76,7 @@ fn lint_http_p3_bindings() -> anyhow::Result<()> {
 
     _ = dir.keep();
 
-    mypy_check(&path, ["--strict", "-m", "app", "-p", "wit_world"]);
+    mypy_check(&path, ["--strict", "-m", "app"]);
 
     Ok(())
 }
@@ -86,7 +85,7 @@ fn lint_http_p3_bindings() -> anyhow::Result<()> {
 fn lint_matrix_math_bindings() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     fs_extra::copy_items(
-        &["./examples/matrix-math", "./wit", "./bundled"],
+        &["./examples/matrix-math", "./wit"],
         dir.path(),
         &CopyOptions::new(),
     )?;
@@ -107,8 +106,6 @@ fn lint_matrix_math_bindings() -> anyhow::Result<()> {
             "silent",
             "-m",
             "app",
-            "-p",
-            "wit_world",
         ],
     );
 
@@ -118,11 +115,7 @@ fn lint_matrix_math_bindings() -> anyhow::Result<()> {
 #[test]
 fn lint_sandbox_bindings() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
-    fs_extra::copy_items(
-        &["./examples/sandbox", "./bundled"],
-        dir.path(),
-        &CopyOptions::new(),
-    )?;
+    fs_extra::copy_items(&["./examples/sandbox"], dir.path(), &CopyOptions::new())?;
     let path = dir.path().join("sandbox");
 
     cargo::cargo_bin_cmd!("componentize-py")
@@ -133,7 +126,7 @@ fn lint_sandbox_bindings() -> anyhow::Result<()> {
 
     assert!(predicate::path::is_dir().eval(&path.join("wit_world")));
 
-    mypy_check(&path, ["--strict", "-m", "guest", "-p", "wit_world"]);
+    mypy_check(&path, ["--strict", "-m", "guest"]);
 
     Ok(())
 }
@@ -142,7 +135,7 @@ fn lint_sandbox_bindings() -> anyhow::Result<()> {
 fn lint_tcp_bindings() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     fs_extra::copy_items(
-        &["./examples/tcp", "./wit", "./bundled"],
+        &["./examples/tcp", "./wit"],
         dir.path(),
         &CopyOptions::new(),
     )?;
@@ -152,7 +145,7 @@ fn lint_tcp_bindings() -> anyhow::Result<()> {
 
     assert!(predicate::path::is_dir().eval(&path.join("wit_world")));
 
-    mypy_check(&path, ["--strict", "."]);
+    mypy_check(&path, ["--strict", "-m", "app"]);
 
     Ok(())
 }
@@ -184,18 +177,10 @@ where
 
     Command::new(venv_path(path).join("mypy"))
         .current_dir(path)
-        .env(
-            "MYPYPATH",
-            ["bundled"]
-                .into_iter()
-                .map(|v| path.parent().unwrap().join(v).to_str().unwrap().to_string())
-                .collect::<Vec<_>>()
-                .join(":"),
-        )
         .args(args)
         .assert()
         .success()
-        .stdout(predicate::str::is_match("Success: no issues found in \\d+ source files").unwrap())
+        .stdout(predicate::str::is_match("Success: no issues found in 1 source file").unwrap())
 }
 
 fn venv_path(path: &Path) -> PathBuf {
