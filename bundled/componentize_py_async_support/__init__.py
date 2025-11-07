@@ -26,6 +26,11 @@ class _FutureState:
     handles: list[asyncio.Handle]
     pending_count: int
 
+class _ReturnCode:
+    COMPLETED = 0
+    DROPPED = 1
+    CANCELLED = 2
+
 class _CallbackCode:
     EXIT = 0
     YIELD = 1

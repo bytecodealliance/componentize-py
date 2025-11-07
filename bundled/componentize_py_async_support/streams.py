@@ -4,11 +4,7 @@ import weakref
 
 from typing import TypeVar, Generic, Self, cast
 from types import TracebackType
-
-class _ReturnCode:
-    COMPLETED = 0
-    DROPPED = 1
-    CANCELLED = 2
+from componentize_py_async_support import _ReturnCode
 
 class ByteStreamReader:
     def __init__(self, type_: int, handle: int):

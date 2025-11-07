@@ -10,7 +10,7 @@ within a guest component.
 
 ## Prerequisites
 
-* `wasmtime` 39.0.0 or later
+* `wasmtime` 38.0.0 or later
 * `componentize-py` 0.19.0
 * `NumPy`, built for WASI
 
@@ -19,10 +19,10 @@ not yet publish WASI builds.
 
 Below, we use [Rust](https://rustup.rs/)'s `cargo` to install `Wasmtime`.  If
 you don't have `cargo`, you can download and install from
-https://github.com/bytecodealliance/wasmtime/releases/tag/v39.0.0.
+https://github.com/bytecodealliance/wasmtime/releases/tag/v38.0.0.
 
 ```
-cargo install --version 39.0.0 wasmtime-cli
+cargo install --version 38.0.0 wasmtime-cli
 pip install componentize-py==0.19.0
 curl -OL https://github.com/dicej/wasi-wheels/releases/download/v0.0.2/numpy-wasi.tar.gz
 tar xf numpy-wasi.tar.gz

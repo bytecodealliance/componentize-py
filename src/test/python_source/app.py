@@ -5,12 +5,14 @@ import resource_aggregates
 import resource_alias1
 import resource_borrow_in_record
 import componentize_py_async_support
+import streams_and_futures as my_streams_and_futures
 
 from componentize_py_types import Result, Ok, Err
 from tests import exports, imports
 from tests.imports import resource_borrow_import
 from tests.imports import simple_import_and_export
 from tests.imports import simple_async_import_and_export
+from tests.imports import host_thing_interface
 from tests.exports import resource_alias2
 from tests.exports import streams_and_futures
 from typing import Tuple, List, Optional
@@ -147,6 +149,42 @@ async def pipe_things(rx: StreamReader[streams_and_futures.Thing], tx: StreamWri
     # Write the things all at once.  The host will read them only one at a time,
     # forcing us to re-take ownership of any unwritten items between writes.
     await tx.write_all(things)
+
+async def pipe_host_things(rx: StreamReader[host_thing_interface.HostThing], tx: StreamWriter[host_thing_interface.HostThing]):
+    # Read the things one at a time, forcing the host to re-take ownership of
+    # any unwritten items between writes.
+    things = []
+    while not rx.writer_dropped:
+        things += await rx.read(1)
+
+    # Write the things all at once.  The host will read them only one at a time,
+    # forcing us to re-take ownership of any unwritten items between writes.
+    await tx.write_all(things)
+
+async def write_thing(thing: my_streams_and_futures.Thing,
+                      tx1: FutureWriter[streams_and_futures.Thing],
+                      tx2: FutureWriter[streams_and_futures.Thing]):
+    # The host will drop the first reader without reading, which should give us
+    # back ownership of `thing`.
+    wrote = await tx1.write(thing)
+    assert not wrote
+    # The host will read from the second reader, though.
+    wrote = await tx2.write(thing)
+    assert wrote
+
+async def write_host_thing(thing: host_thing_interface.HostThing,
+                      tx1: FutureWriter[host_thing_interface.HostThing],
+                      tx2: FutureWriter[host_thing_interface.HostThing]):
+    # The host will drop the first reader without reading, which should give us
+    # back ownership of `thing`.
+    wrote = await tx1.write(thing)
+    assert not wrote
+    # The host will read from the second reader, though.
+    wrote = await tx2.write(thing)
+    assert wrote
+
+def unreachable() -> str:
+    raise AssertionError
         
 class StreamsAndFutures(exports.StreamsAndFutures):
     async def echo_stream_u8(self, stream: ByteStreamReader) -> ByteStreamReader:
@@ -155,8 +193,6 @@ class StreamsAndFutures(exports.StreamsAndFutures):
         return rx
 
     async def echo_future_string(self, future: FutureReader[str]) -> FutureReader[str]:
-        def unreachable() -> str:
-            raise AssertionError
         tx, rx = tests.string_future(unreachable)
         componentize_py_async_support.spawn(pipe_strings(future, tx))
         return rx
@@ -165,6 +201,23 @@ class StreamsAndFutures(exports.StreamsAndFutures):
         tx, rx = tests.streams_and_futures_thing_stream()
         componentize_py_async_support.spawn(pipe_things(stream, tx))
         return rx
+
+    async def short_reads_host(self, stream: StreamReader[host_thing_interface.HostThing]) -> StreamReader[host_thing_interface.HostThing]:
+        tx, rx = tests.host_thing_interface_host_thing_stream()
+        componentize_py_async_support.spawn(pipe_host_things(stream, tx))
+        return rx
+
+    async def dropped_future_reader(self, value: str) -> tuple[FutureReader[streams_and_futures.Thing], FutureReader[streams_and_futures.Thing]]:
+        tx1, rx1 = tests.streams_and_futures_thing_future(unreachable)
+        tx2, rx2 = tests.streams_and_futures_thing_future(unreachable)
+        componentize_py_async_support.spawn(write_thing(my_streams_and_futures.Thing(value), tx1, tx2))
+        return (rx1, rx2)
+
+    async def dropped_future_reader_host(self, value: str) -> tuple[FutureReader[host_thing_interface.HostThing], FutureReader[host_thing_interface.HostThing]]:
+        tx1, rx1 = tests.host_thing_interface_host_thing_future(unreachable)
+        tx2, rx2 = tests.host_thing_interface_host_thing_future(unreachable)
+        componentize_py_async_support.spawn(write_host_thing(host_thing_interface.HostThing(value), tx1, tx2))
+        return (rx1, rx2)
 
 class Tests(tests.Tests):
     def test_resource_borrow_import(self, v: int) -> int:

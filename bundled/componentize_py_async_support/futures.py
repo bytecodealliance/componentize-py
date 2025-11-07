@@ -4,6 +4,7 @@ import weakref
 
 from typing import TypeVar, Generic, cast, Self, Any, Callable
 from types import TracebackType
+from componentize_py_async_support import _ReturnCode
 
 T = TypeVar('T')
 
@@ -13,7 +14,7 @@ class FutureReader(Generic[T]):
         self.handle: int | None = handle
         self.finalizer = weakref.finalize(self, componentize_py_runtime.future_drop_readable, type_, handle)
 
-    async def read(self) -> T | None:
+    async def read(self) -> T:
         self.finalizer.detach()
         handle = self.handle
         self.handle = None
@@ -57,15 +58,25 @@ class FutureWriter(Generic[T]):
         self.default = default
         self.finalizer = weakref.finalize(self, write_default, type_, handle, default)
 
-    async def write(self, value: T) -> None:
+    async def write(self, value: T) -> bool:
         self.finalizer.detach()
         handle = self.handle
         self.handle = None
         if handle is not None:
-            await componentize_py_async_support.await_result(
+            code, _ = await componentize_py_async_support.await_result(
                 componentize_py_runtime.future_write(self.type_, handle, value)
             )
             componentize_py_runtime.future_drop_writable(self.type_, handle)
+            match code:
+                case _ReturnCode.COMPLETED:
+                    return True
+                case _ReturnCode.DROPPED:
+                    return False
+                case _ReturnCode.CANCELLED:
+                    # todo
+                    raise NotImplementedError
+                case _:
+                    raise AssertionError
         else:
             raise AssertionError
 
