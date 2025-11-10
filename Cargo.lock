@@ -478,7 +478,7 @@ dependencies = [
 
 [[package]]
 name = "componentize-py"
-version = "0.19.1"
+version = "0.19.2"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -508,13 +508,13 @@ dependencies = [
  "test-generator",
  "tokio",
  "toml 0.8.23",
- "wasm-encoder 0.240.0 (git+https://github.com/bytecodealliance/wasm-tools?rev=fac9fb50)",
- "wasmparser 0.240.0 (git+https://github.com/bytecodealliance/wasm-tools?rev=fac9fb50)",
+ "wasm-encoder 0.240.0 (git+https://github.com/bytecodealliance/wasm-tools?rev=37f05db5)",
+ "wasmparser 0.240.0 (git+https://github.com/bytecodealliance/wasm-tools?rev=37f05db5)",
  "wasmtime",
  "wasmtime-wasi",
  "wit-component 0.240.0",
  "wit-dylib",
- "wit-parser 0.240.0 (git+https://github.com/bytecodealliance/wasm-tools?rev=fac9fb50)",
+ "wit-parser 0.240.0 (git+https://github.com/bytecodealliance/wasm-tools?rev=37f05db5)",
  "zstd",
 ]
 
@@ -3132,19 +3132,19 @@ dependencies = [
 [[package]]
 name = "wasm-encoder"
 version = "0.240.0"
-source = "git+https://github.com/bytecodealliance/wasm-tools?rev=b1d8ff59#b1d8ff591bcb8c052b54c3c17495bbbef401897c"
+source = "git+https://github.com/bytecodealliance/wasm-tools?rev=37f05db5#37f05db5d62705c433e1231241dd6e3dcc234b53"
 dependencies = [
  "leb128fmt",
- "wasmparser 0.240.0 (git+https://github.com/bytecodealliance/wasm-tools?rev=b1d8ff59)",
+ "wasmparser 0.240.0 (git+https://github.com/bytecodealliance/wasm-tools?rev=37f05db5)",
 ]
 
 [[package]]
 name = "wasm-encoder"
 version = "0.240.0"
-source = "git+https://github.com/bytecodealliance/wasm-tools?rev=fac9fb50#fac9fb5065c9d4b3adc057fc83df67f49cf1687f"
+source = "git+https://github.com/bytecodealliance/wasm-tools?rev=b1d8ff59#b1d8ff591bcb8c052b54c3c17495bbbef401897c"
 dependencies = [
  "leb128fmt",
- "wasmparser 0.240.0 (git+https://github.com/bytecodealliance/wasm-tools?rev=fac9fb50)",
+ "wasmparser 0.240.0 (git+https://github.com/bytecodealliance/wasm-tools?rev=b1d8ff59)",
 ]
 
 [[package]]
@@ -3169,6 +3169,17 @@ dependencies = [
 [[package]]
 name = "wasm-metadata"
 version = "0.240.0"
+source = "git+https://github.com/bytecodealliance/wasm-tools?rev=37f05db5#37f05db5d62705c433e1231241dd6e3dcc234b53"
+dependencies = [
+ "anyhow",
+ "indexmap",
+ "wasm-encoder 0.240.0 (git+https://github.com/bytecodealliance/wasm-tools?rev=37f05db5)",
+ "wasmparser 0.240.0 (git+https://github.com/bytecodealliance/wasm-tools?rev=37f05db5)",
+]
+
+[[package]]
+name = "wasm-metadata"
+version = "0.240.0"
 source = "git+https://github.com/bytecodealliance/wasm-tools?rev=b1d8ff59#b1d8ff591bcb8c052b54c3c17495bbbef401897c"
 dependencies = [
  "anyhow",
@@ -3182,17 +3193,6 @@ dependencies = [
  "url",
  "wasm-encoder 0.240.0 (git+https://github.com/bytecodealliance/wasm-tools?rev=b1d8ff59)",
  "wasmparser 0.240.0 (git+https://github.com/bytecodealliance/wasm-tools?rev=b1d8ff59)",
-]
-
-[[package]]
-name = "wasm-metadata"
-version = "0.240.0"
-source = "git+https://github.com/bytecodealliance/wasm-tools?rev=fac9fb50#fac9fb5065c9d4b3adc057fc83df67f49cf1687f"
-dependencies = [
- "anyhow",
- "indexmap",
- "wasm-encoder 0.240.0 (git+https://github.com/bytecodealliance/wasm-tools?rev=fac9fb50)",
- "wasmparser 0.240.0 (git+https://github.com/bytecodealliance/wasm-tools?rev=fac9fb50)",
 ]
 
 [[package]]
@@ -3223,7 +3223,7 @@ dependencies = [
 [[package]]
 name = "wasmparser"
 version = "0.240.0"
-source = "git+https://github.com/bytecodealliance/wasm-tools?rev=b1d8ff59#b1d8ff591bcb8c052b54c3c17495bbbef401897c"
+source = "git+https://github.com/bytecodealliance/wasm-tools?rev=37f05db5#37f05db5d62705c433e1231241dd6e3dcc234b53"
 dependencies = [
  "bitflags",
  "hashbrown 0.15.5",
@@ -3235,7 +3235,7 @@ dependencies = [
 [[package]]
 name = "wasmparser"
 version = "0.240.0"
-source = "git+https://github.com/bytecodealliance/wasm-tools?rev=fac9fb50#fac9fb5065c9d4b3adc057fc83df67f49cf1687f"
+source = "git+https://github.com/bytecodealliance/wasm-tools?rev=b1d8ff59#b1d8ff591bcb8c052b54c3c17495bbbef401897c"
 dependencies = [
  "bitflags",
  "hashbrown 0.15.5",
@@ -4024,7 +4024,7 @@ dependencies = [
 [[package]]
 name = "wit-component"
 version = "0.240.0"
-source = "git+https://github.com/bytecodealliance/wasm-tools?rev=fac9fb50#fac9fb5065c9d4b3adc057fc83df67f49cf1687f"
+source = "git+https://github.com/bytecodealliance/wasm-tools?rev=37f05db5#37f05db5d62705c433e1231241dd6e3dcc234b53"
 dependencies = [
  "anyhow",
  "bitflags",
@@ -4033,21 +4033,21 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
- "wasm-encoder 0.240.0 (git+https://github.com/bytecodealliance/wasm-tools?rev=fac9fb50)",
- "wasm-metadata 0.240.0 (git+https://github.com/bytecodealliance/wasm-tools?rev=fac9fb50)",
- "wasmparser 0.240.0 (git+https://github.com/bytecodealliance/wasm-tools?rev=fac9fb50)",
- "wit-parser 0.240.0 (git+https://github.com/bytecodealliance/wasm-tools?rev=fac9fb50)",
+ "wasm-encoder 0.240.0 (git+https://github.com/bytecodealliance/wasm-tools?rev=37f05db5)",
+ "wasm-metadata 0.240.0 (git+https://github.com/bytecodealliance/wasm-tools?rev=37f05db5)",
+ "wasmparser 0.240.0 (git+https://github.com/bytecodealliance/wasm-tools?rev=37f05db5)",
+ "wit-parser 0.240.0 (git+https://github.com/bytecodealliance/wasm-tools?rev=37f05db5)",
 ]
 
 [[package]]
 name = "wit-dylib"
 version = "0.240.0"
-source = "git+https://github.com/bytecodealliance/wasm-tools?rev=fac9fb50#fac9fb5065c9d4b3adc057fc83df67f49cf1687f"
+source = "git+https://github.com/bytecodealliance/wasm-tools?rev=37f05db5#37f05db5d62705c433e1231241dd6e3dcc234b53"
 dependencies = [
  "anyhow",
  "indexmap",
- "wasm-encoder 0.240.0 (git+https://github.com/bytecodealliance/wasm-tools?rev=fac9fb50)",
- "wit-parser 0.240.0 (git+https://github.com/bytecodealliance/wasm-tools?rev=fac9fb50)",
+ "wasm-encoder 0.240.0 (git+https://github.com/bytecodealliance/wasm-tools?rev=37f05db5)",
+ "wit-parser 0.240.0 (git+https://github.com/bytecodealliance/wasm-tools?rev=37f05db5)",
 ]
 
 [[package]]
@@ -4094,7 +4094,7 @@ dependencies = [
 [[package]]
 name = "wit-parser"
 version = "0.240.0"
-source = "git+https://github.com/bytecodealliance/wasm-tools?rev=fac9fb50#fac9fb5065c9d4b3adc057fc83df67f49cf1687f"
+source = "git+https://github.com/bytecodealliance/wasm-tools?rev=37f05db5#37f05db5d62705c433e1231241dd6e3dcc234b53"
 dependencies = [
  "anyhow",
  "id-arena",
@@ -4105,7 +4105,7 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "unicode-xid",
- "wasmparser 0.240.0 (git+https://github.com/bytecodealliance/wasm-tools?rev=fac9fb50)",
+ "wasmparser 0.240.0 (git+https://github.com/bytecodealliance/wasm-tools?rev=37f05db5)",
 ]
 
 [[package]]

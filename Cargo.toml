@@ -1,6 +1,6 @@
 [package]
 name = "componentize-py"
-version = "0.19.1"
+version = "0.19.2"
 edition = "2024"
 exclude = ["cpython"]
 
@@ -14,12 +14,15 @@ clap = { version = "4.5.20", features = ["derive"] }
 tar = "0.4.42"
 tempfile = "3.13.0"
 zstd = "0.13.2"
-# TODO: switch to wasm-tools release once https://github.com/bytecodealliance/wasm-tools/pull/2367 has been merged and released
-wasm-encoder = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "fac9fb50", features = ["wasmparser"] }
-wit-dylib = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "fac9fb50" }
-wit-parser = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "fac9fb50" }
-wit-component = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "fac9fb50" }
-wasmparser = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "fac9fb50" }
+# TODO: switch to wasm-tools release once
+# https://github.com/bytecodealliance/wasm-tools/pull/2367 and
+# https://github.com/bytecodealliance/wasm-tools/pull/2371 have been merged and
+# released
+wasm-encoder = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "37f05db5", features = ["wasmparser"] }
+wit-dylib = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "37f05db5" }
+wit-parser = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "37f05db5" }
+wit-component = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "37f05db5" }
+wasmparser = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "37f05db5" }
 indexmap = "2.6.0"
 bincode = "1.3.3"
 heck = "0.5.0"

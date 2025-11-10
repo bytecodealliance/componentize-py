@@ -65,6 +65,8 @@ mod bar_sdk {
     });
 }
 
+const DELAY: Duration = Duration::from_millis(100);
+
 pub struct ThingU32(u32);
 pub struct ThingList(Vec<u8>);
 pub struct ThingString(String);
@@ -230,7 +232,7 @@ fn simple_async_import_and_export() -> Result<()> {
 
     impl componentize_py::test::simple_async_import_and_export::HostWithStore for HasSelf<Ctx> {
         async fn foo<T>(_: &Accessor<T, Self>, v: u32) -> Result<u32> {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            tokio::time::sleep(DELAY).await;
             Ok(v + 2)
         }
     }
@@ -898,7 +900,7 @@ impl<T> VecProducer<T> {
         Self {
             source,
             sleep: if delay {
-                tokio::time::sleep(Duration::from_millis(10)).boxed()
+                tokio::time::sleep(DELAY).boxed()
             } else {
                 async {}.boxed()
             },
@@ -936,7 +938,7 @@ impl<T> VecConsumer<T> {
         Self {
             destination,
             sleep: if delay {
-                tokio::time::sleep(Duration::from_millis(10)).boxed()
+                tokio::time::sleep(DELAY).boxed()
             } else {
                 async {}.boxed()
             },
@@ -1017,7 +1019,7 @@ impl<T> OptionProducer<T> {
         Self {
             source,
             sleep: if delay {
-                tokio::time::sleep(Duration::from_millis(10)).boxed()
+                tokio::time::sleep(DELAY).boxed()
             } else {
                 async {}.boxed()
             },
@@ -1052,7 +1054,7 @@ impl<T> OptionConsumer<T> {
         Self {
             destination,
             sleep: if delay {
-                tokio::time::sleep(Duration::from_millis(10)).boxed()
+                tokio::time::sleep(DELAY).boxed()
             } else {
                 async {}.boxed()
             },
@@ -1131,6 +1133,7 @@ fn test_echo_future_string(delay: bool) -> Result<()> {
 struct OneAtATime<T> {
     destination: Arc<Mutex<Vec<T>>>,
     sleep: Pin<Box<dyn Future<Output = ()> + Send>>,
+    delay: bool,
 }
 
 impl<T> OneAtATime<T> {
@@ -1138,10 +1141,11 @@ impl<T> OneAtATime<T> {
         Self {
             destination,
             sleep: if delay {
-                tokio::time::sleep(Duration::from_millis(10)).boxed()
+                tokio::time::sleep(DELAY).boxed()
             } else {
                 async {}.boxed()
             },
+            delay,
         }
     }
 }
@@ -1156,9 +1160,14 @@ impl<D, T: Lift + 'static> StreamConsumer<D> for OneAtATime<T> {
         mut source: Source<Self::Item>,
         _: bool,
     ) -> Poll<Result<StreamResult>> {
+        let delay = self.delay;
         let sleep = &mut self.as_mut().get_mut().sleep;
         task::ready!(sleep.as_mut().poll(cx));
-        *sleep = async {}.boxed();
+        *sleep = if delay {
+            tokio::time::sleep(DELAY).boxed()
+        } else {
+            async {}.boxed()
+        };
 
         let value = &mut None;
         source.read(store, value)?;
