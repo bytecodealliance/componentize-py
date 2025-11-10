@@ -300,6 +300,7 @@ mod async_ {
             buffer: *mut u8,
         },
         StreamWrite {
+            _call: Option<MyCall<'static>>,
             _values: Option<Py<PyBytes>>,
             resources: Option<Vec<Vec<EmptyResource>>>,
         },
@@ -627,6 +628,7 @@ mod async_ {
                             [
                                 usize::try_from(handle).unwrap(),
                                 Box::into_raw(Box::new(async_::Promise::StreamWrite {
+                                    _call: None,
                                     _values: Some(values.unbind()),
                                     resources: None,
                                 })) as usize,
@@ -688,6 +690,7 @@ mod async_ {
                                 [
                                     usize::try_from(handle).unwrap(),
                                     Box::into_raw(Box::new(async_::Promise::StreamWrite {
+                                        _call: Some(call),
                                         _values: None,
                                         resources: need_restore_resources.then_some(resources),
                                     })) as usize,

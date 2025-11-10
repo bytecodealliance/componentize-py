@@ -483,6 +483,9 @@ def callback(event0: int, event1: int, event2: int) -> int:
                 case _:
                     # todo
                     raise NotImplementedError
+        case _Event.STREAM_READ | _Event.STREAM_WRITE | _Event.FUTURE_READ | _Event.FUTURE_WRITE:
+            componentize_py_runtime.waitable_join(event1, 0)
+            future_state.futures.pop(event1).set_result(event2)
         case _:
             # todo
             raise NotImplementedError
