@@ -1286,6 +1286,12 @@ impl<'a> Summary<'a> {
                 .collect::<Vec<_>>()
                 .join(", ");
 
+            let params = if params.is_empty() {
+                "borrows: int".to_string()
+            } else {
+                format!("{params}, borrows: int")
+            };
+
             (
                 "async ",
                 if stub_runtime_calls {
@@ -1298,7 +1304,7 @@ impl<'a> Summary<'a> {
 
 {class_method}
     def {ASYNC_START_PREFIX}{snake}({params}) -> int:
-        return componentize_py_async_support.first_poll({index}, {prefix}{snake}({args}))"
+        return componentize_py_async_support.first_poll({index}, borrows, {prefix}{snake}({args}))"
                     )
                 },
             )

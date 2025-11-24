@@ -154,7 +154,7 @@ interface streams-and-futures {
 
   resource thing {
     constructor(s: string);
-    get: async func() -> string;
+    get: async func(delay-millis: u32) -> string;
   }
 
   echo-stream-u8: async func(s: stream<u8>) -> stream<u8>;
@@ -224,4 +224,6 @@ world tests {
   import output: func(frame: frame);
 
   import get-bytes: func(count: u32) -> list<u8>;
+
+  import sleep: async func(delay-millis: u32);
 }

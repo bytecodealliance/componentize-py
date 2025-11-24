@@ -4,9 +4,10 @@ use {
     super::{Ctx, SEED, Tester},
     anyhow::{Error, Result, anyhow},
     exports::componentize_py::test::streams_and_futures,
-    futures::FutureExt,
+    futures::{FutureExt, TryStreamExt, stream::FuturesUnordered},
     once_cell::sync::Lazy,
     std::{
+        collections::BTreeMap,
         mem,
         ops::DerefMut,
         pin::Pin,
@@ -79,6 +80,13 @@ impl TestsImports for Ctx {
 
     async fn get_bytes(&mut self, count: u32) -> Result<Vec<u8>> {
         Ok(vec![42u8; usize::try_from(count).unwrap()])
+    }
+}
+
+impl TestsImportsWithStore for HasSelf<Ctx> {
+    async fn sleep<T>(_: &Accessor<T, Self>, delay_millis: u32) -> Result<()> {
+        tokio::time::sleep(Duration::from_millis(delay_millis as _)).await;
+        Ok(())
     }
 }
 
@@ -1222,16 +1230,37 @@ fn test_short_reads(delay: bool) -> Result<()> {
 
                     assert_eq!(count, received_things.lock().unwrap().len());
 
-                    let mut received_strings = Vec::with_capacity(strings.len());
                     let received_things = mem::take(received_things.lock().unwrap().deref_mut());
-                    for &it in &received_things {
-                        received_strings.push(thing.call_get(store, it).await?.0);
+
+                    // Dispatch the `thing.get` calls concurrently to test that
+                    // the runtime release borrows in async-lifted exports
+                    // correctly.
+                    let mut futures = FuturesUnordered::new();
+                    for (index, &it) in received_things.iter().enumerate() {
+                        futures.push(
+                            thing
+                                .call_get(
+                                    store,
+                                    it,
+                                    if delay {
+                                        u32::try_from(DELAY.as_millis()).unwrap()
+                                    } else {
+                                        0
+                                    },
+                                )
+                                .map(move |v| v.map(move |v| (index, v))),
+                        );
+                    }
+
+                    let mut received_strings = BTreeMap::new();
+                    while let Some((index, (string, _))) = futures.try_next().await? {
+                        received_strings.insert(index, string);
                     }
 
                     assert_eq!(
                         &strings[..],
                         &received_strings
-                            .iter()
+                            .values()
                             .map(|s| s.as_str())
                             .collect::<Vec<_>>()
                     );
@@ -1381,7 +1410,7 @@ fn test_dropped_future_reader(delay: bool) -> Result<()> {
 
                     let it = received.lock().unwrap().take().unwrap();
 
-                    assert_eq!(expected, &thing.call_get(store, it).await?.0);
+                    assert_eq!(expected, &thing.call_get(store, it, 0).await?.0);
 
                     anyhow::Ok(it)
                 })

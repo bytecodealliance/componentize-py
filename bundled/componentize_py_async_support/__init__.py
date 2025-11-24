@@ -424,7 +424,7 @@ def _set_future_state(future_state: _FutureState) -> None:
 
     _future_state.set(future_state)
 
-async def _return_result(export_index: int, coroutine: Any) -> None:
+async def _return_result(export_index: int, borrows: int, coroutine: Any) -> None:
     global _future_state
 
     try:
@@ -433,18 +433,18 @@ async def _return_result(export_index: int, coroutine: Any) -> None:
         except Err as e:
             result = e
 
-        componentize_py_runtime.call_task_return(export_index, result)    
+        componentize_py_runtime.call_task_return(export_index, borrows, result)
     except Exception as e:
         _loop.exception = e
 
     assert _future_state.get().pending_count > 0
     _future_state.get().pending_count -= 1
 
-def first_poll(export_index: int, coroutine: Any) -> int:
+def first_poll(export_index: int, borrows: int, coroutine: Any) -> int:
     context = Context()
     future_state = _FutureState(None, {}, [], 1)
     context.run(_set_future_state, future_state)
-    asyncio.create_task(_return_result(export_index, coroutine), context=context)    
+    asyncio.create_task(_return_result(export_index, borrows, coroutine), context=context)
     return _poll(future_state)
 
 def _poll(future_state: _FutureState) -> int:

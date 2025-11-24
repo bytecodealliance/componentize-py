@@ -7,7 +7,7 @@ from threading import Timer
 from typing import List, Tuple
 
 TIMEOUT_SECONDS = 20
-MEMORY_LIMIT_BYTES = 20 * 1024 * 1024
+MEMORY_LIMIT_BYTES = 40 * 1024 * 1024
 
 args = sys.argv[1:]
 if len(args) == 0:

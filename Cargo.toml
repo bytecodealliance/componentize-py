@@ -1,6 +1,6 @@
 [package]
 name = "componentize-py"
-version = "0.19.2"
+version = "0.19.3"
 edition = "2024"
 exclude = ["cpython"]
 
@@ -15,14 +15,17 @@ tar = "0.4.42"
 tempfile = "3.13.0"
 zstd = "0.13.2"
 # TODO: switch to wasm-tools release once
-# https://github.com/bytecodealliance/wasm-tools/pull/2367 and
-# https://github.com/bytecodealliance/wasm-tools/pull/2371 have been merged and
-# released
-wasm-encoder = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "37f05db5", features = ["wasmparser"] }
-wit-dylib = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "37f05db5" }
-wit-parser = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "37f05db5" }
-wit-component = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "37f05db5" }
-wasmparser = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "37f05db5" }
+# https://github.com/bytecodealliance/wasm-tools/pull/2367,
+# https://github.com/bytecodealliance/wasm-tools/pull/2371, and
+# https://github.com/bytecodealliance/wasm-tools/pull/2375 have been released,
+# but note that https://github.com/bytecodealliance/wasm-tools/pull/2376 broke
+# ABI compatibilty, so we'll also need to upgrade to Wasmtime 40+ to get
+# everything aligned.
+wasm-encoder = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "e2bb0a24", features = ["wasmparser"] }
+wit-dylib = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "e2bb0a24" }
+wit-parser = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "e2bb0a24" }
+wit-component = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "e2bb0a24" }
+wasmparser = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "e2bb0a24" }
 indexmap = "2.6.0"
 bincode = "1.3.3"
 heck = "0.5.0"
@@ -30,9 +33,8 @@ pyo3 = { version = "0.26.0", features = [
     "abi3-py39",
     "extension-module",
 ], optional = true }
-# TODO: switch to wasmtime 39.0.x when available
-wasmtime = { git = "https://github.com/bytecodealliance/wasmtime", rev = "efd56f68", features = [ "component-model-async" ] }
-wasmtime-wasi = { git = "https://github.com/bytecodealliance/wasmtime", rev = "efd56f68", features = [ "p3" ] }
+wasmtime = "39.0.0"
+wasmtime-wasi = { version = "39.0.0", features = [ "p3" ] }
 once_cell = "1.20.2"
 component-init-transform = { git = "https://github.com/dicej/component-init", rev = "2d965957" }
 async-trait = "0.1.83"
