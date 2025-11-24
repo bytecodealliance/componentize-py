@@ -8,10 +8,10 @@ sandboxed Python code snippets from within a Python app.
 ## Prerequisites
 
 * `wasmtime-py` 38.0.0 or later
-* `componentize-py` 0.19.2
+* `componentize-py` 0.19.3
 
 ```
-pip install componentize-py==0.19.2 wasmtime==38.0.0
+pip install componentize-py==0.19.3 wasmtime==38.0.0
 ```
 
 ## Running the demo
@@ -55,7 +55,7 @@ Traceback (most recent call last):
 
 ### Memory limit
 
-`host.py` limits guest memory usage to 20MB.  Any attempt to allocate beyond
+`host.py` limits guest memory usage to 40MB.  Any attempt to allocate beyond
 that limit will fail.
 
 ```shell-session

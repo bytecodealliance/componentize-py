@@ -32,10 +32,8 @@ use {
         alloc::{self, Layout},
         iter,
         marker::PhantomData,
-        mem,
-        ops::DerefMut,
-        slice, str,
-        sync::{Mutex, Once},
+        mem, slice, str,
+        sync::Once,
     },
     wit_dylib_ffi::{
         self as wit, Call, ExportFunction, Interpreter, List, Type, Wit, WitOption, WitResult,
@@ -83,8 +81,6 @@ struct Borrow {
     handle: u32,
     drop: unsafe extern "C" fn(u32),
 }
-
-static BORROWS: Mutex<Vec<Borrow>> = Mutex::new(Vec::new());
 
 #[derive(Debug)]
 struct Case {
@@ -160,8 +156,7 @@ impl<T: std::error::Error + Send + Sync + 'static> From<T> for Anyhow {
     }
 }
 
-fn release_borrows(py: Python) {
-    let borrows = mem::take(BORROWS.lock().unwrap().deref_mut());
+fn release_borrows(py: Python, borrows: Vec<Borrow>) {
     for Borrow {
         value,
         handle,
@@ -492,7 +487,7 @@ mod async_ {
 
     #[pyo3::pyfunction]
     #[pyo3(pass_module)]
-    fn call_task_return(module: Bound<PyModule>, index: u32, result: Bound<PyAny>) {
+    fn call_task_return(module: Bound<PyModule>, index: u32, borrows: usize, result: Bound<PyAny>) {
         let py = module.py();
         let index = usize::try_from(index).unwrap();
         let func = WIT.get().unwrap().export_func(index);
@@ -507,7 +502,9 @@ mod async_ {
 
         let mut call = MyCall::new(results);
         func.call_task_return(&mut call);
-        release_borrows(py);
+        if borrows != 0 {
+            release_borrows(py, *unsafe { Box::from_raw(borrows as *mut Vec<Borrow>) });
+        }
     }
 
     #[pyo3::pyfunction]
@@ -1239,6 +1236,20 @@ impl MyInterpreter {
                 });
             }
 
+            if async_ {
+                cx.stack.push(
+                    if cx.borrows.is_empty() {
+                        0
+                    } else {
+                        Box::into_raw(Box::new(mem::take(&mut cx.borrows))) as usize
+                    }
+                    .into_pyobject(py)
+                    .unwrap()
+                    .into_any()
+                    .unbind(),
+                );
+            }
+
             let mut params_py = mem::take(&mut cx.stack).into_iter();
             let export = &EXPORTS.get().unwrap()[func.index()];
             let result = match &export.kind {
@@ -1298,7 +1309,7 @@ impl MyInterpreter {
                     cx.stack.push(result);
                 }
 
-                release_borrows(py);
+                release_borrows(py, mem::take(&mut cx.borrows));
 
                 0
             }
@@ -1366,6 +1377,7 @@ struct MyCall<'a> {
     iter_stack: Vec<usize>,
     deferred_deallocations: Vec<(*mut u8, Layout)>,
     strings: Vec<String>,
+    borrows: Vec<Borrow>,
     stack: Vec<Py<PyAny>>,
     #[cfg(feature = "async")]
     resources: Option<Vec<async_::EmptyResource>>,
@@ -1378,6 +1390,7 @@ impl MyCall<'_> {
             iter_stack: Vec::new(),
             deferred_deallocations: Vec::new(),
             strings: Vec::new(),
+            borrows: Vec::new(),
             stack,
             #[cfg(feature = "async")]
             resources: None,
@@ -1899,7 +1912,7 @@ impl Call for MyCall<'_> {
                 // imported resource type
                 let value = imported_resource_from_canon(py, ty, handle);
 
-                BORROWS.lock().unwrap().push(Borrow {
+                self.borrows.push(Borrow {
                     value: value.clone_ref(py),
                     handle,
                     drop: ty.drop(),
