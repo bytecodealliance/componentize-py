@@ -2555,7 +2555,7 @@ impl<'a> TypeNames<'a> {
                     }
                     TypeDefKind::Future(ty) => {
                         format!(
-                            "stream_{}",
+                            "future_{}",
                             ty.map(|ty| self.mangle_name(ty))
                                 .unwrap_or_else(|| "unit".into())
                         )
