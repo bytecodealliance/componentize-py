@@ -778,8 +778,10 @@ mod async_ {
                     .unwrap()
             } else {
                 let code = code & 0xF;
-                if let RETURN_CODE_COMPLETED | RETURN_CODE_DROPPED = code {
-                    unsafe { ty.lift(&mut call, buffer) }
+                match code {
+                    RETURN_CODE_COMPLETED => unsafe { ty.lift(&mut call, buffer) },
+                    RETURN_CODE_DROPPED => unreachable!(),
+                    _ => todo!("handle cancellation"),
                 }
                 OK_CONSTRUCTOR
                     .get()
