@@ -16,6 +16,7 @@ use {
 };
 
 const ZSTD_COMPRESSION_LEVEL: i32 = 19;
+const DEFAULT_SDK_VERSION: &str = "27";
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 const PYTHON_EXECUTABLE: &str = "python.exe";
@@ -92,11 +93,63 @@ fn stubs_for_clippy(out_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+fn find_wasi_sdk(out_dir: &Path) -> Result<PathBuf> {
+    let mut wasi_sdk =
+        PathBuf::from(env::var_os("WASI_SDK_PATH").unwrap_or_else(|| "/opt/wasi-sdk".into()));
+
+    // Don't think we have to worry about a time-of-check time-of-use issue here
+    // Previously we assumed that it existed and the build failed when attempting to use it
+    // We'd do the same here if it was deleted after the check...
+    if wasi_sdk.exists() || env::var("NO_DOWNLOAD_WASI_SDK").unwrap_or_default() == "1" {
+        return Ok(wasi_sdk);
+    }
+
+    // otherwise we want to download the sdk into the target directory
+    let url = env::var("WASI_SDK_URL").or_else(|_| -> Result<String> {
+        // Version should be just the major version number, matching
+        // how it's given in the github release build pipeline
+        let version = match env::var("WASI_SDK_VERSION").ok() {
+            Some(v) => v,
+            None => DEFAULT_SDK_VERSION.to_string(),
+        };
+        // same as the github release pipeline, allow overriding source repo
+        let source = env::var("WASI_SDK_SOURCE").unwrap_or("WebAssembly".to_string());
+        // Wasi-sdk currently releases for x86_64 and arm64 linux, macos, and windows
+        let (arch, os) = match (env::consts::ARCH, env::consts::OS) {
+            pair @ ("x86_64", "linux" | "windows" | "macos") => pair,
+            ("aarch64", os @ ("linux" | "windows" | "macos")) => ("arm64", os),
+            _ => bail!("Unsupported platform for automatic wasi-sdk download: {} {}", env::consts::ARCH, env::consts::OS),
+        };
+        Ok(format!("https://github.com/{source}/wasi-sdk/releases/download/wasi-sdk-{version}/wasi-sdk-{version}.0-{arch}-{os}.tar.gz"))
+    })?;
+
+    // get the filename from the url
+    let filename = url
+        .rsplit('/')
+        .next()
+        .ok_or_else(|| anyhow!("could not get filename from url: {}", url))?;
+    // strip the .tar.gz suffix to get the directory name
+    let dir_name = filename.strip_suffix(".tar.gz").unwrap_or(filename);
+
+    wasi_sdk = out_dir.join(dir_name);
+    if wasi_sdk.exists() {
+        // already downloaded from a previous build
+        return Ok(wasi_sdk);
+    }
+    println!(
+        "cargo:warning=wasi-sdk not found, downloading from {} into {}",
+        url,
+        wasi_sdk.display()
+    );
+    fetch_extract(&url, out_dir)?;
+
+    Ok(wasi_sdk)
+}
+
 fn package_all_the_things(out_dir: &Path) -> Result<()> {
     let repo_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
 
-    let wasi_sdk =
-        PathBuf::from(env::var_os("WASI_SDK_PATH").unwrap_or_else(|| "/opt/wasi-sdk".into()));
+    let wasi_sdk = find_wasi_sdk(out_dir)?;
 
     maybe_make_cpython(&repo_dir, &wasi_sdk)?;
 
@@ -261,6 +314,7 @@ fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
                         cpython_wasi_dir.display()
                     ),
                 )
+                .env("WASI_SDK_PATH", wasi_sdk)
                 .env(
                     "LDFLAGS",
                     format!(
