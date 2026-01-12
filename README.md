@@ -63,7 +63,7 @@ To test it, you can install `wasmtime-py` and use it to generate host-side
 bindings for the component:
 
 > [!NOTE]
-> Due to compatibility issues with `wasmtime` versions beyond 38.x, **this example** requires version 38.0.0 or earlier: `pip install "wasmtime==38.0.0"`
+> Due to compatibility issues with `wasmtime-py` versions beyond 38.x, **this example** requires version 38.0.0 or earlier: `pip install "wasmtime==38.0.0"`
 
 ```shell
 pip install wasmtime
