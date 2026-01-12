@@ -3,7 +3,7 @@
 **A [Bytecode Alliance](https://bytecodealliance.org/) project**
 
 This is a tool to convert a Python application to a [WebAssembly
-component](https://github.com/WebAssembly/component-model).  It takes the
+component](https://github.com/WebAssembly/component-model). It takes the
 following as input:
 
 - a [WIT](https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md) file or directory
@@ -17,7 +17,7 @@ e.g. [`wasmtime`](https://github.com/bytecodealliance/wasmtime).
 ## Getting Started
 
 First, install [Python 3.10 or later](https://www.python.org/) and
-[pip](https://pypi.org/project/pip/) if you don't already have them.  Then,
+[pip](https://pypi.org/project/pip/) if you don't already have them. Then,
 install `componentize-py`:
 
 ```shell
@@ -62,6 +62,9 @@ componentize-py -d hello.wit -w hello componentize --stub-wasi app -o app.wasm
 To test it, you can install `wasmtime-py` and use it to generate host-side
 bindings for the component:
 
+> [!NOTE]
+> Due to compatibility issues with `wasmtime` versions beyond 38.x, **this example** requires version 38.0.0 or earlier: `pip install "wasmtime==38.0.0"`
+
 ```shell
 pip install wasmtime
 python3 -m wasmtime.bindgen app.wasm --out-dir hello_host
@@ -99,7 +102,7 @@ created.
 
 Currently, the application can only import dependencies during build time, which
 means any imports used at runtime must be resolved at the top level of the
-application module.  For example, if `x` is a module with a submodule named `y`
+application module. For example, if `x` is a module with a submodule named `y`
 the following may not work:
 
 ```python
@@ -110,7 +113,7 @@ class Hello(hello.Hello):
         return x.y.foo()
 ```
 
-That's because importing `x` does not necessarily resolve `y`.  This can be
+That's because importing `x` does not necessarily resolve `y`. This can be
 addressed by modifying the code to import `y` at the top level of the file:
 
 ```python
