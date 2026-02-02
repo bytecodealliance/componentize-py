@@ -294,7 +294,10 @@ fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
                     .current_dir(&cpython_native_dir)
                     .arg(format!(
                         "--prefix={}/install",
-                        cpython_native_dir.to_str().unwrap()
+                        cpython_native_dir.to_str().ok_or_else(|| anyhow!(
+                            "non-UTF8 path: {}",
+                            cpython_native_dir.display()
+                        ))?
                     )))?;
 
                 run(Command::new("make").current_dir(cpython_native_dir))?;
@@ -310,7 +313,7 @@ fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
 
             let dir = cpython_wasi_dir
                 .to_str()
-                .ok_or_else(|| anyhow!("non-utf8 path: {}", cpython_wasi_dir.display()))?;
+                .ok_or_else(|| anyhow!("non-UTF8 path: {}", cpython_wasi_dir.display()))?;
 
             // Configure CPython with SQLite support
             // The CFLAGS and LDFLAGS now include paths to both zlib AND sqlite
@@ -321,12 +324,12 @@ fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
                 )
                 .env(
                     "CFLAGS",
-                    format!("--target=wasm32-wasip2 -fPIC -I{dir}/deps/include",),
+                    format!("--target=wasm32-wasip2 -fPIC -I{dir}/deps/include"),
                 )
                 .env("WASI_SDK_PATH", wasi_sdk)
                 .env(
                     "LDFLAGS",
-                    format!("--target=wasm32-wasip2 -L{dir}/deps/lib",),
+                    format!("--target=wasm32-wasip2 -L{dir}/deps/lib"),
                 )
                 .current_dir(&cpython_wasi_dir)
                 .args([
@@ -334,11 +337,8 @@ fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
                     "-C",
                     "--host=wasm32-unknown-wasip2",
                     &format!("--build={}", String::from_utf8(config_guess)?),
-                    &format!(
-                        "--with-build-python={}/../build/{PYTHON_EXECUTABLE}",
-                        cpython_wasi_dir.to_str().unwrap()
-                    ),
-                    &format!("--prefix={}/install", cpython_wasi_dir.to_str().unwrap()),
+                    &format!("--with-build-python={dir}/../build/{PYTHON_EXECUTABLE}",),
+                    &format!("--prefix={dir}/install"),
                     "--disable-test-modules",
                     "--enable-ipv6",
                 ]))?;
@@ -578,7 +578,7 @@ fn build_zlib(wasi_sdk: &Path, install_dir: &Path) -> Result<()> {
 
     let prefix = install_dir
         .to_str()
-        .ok_or_else(|| anyhow!("non-utf8 path: {}", install_dir.display()))?;
+        .ok_or_else(|| anyhow!("non-UTF8 path: {}", install_dir.display()))?;
 
     let mut configure = Command::new("./configure");
     add_compile_envs(wasi_sdk, &mut configure);
@@ -591,12 +591,12 @@ fn build_zlib(wasi_sdk: &Path, install_dir: &Path) -> Result<()> {
     let ar_dir = wasi_sdk.join("bin/ar");
     let ar_dir = ar_dir
         .to_str()
-        .ok_or_else(|| anyhow!("non-utf8 path: {}", ar_dir.display()))?;
+        .ok_or_else(|| anyhow!("non-UTF8 path: {}", ar_dir.display()))?;
 
     let clang_dir = wasi_sdk.join("bin/clang");
     let clang_dir = clang_dir
         .to_str()
-        .ok_or_else(|| anyhow!("non-utf8 path: {}", clang_dir.display()))?;
+        .ok_or_else(|| anyhow!("non-UTF8 path: {}", clang_dir.display()))?;
 
     let mut make = Command::new("make");
     add_compile_envs(wasi_sdk, &mut make);
@@ -640,15 +640,24 @@ fn build_sqlite(wasi_sdk: &Path, install_dir: &Path) -> Result<()> {
     fs::create_dir_all(install_dir.join("include"))?;
 
     let sysroot = wasi_sdk.join("share/wasi-sysroot");
-    let sysroot_str = sysroot.to_string_lossy();
+    let sysroot_str = sysroot
+        .to_str()
+        .ok_or_else(|| anyhow!("non-UTF8 path: {}", sysroot.display()))?;
+    let install_dir_str = install_dir
+        .to_str()
+        .ok_or_else(|| anyhow!("non-UTF8 path: {}", install_dir.display()))?;
+    let ar_path = wasi_sdk.join("bin/ar");
+    let ar_str = ar_path
+        .to_str()
+        .ok_or_else(|| anyhow!("non-UTF8 path: {}", ar_path.display()))?;
 
     // SQLite-specific CFLAGS for WASI compatibility
     // Note: Don't set SQLITE_THREADSAFE here - let --disable-threadsafe handle it
     // to avoid macro redefinition warnings
     let sqlite_cflags = format!(
         "--target=wasm32-wasi \
-         --sysroot={sysroot} \
-         -I{sysroot}/include/wasm32-wasip1 \
+         --sysroot={sysroot_str} \
+         -I{sysroot_str}/include/wasm32-wasip1 \
          -D_WASI_EMULATED_SIGNAL \
          -D_WASI_EMULATED_PROCESS_CLOCKS \
          -fPIC \
@@ -658,7 +667,6 @@ fn build_sqlite(wasi_sdk: &Path, install_dir: &Path) -> Result<()> {
          -DSQLITE_OMIT_LOCALTIME \
          -DSQLITE_OMIT_RANDOMNESS \
          -DSQLITE_OMIT_SHARED_CACHE",
-        sysroot = sysroot_str
     );
 
     // Configure SQLite
@@ -671,13 +679,10 @@ fn build_sqlite(wasi_sdk: &Path, install_dir: &Path) -> Result<()> {
         .env("CFLAGS", &sqlite_cflags)
         .env(
             "LDFLAGS",
-            format!(
-                "--target=wasm32-wasip2 --sysroot={sysroot} -L{sysroot}/lib",
-                sysroot = sysroot_str
-            ),
+            format!("--target=wasm32-wasip2 --sysroot={sysroot_str} -L{sysroot_str}/lib",),
         )
         .arg("--host=wasm32-wasi")
-        .arg(format!("--prefix={}", install_dir.display()))
+        .arg(format!("--prefix={install_dir_str}"))
         .arg("--disable-shared")
         .arg("--enable-static")
         .arg("--disable-readline")
@@ -693,7 +698,7 @@ fn build_sqlite(wasi_sdk: &Path, install_dir: &Path) -> Result<()> {
         .env("CC", wasi_sdk.join("bin/clang"))
         .env("RANLIB", wasi_sdk.join("bin/ranlib"))
         .env("CFLAGS", &sqlite_cflags)
-        .arg(format!("AR={}", wasi_sdk.join("bin/ar").display()))
+        .arg(format!("AR={ar_str}"))
         .arg("ARFLAGS=rcs")
         .arg("libsqlite3.a"); // Build only the static library
     run(&mut make)?;
