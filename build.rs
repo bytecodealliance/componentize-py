@@ -302,6 +302,10 @@ fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
             let config_guess =
                 run(Command::new("../../config.guess").current_dir(&cpython_wasi_dir))?;
 
+            let dir = cpython_wasi_dir
+                .to_str()
+                .ok_or_else(|| anyhow!("non-utf8 path: {}", cpython_wasi_dir.display()))?;
+
             run(Command::new("../../Tools/wasm/wasi-env")
                 .env(
                     "CONFIG_SITE",
@@ -309,18 +313,12 @@ fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
                 )
                 .env(
                     "CFLAGS",
-                    format!(
-                        "--target=wasm32-wasip2 -fPIC -I{}/deps/include",
-                        cpython_wasi_dir.display()
-                    ),
+                    format!("--target=wasm32-wasip2 -fPIC -I{dir}/deps/include",),
                 )
                 .env("WASI_SDK_PATH", wasi_sdk)
                 .env(
                     "LDFLAGS",
-                    format!(
-                        "--target=wasm32-wasip2 -L{}/deps/lib",
-                        cpython_wasi_dir.display()
-                    ),
+                    format!("--target=wasm32-wasip2 -L{dir}/deps/lib",),
                 )
                 .current_dir(&cpython_wasi_dir)
                 .args([
@@ -524,21 +522,38 @@ fn build_zlib(wasi_sdk: &Path, install_dir: &Path) -> Result<()> {
         &out_dir,
     )?;
     let src_dir = out_dir.join("zlib-1.3.1");
+
+    let prefix = install_dir
+        .to_str()
+        .ok_or_else(|| anyhow!("non-utf8 path: {}", install_dir.display()))?;
+
     let mut configure = Command::new("./configure");
     add_compile_envs(wasi_sdk, &mut configure);
     configure
         .current_dir(&src_dir)
         .arg("--static")
-        .arg(format!("--prefix={}", install_dir.display()));
+        .arg(format!("--prefix={prefix}"));
     run(&mut configure)?;
+
+    let ar_dir = wasi_sdk.join("bin/ar");
+    let ar_dir = ar_dir
+        .to_str()
+        .ok_or_else(|| anyhow!("non-utf8 path: {}", ar_dir.display()))?;
+
+    let clang_dir = wasi_sdk.join("bin/clang");
+    let clang_dir = clang_dir
+        .to_str()
+        .ok_or_else(|| anyhow!("non-utf8 path: {}", clang_dir.display()))?;
+
     let mut make = Command::new("make");
     add_compile_envs(wasi_sdk, &mut make);
     make.current_dir(src_dir)
-        .arg(format!("AR={}", wasi_sdk.join("bin/ar").display()))
+        .arg(format!("AR={ar_dir}"))
         .arg("ARFLAGS=rcs")
-        .arg(format!("CC={}", wasi_sdk.join("bin/clang").display()))
+        .arg(format!("CC={clang_dir}"))
         .arg("static")
         .arg("install");
     run(&mut make)?;
+
     Ok(())
 }
