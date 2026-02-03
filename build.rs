@@ -18,6 +18,10 @@ use {
 const ZSTD_COMPRESSION_LEVEL: i32 = 19;
 const DEFAULT_SDK_VERSION: &str = "27";
 
+// SQLite version to build - 3.51.2 (latest as of Jan 2026)
+const SQLITE_VERSION: &str = "3510200";
+const SQLITE_YEAR: &str = "2026";
+
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 const PYTHON_EXECUTABLE: &str = "python.exe";
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -290,7 +294,10 @@ fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
                     .current_dir(&cpython_native_dir)
                     .arg(format!(
                         "--prefix={}/install",
-                        cpython_native_dir.to_str().unwrap()
+                        cpython_native_dir.to_str().ok_or_else(|| anyhow!(
+                            "non-UTF8 path: {}",
+                            cpython_native_dir.display()
+                        ))?
                     )))?;
 
                 run(Command::new("make").current_dir(cpython_native_dir))?;
@@ -299,13 +306,17 @@ fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
             let lib_install_dir = cpython_wasi_dir.join("deps");
             build_zlib(wasi_sdk, &lib_install_dir)?;
 
+            build_sqlite(wasi_sdk, &lib_install_dir)?;
+
             let config_guess =
                 run(Command::new("../../config.guess").current_dir(&cpython_wasi_dir))?;
 
             let dir = cpython_wasi_dir
                 .to_str()
-                .ok_or_else(|| anyhow!("non-utf8 path: {}", cpython_wasi_dir.display()))?;
+                .ok_or_else(|| anyhow!("non-UTF8 path: {}", cpython_wasi_dir.display()))?;
 
+            // Configure CPython with SQLite support
+            // The CFLAGS and LDFLAGS now include paths to both zlib AND sqlite
             run(Command::new("../../Tools/wasm/wasi-env")
                 .env(
                     "CONFIG_SITE",
@@ -313,12 +324,12 @@ fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
                 )
                 .env(
                     "CFLAGS",
-                    format!("--target=wasm32-wasip2 -fPIC -I{dir}/deps/include",),
+                    format!("--target=wasm32-wasip2 -fPIC -I{dir}/deps/include"),
                 )
                 .env("WASI_SDK_PATH", wasi_sdk)
                 .env(
                     "LDFLAGS",
-                    format!("--target=wasm32-wasip2 -L{dir}/deps/lib",),
+                    format!("--target=wasm32-wasip2 -L{dir}/deps/lib"),
                 )
                 .current_dir(&cpython_wasi_dir)
                 .args([
@@ -326,20 +337,22 @@ fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
                     "-C",
                     "--host=wasm32-unknown-wasip2",
                     &format!("--build={}", String::from_utf8(config_guess)?),
-                    &format!(
-                        "--with-build-python={}/../build/{PYTHON_EXECUTABLE}",
-                        cpython_wasi_dir.to_str().unwrap()
-                    ),
-                    &format!("--prefix={}/install", cpython_wasi_dir.to_str().unwrap()),
+                    &format!("--with-build-python={dir}/../build/{PYTHON_EXECUTABLE}",),
+                    &format!("--prefix={dir}/install"),
                     "--disable-test-modules",
                     "--enable-ipv6",
                 ]))?;
+
+            // Write Modules/Setup.local to force-enable _sqlite3
+            // This ensures the module is built even if configure doesn't auto-detect it
+            write_setup_local(&cpython_wasi_dir)?;
 
             run(Command::new("make")
                 .current_dir(&cpython_wasi_dir)
                 .args(["build_all", "install"]))?;
         }
 
+        // Link libpython3.14.so - now includes libsqlite3.a
         run(Command::new(wasi_sdk.join("bin/clang"))
             .arg("--target=wasm32-wasip2")
             .arg("-shared")
@@ -357,11 +370,51 @@ fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
             .arg(cpython_wasi_dir.join("Modules/_decimal/libmpdec/libmpdec.a"))
             .arg(cpython_wasi_dir.join("Modules/expat/libexpat.a"))
             .arg(cpython_wasi_dir.join("deps/lib/libz.a"))
+            .arg(cpython_wasi_dir.join("deps/lib/libsqlite3.a"))
             .arg("-lwasi-emulated-signal")
             .arg("-lwasi-emulated-getpid")
             .arg("-lwasi-emulated-process-clocks")
             .arg("-ldl"))?;
     }
+
+    Ok(())
+}
+
+/// Write Modules/Setup.local to enable _sqlite3 module
+///
+/// CPython's configure may not auto-detect sqlite3 for WASI cross-compilation,
+/// so we explicitly enable it here.
+fn write_setup_local(cpython_wasi_dir: &Path) -> Result<()> {
+    let setup_local_path = cpython_wasi_dir.join("Modules/Setup.local");
+    let deps_dir = cpython_wasi_dir.join("deps");
+
+    // The _sqlite3 module source files (relative to Modules/)
+    // These are the files that make up the _sqlite3 extension in CPython 3.14
+    // Note: blob.c is required - it defines pysqlite_close_all_blobs and pysqlite_blob_setup_types
+    let include_dir = deps_dir.join("include");
+    let lib_dir = deps_dir.join("lib");
+    let setup_local_content = format!(
+        r#"# Auto-generated by build.rs for SQLite support
+# Enable _sqlite3 module with statically linked SQLite
+
+_sqlite3 _sqlite/blob.c _sqlite/connection.c _sqlite/cursor.c _sqlite/microprotocols.c _sqlite/module.c _sqlite/prepare_protocol.c _sqlite/row.c _sqlite/statement.c _sqlite/util.c -I{include} -L{lib} -lsqlite3
+"#,
+        include = include_dir
+            .to_str()
+            .ok_or_else(|| anyhow!("non-UTF8 path: {}", include_dir.display()))?,
+        lib = lib_dir
+            .to_str()
+            .ok_or_else(|| anyhow!("non-UTF8 path: {}", lib_dir.display()))?,
+    );
+
+    // Create the Modules directory if it doesn't exist
+    fs::create_dir_all(cpython_wasi_dir.join("Modules"))?;
+    fs::write(&setup_local_path, setup_local_content)?;
+
+    println!(
+        "cargo:warning=Wrote Modules/Setup.local to enable _sqlite3: {}",
+        setup_local_path.display()
+    );
 
     Ok(())
 }
@@ -525,7 +578,7 @@ fn build_zlib(wasi_sdk: &Path, install_dir: &Path) -> Result<()> {
 
     let prefix = install_dir
         .to_str()
-        .ok_or_else(|| anyhow!("non-utf8 path: {}", install_dir.display()))?;
+        .ok_or_else(|| anyhow!("non-UTF8 path: {}", install_dir.display()))?;
 
     let mut configure = Command::new("./configure");
     add_compile_envs(wasi_sdk, &mut configure);
@@ -538,12 +591,12 @@ fn build_zlib(wasi_sdk: &Path, install_dir: &Path) -> Result<()> {
     let ar_dir = wasi_sdk.join("bin/ar");
     let ar_dir = ar_dir
         .to_str()
-        .ok_or_else(|| anyhow!("non-utf8 path: {}", ar_dir.display()))?;
+        .ok_or_else(|| anyhow!("non-UTF8 path: {}", ar_dir.display()))?;
 
     let clang_dir = wasi_sdk.join("bin/clang");
     let clang_dir = clang_dir
         .to_str()
-        .ok_or_else(|| anyhow!("non-utf8 path: {}", clang_dir.display()))?;
+        .ok_or_else(|| anyhow!("non-UTF8 path: {}", clang_dir.display()))?;
 
     let mut make = Command::new("make");
     add_compile_envs(wasi_sdk, &mut make);
@@ -554,6 +607,122 @@ fn build_zlib(wasi_sdk: &Path, install_dir: &Path) -> Result<()> {
         .arg("static")
         .arg("install");
     run(&mut make)?;
+
+    Ok(())
+}
+
+/// Build SQLite for WASI
+///
+/// Downloads the SQLite amalgamation source and builds it as a static library
+/// for WASI. Key configuration:
+/// - SQLITE_OMIT_WAL: WAL requires mmap which isn't available in WASI preview1
+/// - SQLITE_OMIT_LOAD_EXTENSION: No dlopen in WASI
+/// - SQLITE_THREADSAFE=0: Single-threaded for WASM
+fn build_sqlite(wasi_sdk: &Path, install_dir: &Path) -> Result<()> {
+    let out_dir = PathBuf::from(env::var("OUT_DIR")?);
+
+    // Check if already built
+    if install_dir.join("lib/libsqlite3.a").exists() {
+        println!("cargo:warning=SQLite already built, skipping");
+        return Ok(());
+    }
+
+    println!("cargo:warning=Building SQLite {SQLITE_VERSION} for WASI...");
+
+    // Download SQLite amalgamation
+    let url = format!("https://sqlite.org/{SQLITE_YEAR}/sqlite-autoconf-{SQLITE_VERSION}.tar.gz");
+    fetch_extract(&url, &out_dir)?;
+
+    let src_dir = out_dir.join(format!("sqlite-autoconf-{SQLITE_VERSION}"));
+
+    // Ensure install directories exist
+    fs::create_dir_all(install_dir.join("lib"))?;
+    fs::create_dir_all(install_dir.join("include"))?;
+
+    let sysroot = wasi_sdk.join("share/wasi-sysroot");
+    let sysroot_str = sysroot
+        .to_str()
+        .ok_or_else(|| anyhow!("non-UTF8 path: {}", sysroot.display()))?;
+    let install_dir_str = install_dir
+        .to_str()
+        .ok_or_else(|| anyhow!("non-UTF8 path: {}", install_dir.display()))?;
+    let ar_path = wasi_sdk.join("bin/ar");
+    let ar_str = ar_path
+        .to_str()
+        .ok_or_else(|| anyhow!("non-UTF8 path: {}", ar_path.display()))?;
+
+    // SQLite-specific CFLAGS for WASI compatibility
+    // Note: Don't set SQLITE_THREADSAFE here - let --disable-threadsafe handle it
+    // to avoid macro redefinition warnings
+    let sqlite_cflags = format!(
+        "--target=wasm32-wasi \
+         --sysroot={sysroot_str} \
+         -I{sysroot_str}/include/wasm32-wasip1 \
+         -D_WASI_EMULATED_SIGNAL \
+         -D_WASI_EMULATED_PROCESS_CLOCKS \
+         -fPIC \
+         -O2 \
+         -DSQLITE_OMIT_WAL \
+         -DSQLITE_OMIT_LOAD_EXTENSION \
+         -DSQLITE_OMIT_LOCALTIME \
+         -DSQLITE_OMIT_RANDOMNESS \
+         -DSQLITE_OMIT_SHARED_CACHE",
+    );
+
+    // Configure SQLite
+    let mut configure = Command::new("./configure");
+    configure
+        .current_dir(&src_dir)
+        .env("AR", wasi_sdk.join("bin/ar"))
+        .env("CC", wasi_sdk.join("bin/clang"))
+        .env("RANLIB", wasi_sdk.join("bin/ranlib"))
+        .env("CFLAGS", &sqlite_cflags)
+        .env(
+            "LDFLAGS",
+            format!("--target=wasm32-wasip2 --sysroot={sysroot_str} -L{sysroot_str}/lib",),
+        )
+        .arg("--host=wasm32-wasi")
+        .arg(format!("--prefix={install_dir_str}"))
+        .arg("--disable-shared")
+        .arg("--enable-static")
+        .arg("--disable-readline")
+        .arg("--disable-threadsafe")
+        .arg("--disable-load-extension");
+
+    run(&mut configure)?;
+
+    // Build only the static library (not the shell, which fails to link on WASI)
+    let mut make = Command::new("make");
+    make.current_dir(&src_dir)
+        .env("AR", wasi_sdk.join("bin/ar"))
+        .env("CC", wasi_sdk.join("bin/clang"))
+        .env("RANLIB", wasi_sdk.join("bin/ranlib"))
+        .env("CFLAGS", &sqlite_cflags)
+        .arg(format!("AR={ar_str}"))
+        .arg("ARFLAGS=rcs")
+        .arg("libsqlite3.a"); // Build only the static library
+    run(&mut make)?;
+
+    // Manual install since we didn't build everything
+    // Copy the library
+    fs::copy(
+        src_dir.join("libsqlite3.a"),
+        install_dir.join("lib/libsqlite3.a"),
+    )?;
+    // Copy the headers
+    fs::copy(
+        src_dir.join("sqlite3.h"),
+        install_dir.join("include/sqlite3.h"),
+    )?;
+    fs::copy(
+        src_dir.join("sqlite3ext.h"),
+        install_dir.join("include/sqlite3ext.h"),
+    )?;
+
+    println!(
+        "cargo:warning=SQLite built successfully: {}",
+        install_dir.join("lib/libsqlite3.a").display()
+    );
 
     Ok(())
 }
