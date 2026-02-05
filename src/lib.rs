@@ -704,6 +704,10 @@ pub async fn componentize(
         )
     })?;
 
+    // Checks if the output directory exists, and creates it if it doesn't.
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
     fs::write(output_path, component)?;
 
     Ok(())
