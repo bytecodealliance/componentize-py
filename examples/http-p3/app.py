@@ -15,7 +15,7 @@ from componentize_py_types import Ok, Result
 from componentize_py_async_support.streams import ByteStreamWriter
 from componentize_py_async_support.futures import FutureReader
 from wit_world import exports
-from wit_world.imports import handler
+from wit_world.imports import client
 from wit_world.imports.wasi_http_types import (
     Method_Get,
     Method_Post,
@@ -110,7 +110,7 @@ async def sha256(url: str) -> tuple[str, str]:
     request.set_authority(url_parsed.netloc)
     request.set_path_with_query(url_parsed.path)
 
-    response = await handler.handle(request)
+    response = await client.send(request)
     status = response.get_status_code()
     if status < 200 or status > 299:
         return url, f"unexpected status: {status}"

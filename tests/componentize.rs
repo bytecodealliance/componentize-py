@@ -55,7 +55,7 @@ fn http_example() -> anyhow::Result<()> {
 
 #[test]
 fn http_p3_example() -> anyhow::Result<()> {
-    test_http_example("http-p3", "wasi:http/proxy@0.3.0-rc-2025-09-16", 8081)
+    test_http_example("http-p3", "wasi:http/service@0.3.0-rc-2026-01-06", 8081)
 }
 
 fn test_http_example(name: &str, world: &str, port: u16) -> anyhow::Result<()> {

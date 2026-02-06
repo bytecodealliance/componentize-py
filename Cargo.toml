@@ -1,6 +1,6 @@
 [package]
 name = "componentize-py"
-version = "0.19.3"
+version = "0.20.0"
 edition = "2024"
 exclude = ["cpython"]
 
@@ -14,18 +14,11 @@ clap = { version = "4.5.20", features = ["derive"] }
 tar = "0.4.42"
 tempfile = "3.13.0"
 zstd = "0.13.2"
-# TODO: switch to wasm-tools release once
-# https://github.com/bytecodealliance/wasm-tools/pull/2367,
-# https://github.com/bytecodealliance/wasm-tools/pull/2371, and
-# https://github.com/bytecodealliance/wasm-tools/pull/2375 have been released,
-# but note that https://github.com/bytecodealliance/wasm-tools/pull/2376 broke
-# ABI compatibilty, so we'll also need to upgrade to Wasmtime 40+ to get
-# everything aligned.
-wasm-encoder = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "e2bb0a24", features = ["wasmparser"] }
-wit-dylib = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "e2bb0a24" }
-wit-parser = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "e2bb0a24" }
-wit-component = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "e2bb0a24" }
-wasmparser = { git = "https://github.com/bytecodealliance/wasm-tools", rev = "e2bb0a24" }
+wasm-encoder = { version = "0.244.0", features = ["wasmparser"] }
+wit-dylib = "0.244.0"
+wit-parser = "0.244.0"
+wit-component = "0.244.0"
+wasmparser = "0.244.0"
 indexmap = "2.6.0"
 bincode = "1.3.3"
 heck = "0.5.0"
@@ -33,10 +26,10 @@ pyo3 = { version = "0.26.0", features = [
     "abi3-py39",
     "extension-module",
 ], optional = true }
-wasmtime = "39.0.0"
-wasmtime-wasi = { version = "39.0.0", features = [ "p3" ] }
+wasmtime = "41.0.3"
+wasmtime-wasi = { version = "41.0.3", features = [ "p3" ] }
 once_cell = "1.20.2"
-component-init-transform = { git = "https://github.com/dicej/component-init", rev = "2d965957" }
+component-init-transform = { git = "https://github.com/dicej/component-init", rev = "1de5906c" }
 async-trait = "0.1.83"
 futures = "0.3.31"
 tokio = { version = "1.41.0", features = [

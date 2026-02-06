@@ -11,8 +11,7 @@ anyhow = "1.0.91"
 once_cell = "1.20.2"
 pyo3 = { version="0.26.0", features = ["abi3-py312", "num-bigint"] }
 num-bigint = "0.4.6"
-wit-bindgen = { version = "0.40.0", default-features = false, features = ["macros", "realloc"] }
-wit-bindgen-rt = { version = "0.40.0" }
+wit-bindgen = { version = "0.52.0", default-features = false, features = ["macros", "realloc"] }
 # TODO: switch to a release when available:
 wit-dylib-ffi = { git = "https://github.com/dicej/wasm-tools", rev = "b072b0ca", features = ["async-raw"] }
 

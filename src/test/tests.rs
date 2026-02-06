@@ -1270,7 +1270,7 @@ fn test_short_reads(delay: bool) -> Result<()> {
                 .await??;
 
             for it in received_things {
-                it.resource_drop_async::<()>(&mut store).await?;
+                it.resource_drop_async(&mut store).await?;
             }
 
             anyhow::Ok(())
@@ -1416,7 +1416,7 @@ fn test_dropped_future_reader(delay: bool) -> Result<()> {
                 })
                 .await??;
 
-            it.resource_drop_async::<()>(&mut store).await?;
+            it.resource_drop_async(&mut store).await?;
 
             anyhow::Ok(())
         })?;

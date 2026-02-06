@@ -5,7 +5,7 @@ use wasm_encoder::{
     CodeSection, ExportKind, ExportSection, Function, FunctionSection, Instruction as Ins, Module,
     TypeSection,
 };
-use wasmparser::{FuncType, Parser, Payload, TypeRef};
+use wasmparser::{FuncType, Imports, Parser, Payload, TypeRef};
 
 use crate::Library;
 
@@ -81,19 +81,22 @@ fn add_wasi_imports<'a>(
 
             Payload::ImportSection(reader) => {
                 for import in reader {
-                    let import = import?;
-
-                    if import.module == "wasi_snapshot_preview1"
-                        || import.module.starts_with("wasi:")
-                    {
-                        if let TypeRef::Func(ty) = import.ty {
-                            imports
-                                .entry(import.module)
-                                .or_default()
-                                .insert(import.name, types[usize::try_from(ty).unwrap()].clone());
-                        } else {
-                            bail!("encountered non-function import from WASI namespace")
+                    match import? {
+                        Imports::Single(_, import) => {
+                            if import.module == "wasi_snapshot_preview1"
+                                || import.module.starts_with("wasi:")
+                            {
+                                if let TypeRef::Func(ty) = import.ty {
+                                    imports.entry(import.module).or_default().insert(
+                                        import.name,
+                                        types[usize::try_from(ty).unwrap()].clone(),
+                                    );
+                                } else {
+                                    bail!("encountered non-function import from WASI namespace")
+                                }
+                            }
                         }
+                        Imports::Compact1 { .. } | Imports::Compact2 { .. } => todo!(),
                     }
                 }
                 break;
