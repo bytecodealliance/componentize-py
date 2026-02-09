@@ -1,7 +1,7 @@
 #![deny(warnings)]
 
 use {
-    anyhow::{anyhow, bail, Context, Result},
+    anyhow::{Context, Result, anyhow, bail},
     std::{
         env,
         fmt::Write as _,
