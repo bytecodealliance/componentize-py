@@ -1,7 +1,7 @@
 #![deny(warnings)]
 
 use {
-    anyhow::{Context, Result, anyhow, bail},
+    anyhow::{anyhow, bail, Context, Result},
     std::{
         env,
         fmt::Write as _,
@@ -16,7 +16,7 @@ use {
 };
 
 const ZSTD_COMPRESSION_LEVEL: i32 = 19;
-const DEFAULT_SDK_VERSION: &str = "27";
+const DEFAULT_SDK_VERSION: &str = "30";
 
 // SQLite version to build - 3.51.2 (latest as of Jan 2026)
 const SQLITE_VERSION: &str = "3510200";
