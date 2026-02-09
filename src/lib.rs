@@ -33,8 +33,8 @@ use {
     wit_component::metadata,
     wit_dylib::DylibOpts,
     wit_parser::{
-        CloneMaps, Package, PackageName, Resolve, Stability, TypeDefKind, UnresolvedPackageGroup,
-        World, WorldId, WorldItem, WorldKey,
+        CloneMaps, FunctionKind, Package, PackageName, Resolve, Stability, TypeDefKind,
+        UnresolvedPackageGroup, World, WorldId, WorldItem, WorldKey,
     },
     zstd::Decoder,
 };
@@ -68,12 +68,6 @@ pub struct Ctx {
     table: ResourceTable,
 }
 
-pub struct Library {
-    name: String,
-    module: Vec<u8>,
-    dl_openable: bool,
-}
-
 impl WasiView for Ctx {
     fn ctx(&mut self) -> WasiCtxView<'_> {
         WasiCtxView {
@@ -81,6 +75,12 @@ impl WasiView for Ctx {
             table: &mut self.table,
         }
     }
+}
+
+pub struct Library {
+    name: String,
+    module: Vec<u8>,
+    dl_openable: bool,
 }
 
 #[derive(Deserialize)]
@@ -766,7 +766,7 @@ fn add_wasi_and_stubs(
     wasmtime_wasi::p2::add_to_linker_async(linker)?;
 
     enum Stub<'a> {
-        Function(&'a String),
+        Function(&'a String, &'a FunctionKind),
         Resource(&'a String),
     }
 
@@ -781,11 +781,11 @@ fn add_wasi_and_stubs(
                     };
 
                     let interface = &resolve.interfaces[*id];
-                    for function_name in interface.functions.keys() {
+                    for (function_name, function) in &interface.functions {
                         stubs
                             .entry(Some(interface_name.clone()))
                             .or_default()
-                            .push(Stub::Function(function_name));
+                            .push(Stub::Function(function_name, &function.kind));
                     }
 
                     for (type_name, id) in interface.types.iter() {
@@ -801,7 +801,7 @@ fn add_wasi_and_stubs(
                     stubs
                         .entry(None)
                         .or_default()
-                        .push(Stub::Function(&function.name));
+                        .push(Stub::Function(&function.name, &function.kind));
                 }
                 WorldItem::Type(id) => {
                     let ty = &resolve.types[*id];
@@ -828,12 +828,31 @@ fn add_wasi_and_stubs(
                 for stub in stubs {
                     let interface_name = interface_name.clone();
                     match stub {
-                        Stub::Function(name) => instance.func_new(name, {
-                            let name = name.clone();
-                            move |_, _, _, _| {
-                                Err(anyhow!("called trapping stub: {interface_name}#{name}"))
+                        Stub::Function(name, kind) => {
+                            if kind.is_async() {
+                                instance.func_new_concurrent(name, {
+                                    let name = name.clone();
+                                    move |_, _, _, _| {
+                                        let interface_name = interface_name.clone();
+                                        let name = name.clone();
+                                        Box::pin(async move {
+                                            Err(anyhow!(
+                                                "called trapping stub: {interface_name}#{name}"
+                                            ))
+                                        })
+                                    }
+                                })
+                            } else {
+                                instance.func_new(name, {
+                                    let name = name.clone();
+                                    move |_, _, _, _| {
+                                        Err(anyhow!(
+                                            "called trapping stub: {interface_name}#{name}"
+                                        ))
+                                    }
+                                })
                             }
-                        }),
+                        }
                         Stub::Resource(name) => instance
                             .resource(name, ResourceType::host::<()>(), {
                                 let name = name.clone();
@@ -849,10 +868,24 @@ fn add_wasi_and_stubs(
             let mut instance = linker.root();
             for stub in stubs {
                 match stub {
-                    Stub::Function(name) => instance.func_new(name, {
-                        let name = name.clone();
-                        move |_, _, _, _| Err(anyhow!("called trapping stub: {name}"))
-                    }),
+                    Stub::Function(name, kind) => {
+                        if kind.is_async() {
+                            instance.func_new_concurrent(name, {
+                                let name = name.clone();
+                                move |_, _, _, _| {
+                                    let name = name.clone();
+                                    Box::pin(
+                                        async move { Err(anyhow!("called trapping stub: {name}")) },
+                                    )
+                                }
+                            })
+                        } else {
+                            instance.func_new(name, {
+                                let name = name.clone();
+                                move |_, _, _, _| Err(anyhow!("called trapping stub: {name}"))
+                            })
+                        }
+                    }
                     Stub::Resource(name) => instance
                         .resource(name, ResourceType::host::<()>(), {
                             let name = name.clone();

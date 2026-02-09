@@ -70,7 +70,7 @@ fn lint_http_p3_bindings() -> anyhow::Result<()> {
     )?;
     let path = dir.path().join("http-p3");
 
-    generate_bindings(&path, "wasi:http/proxy@0.3.0-rc-2025-09-16")?;
+    generate_bindings(&path, "wasi:http/service@0.3.0-rc-2026-01-06")?;
 
     assert!(predicate::path::is_dir().eval(&path.join("wit_world")));
 

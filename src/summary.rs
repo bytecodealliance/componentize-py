@@ -864,13 +864,9 @@ impl<'a> Summary<'a> {
     ) -> String {
         match kind {
             wit_parser::FunctionKind::Freestanding => name.to_snake_case().escape(),
-            wit_parser::FunctionKind::AsyncFreestanding => format!(
-                "{async_start_prefix}{}",
-                name.strip_prefix("[async]")
-                    .unwrap()
-                    .to_snake_case()
-                    .escape()
-            ),
+            wit_parser::FunctionKind::AsyncFreestanding => {
+                format!("{async_start_prefix}{}", name.to_snake_case().escape())
+            }
             wit_parser::FunctionKind::Constructor(_) => "__init__".into(),
             wit_parser::FunctionKind::Method(id) => name
                 .strip_prefix(&format!(
@@ -883,7 +879,7 @@ impl<'a> Summary<'a> {
             wit_parser::FunctionKind::AsyncMethod(id) => format!(
                 "{async_start_prefix}{}",
                 name.strip_prefix(&format!(
-                    "[async method]{}.",
+                    "[method]{}.",
                     self.resolve.types[*id].name.as_deref().unwrap()
                 ))
                 .unwrap()
@@ -901,7 +897,7 @@ impl<'a> Summary<'a> {
             wit_parser::FunctionKind::AsyncStatic(id) => format!(
                 "{async_start_prefix}{}",
                 name.strip_prefix(&format!(
-                    "[async static]{}.",
+                    "[static]{}.",
                     self.resolve.types[*id].name.as_deref().unwrap()
                 ))
                 .unwrap()

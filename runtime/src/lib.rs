@@ -40,10 +40,6 @@ use {
     },
 };
 
-#[expect(
-    unsafe_op_in_unsafe_fn,
-    reason = "wit_bindgen::generate produces code that does this"
-)]
 mod bindings {
     wit_bindgen::generate!({
         world: "init",
