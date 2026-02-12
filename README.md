@@ -66,7 +66,7 @@ bindings for the component:
 > Due to compatibility issues with `wasmtime-py` versions beyond 38.x, **this example** requires version 38.0.0 or earlier: `pip install "wasmtime==38.0.0"`
 
 ```shell
-pip install wasmtime
+pip install wasmtime==38.0.0
 python3 -m wasmtime.bindgen app.wasm --out-dir hello_host
 ```
 
