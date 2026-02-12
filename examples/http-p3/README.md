@@ -11,7 +11,7 @@ run a Python-based component targetting version `0.3.0-rc-2026-01-06` of the
 ## Prerequisites
 
 * `Wasmtime` 41.0.3
-* `componentize-py` 0.20.0
+* `componentize-py` 0.21.0
 
 Below, we use [Rust](https://rustup.rs/)'s `cargo` to install `Wasmtime`.  If
 you don't have `cargo`, you can download and install from
@@ -19,7 +19,7 @@ https://github.com/bytecodealliance/wasmtime/releases/tag/v41.0.3.
 
 ```
 cargo install --version 41.0.3 wasmtime-cli
-pip install componentize-py==0.20.0
+pip install componentize-py==0.21.0
 ```
 
 ## Running the demo

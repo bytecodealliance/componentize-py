@@ -7,11 +7,15 @@ sandboxed Python code snippets from within a Python app.
 
 ## Prerequisites
 
-* `wasmtime-py` 38.0.0 or later
-* `componentize-py` 0.20.0
+Note that we must use `wasmtime-py` version 38.0.0 specifically because later
+versions have a different API for working with components, and this example has
+not yet been updated to use it.
+
+* `wasmtime-py` 38.0.0
+* `componentize-py` 0.21.0
 
 ```
-pip install componentize-py==0.20.0 wasmtime==38.0.0
+pip install componentize-py==0.21.0 wasmtime==38.0.0
 ```
 
 ## Running the demo
