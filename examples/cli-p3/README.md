@@ -6,7 +6,7 @@ run a Python-based component targetting version `0.3.0-rc-2026-01-06` of the
 
 [componentize-py]: https://github.com/bytecodealliance/componentize-py
 [Wasmtime]: https://github.com/bytecodealliance/wasmtime
-[wasi-cli]: https://github.com/WebAssembly/wasi-cli
+[wasi-cli]: https://github.com/WebAssembly/WASI/tree/v0.3.0-rc-2026-01-06/proposals/cli/wit-0.3.0-draft
 
 ## Prerequisites
 
