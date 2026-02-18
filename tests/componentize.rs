@@ -14,13 +14,22 @@ use tar::Archive;
 
 #[test]
 fn cli_example() -> anyhow::Result<()> {
+    test_cli_example("cli", "wasi:cli/command@0.2.0")
+}
+
+#[test]
+fn cli_p3_example() -> anyhow::Result<()> {
+    test_cli_example("cli-p3", "wasi:cli/command@0.3.0-rc-2026-01-06")
+}
+
+fn test_cli_example(name: &str, world: &str) -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     fs_extra::copy_items(
-        &["./examples/cli", "./wit"],
+        &[format!("./examples/{name}").as_str(), "./wit"],
         dir.path(),
         &CopyOptions::new(),
     )?;
-    let path = dir.path().join("cli");
+    let path = dir.path().join(name);
 
     cargo::cargo_bin_cmd!("componentize-py")
         .current_dir(&path)
@@ -28,7 +37,7 @@ fn cli_example() -> anyhow::Result<()> {
             "-d",
             "../wit",
             "-w",
-            "wasi:cli/command@0.2.0",
+            world,
             "componentize",
             "app",
             "-o",
@@ -40,7 +49,7 @@ fn cli_example() -> anyhow::Result<()> {
 
     Command::new("wasmtime")
         .current_dir(&path)
-        .args(["run", "cli.wasm"])
+        .args(["run", "-Sp3", "-Wcomponent-model-async", "cli.wasm"])
         .assert()
         .success()
         .stdout("Hello, world!\n");
