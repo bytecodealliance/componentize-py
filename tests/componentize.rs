@@ -1,3 +1,4 @@
+use core::net::Ipv4Addr;
 use std::{
     io::Write,
     path::{Path, PathBuf},
@@ -241,13 +242,22 @@ fn sandbox_example() -> anyhow::Result<()> {
 
 #[test]
 fn tcp_example() -> anyhow::Result<()> {
+    test_tcp_example("tcp", "wasi:cli/command@0.2.0")
+}
+
+#[test]
+fn tcp_p3_example() -> anyhow::Result<()> {
+    test_tcp_example("tcp-p3", "wasi:cli/command@0.3.0-rc-2026-01-06")
+}
+
+fn test_tcp_example(name: &str, world: &str) -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     fs_extra::copy_items(
-        &["./examples/tcp", "./wit"],
+        &[format!("./examples/{name}").as_str(), "./wit"],
         dir.path(),
         &CopyOptions::new(),
     )?;
-    let path = dir.path().join("tcp");
+    let path = dir.path().join(name);
 
     cargo::cargo_bin_cmd!("componentize-py")
         .current_dir(&path)
@@ -255,7 +265,7 @@ fn tcp_example() -> anyhow::Result<()> {
             "-d",
             "../wit",
             "-w",
-            "wasi:cli/command@0.2.0",
+            world,
             "componentize",
             "app",
             "-o",
@@ -265,16 +275,17 @@ fn tcp_example() -> anyhow::Result<()> {
         .success()
         .stdout("Component built successfully\n");
 
-    let listener = std::net::TcpListener::bind("127.0.0.1:3456")?;
+    let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+    let port = listener.local_addr()?.port();
 
     let tcp_handle = std::process::Command::new("wasmtime")
         .current_dir(&path)
         .args([
             "run",
-            "--wasi",
-            "inherit-network",
+            "-Sp3,inherit-network",
+            "-Wcomponent-model-async",
             "tcp.wasm",
-            "127.0.0.1:3456",
+            &format!("127.0.0.1:{port}"),
         ])
         .stdout(Stdio::piped())
         .spawn()?;
