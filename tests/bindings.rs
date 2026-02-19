@@ -30,6 +30,27 @@ fn lint_cli_bindings() -> anyhow::Result<()> {
 }
 
 #[test]
+fn lint_cli_p3_bindings() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    fs_extra::copy_items(
+        &["./examples/cli-p3", "./wit"],
+        dir.path(),
+        &CopyOptions::new(),
+    )?;
+    let path = dir.path().join("cli-p3");
+
+    generate_bindings(&path, "wasi:cli/command@0.3.0-rc-2026-01-06")?;
+
+    assert!(predicate::path::is_dir().eval(&path.join("wit_world")));
+
+    _ = dir.keep();
+
+    mypy_check(&path, ["--strict", "-m", "app"]);
+
+    Ok(())
+}
+
+#[test]
 fn lint_http_bindings() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     fs_extra::copy_items(
@@ -142,6 +163,44 @@ fn lint_tcp_bindings() -> anyhow::Result<()> {
     let path = dir.path().join("tcp");
 
     generate_bindings(&path, "wasi:cli/command@0.2.0")?;
+
+    assert!(predicate::path::is_dir().eval(&path.join("wit_world")));
+
+    mypy_check(&path, ["--strict", "-m", "app"]);
+
+    Ok(())
+}
+
+#[test]
+fn lint_tcp_p3_bindings() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    fs_extra::copy_items(
+        &["./examples/tcp-p3", "./wit"],
+        dir.path(),
+        &CopyOptions::new(),
+    )?;
+    let path = dir.path().join("tcp-p3");
+
+    generate_bindings(&path, "wasi:cli/command@0.3.0-rc-2026-01-06")?;
+
+    assert!(predicate::path::is_dir().eval(&path.join("wit_world")));
+
+    mypy_check(&path, ["--strict", "-m", "app"]);
+
+    Ok(())
+}
+
+#[test]
+fn lint_tls_p3_bindings() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    fs_extra::copy_items(
+        &["./examples/tls-p3", "./wit"],
+        dir.path(),
+        &CopyOptions::new(),
+    )?;
+    let path = dir.path().join("tls-p3");
+
+    generate_bindings(&path, "tls-p3")?;
 
     assert!(predicate::path::is_dir().eval(&path.join("wit_world")));
 

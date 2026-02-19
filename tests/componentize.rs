@@ -1,3 +1,4 @@
+use core::net::Ipv4Addr;
 use std::{
     io::Write,
     path::{Path, PathBuf},
@@ -14,13 +15,22 @@ use tar::Archive;
 
 #[test]
 fn cli_example() -> anyhow::Result<()> {
+    test_cli_example("cli", "wasi:cli/command@0.2.0")
+}
+
+#[test]
+fn cli_p3_example() -> anyhow::Result<()> {
+    test_cli_example("cli-p3", "wasi:cli/command@0.3.0-rc-2026-01-06")
+}
+
+fn test_cli_example(name: &str, world: &str) -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     fs_extra::copy_items(
-        &["./examples/cli", "./wit"],
+        &[format!("./examples/{name}").as_str(), "./wit"],
         dir.path(),
         &CopyOptions::new(),
     )?;
-    let path = dir.path().join("cli");
+    let path = dir.path().join(name);
 
     cargo::cargo_bin_cmd!("componentize-py")
         .current_dir(&path)
@@ -28,7 +38,7 @@ fn cli_example() -> anyhow::Result<()> {
             "-d",
             "../wit",
             "-w",
-            "wasi:cli/command@0.2.0",
+            world,
             "componentize",
             "app",
             "-o",
@@ -40,7 +50,7 @@ fn cli_example() -> anyhow::Result<()> {
 
     Command::new("wasmtime")
         .current_dir(&path)
-        .args(["run", "cli.wasm"])
+        .args(["run", "-Sp3", "-Wcomponent-model-async", "cli.wasm"])
         .assert()
         .success()
         .stdout("Hello, world!\n");
@@ -232,13 +242,22 @@ fn sandbox_example() -> anyhow::Result<()> {
 
 #[test]
 fn tcp_example() -> anyhow::Result<()> {
+    test_tcp_example("tcp", "wasi:cli/command@0.2.0")
+}
+
+#[test]
+fn tcp_p3_example() -> anyhow::Result<()> {
+    test_tcp_example("tcp-p3", "wasi:cli/command@0.3.0-rc-2026-01-06")
+}
+
+fn test_tcp_example(name: &str, world: &str) -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     fs_extra::copy_items(
-        &["./examples/tcp", "./wit"],
+        &[format!("./examples/{name}").as_str(), "./wit"],
         dir.path(),
         &CopyOptions::new(),
     )?;
-    let path = dir.path().join("tcp");
+    let path = dir.path().join(name);
 
     cargo::cargo_bin_cmd!("componentize-py")
         .current_dir(&path)
@@ -246,7 +265,7 @@ fn tcp_example() -> anyhow::Result<()> {
             "-d",
             "../wit",
             "-w",
-            "wasi:cli/command@0.2.0",
+            world,
             "componentize",
             "app",
             "-o",
@@ -256,16 +275,17 @@ fn tcp_example() -> anyhow::Result<()> {
         .success()
         .stdout("Component built successfully\n");
 
-    let listener = std::net::TcpListener::bind("127.0.0.1:3456")?;
+    let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+    let port = listener.local_addr()?.port();
 
     let tcp_handle = std::process::Command::new("wasmtime")
         .current_dir(&path)
         .args([
             "run",
-            "--wasi",
-            "inherit-network",
+            "-Sp3,inherit-network",
+            "-Wcomponent-model-async",
             "tcp.wasm",
-            "127.0.0.1:3456",
+            &format!("127.0.0.1:{port}"),
         ])
         .stdout(Stdio::piped())
         .spawn()?;
@@ -279,6 +299,48 @@ fn tcp_example() -> anyhow::Result<()> {
         String::from_utf8_lossy(&output.stdout),
         "received: b'hello'\n"
     );
+
+    Ok(())
+}
+
+#[test]
+fn tls_p3_example() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    fs_extra::copy_items(
+        &["./examples/tls-p3", "./wit"],
+        dir.path(),
+        &CopyOptions::new(),
+    )?;
+    let path = dir.path().join("tls-p3");
+
+    cargo::cargo_bin_cmd!("componentize-py")
+        .current_dir(&path)
+        .args([
+            "-d",
+            "../wit",
+            "-w",
+            "tls-p3",
+            "componentize",
+            "app",
+            "-o",
+            "tls.wasm",
+        ])
+        .assert()
+        .success()
+        .stdout("Component built successfully\n");
+
+    Command::new("wasmtime")
+        .current_dir(&path)
+        .args([
+            "run",
+            "-Sp3,inherit-network,tls,allow-ip-name-lookup",
+            "-Wcomponent-model-async",
+            "tls.wasm",
+            "api.github.com",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("HTTP/1.1 200 OK"));
 
     Ok(())
 }
