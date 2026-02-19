@@ -12,6 +12,7 @@ examples/http/.spin
 examples/http/http.wasm
 examples/http/proxy
 examples/http/poll_loop.py
+examples/tcp-p3/tcp.wasm
 examples/tcp/tcp.wasm
 examples/tcp/command
 examples/cli/cli.wasm
