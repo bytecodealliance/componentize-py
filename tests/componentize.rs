@@ -303,6 +303,48 @@ fn test_tcp_example(name: &str, world: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn tls_p3_example() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    fs_extra::copy_items(
+        &["./examples/tls-p3", "./wit"],
+        dir.path(),
+        &CopyOptions::new(),
+    )?;
+    let path = dir.path().join("tls-p3");
+
+    cargo::cargo_bin_cmd!("componentize-py")
+        .current_dir(&path)
+        .args([
+            "-d",
+            "../wit",
+            "-w",
+            "tls-p3",
+            "componentize",
+            "app",
+            "-o",
+            "tls.wasm",
+        ])
+        .assert()
+        .success()
+        .stdout("Component built successfully\n");
+
+    Command::new("wasmtime")
+        .current_dir(&path)
+        .args([
+            "run",
+            "-Sp3,inherit-network,tls,allow-ip-name-lookup",
+            "-Wcomponent-model-async",
+            "tls.wasm",
+            "api.github.com",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("HTTP/1.1 200 OK"));
+
+    Ok(())
+}
+
 fn retry<T>(mut func: impl FnMut() -> anyhow::Result<T>) -> anyhow::Result<T> {
     let times = 10;
     for i in 0..times {
