@@ -69,13 +69,12 @@ async def send_and_receive(address: IPAddress, port: int) -> None:
 
     send_tx, send_rx = wit_world.byte_stream()
     async def write() -> None:
-        with send_tx:
-            await send_tx.write_all(b"hello, world!")
-    await asyncio.gather(sock.send(send_rx), write())
+        await send_tx.write_all(b"hello, world!")
 
     recv_rx, recv_fut = sock.receive()
     async def read() -> None:
         with recv_rx:
             data = await recv_rx.read(1024)
             print(f"received: {str(data)}")
-    await asyncio.gather(recv_fut.read(), read())
+            send_tx.__exit__(None, None, None)
+    await asyncio.gather(recv_fut.read(), read(), sock.send(send_rx), write())
