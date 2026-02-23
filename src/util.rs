@@ -1,20 +1,15 @@
 use {
     std::iter,
-    wit_parser::{Flags, FlagsRepr, Type},
+    wit_parser::{Flags, FlagsRepr, Param, Type},
 };
 
 pub trait Types {
     fn types(&self) -> Box<dyn Iterator<Item = Type>>;
 }
 
-impl Types for &[(String, Type)] {
+impl Types for &[Param] {
     fn types(&self) -> Box<dyn Iterator<Item = Type>> {
-        Box::new(
-            self.iter()
-                .map(|(_, ty)| *ty)
-                .collect::<Vec<_>>()
-                .into_iter(),
-        )
+        Box::new(self.iter().map(|p| p.ty).collect::<Vec<_>>().into_iter())
     }
 }
 

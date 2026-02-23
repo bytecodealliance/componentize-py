@@ -19,10 +19,11 @@ use {
         path::Path,
         str,
     },
+    wit_bindgen_core::Types,
     wit_dylib::Metadata,
     wit_parser::{
-        CloneMaps, Handle, InterfaceId, Resolve, Result_, Type, TypeDef, TypeDefKind, TypeId,
-        TypeOwner, WorldId, WorldItem, WorldKey,
+        CloneMaps, Handle, InterfaceId, Param, Resolve, Result_, Type, TypeDef, TypeDefKind,
+        TypeId, TypeOwner, WorldId, WorldItem, WorldKey,
     },
 };
 
@@ -72,7 +73,7 @@ pub struct MyFunction<'a> {
     pub interface: Option<MyInterface<'a>>,
     pub name: &'a str,
     pub docs: Option<&'a str>,
-    pub params: &'a [(String, Type)],
+    pub params: &'a [Param],
     pub result: &'a Option<Type>,
     pub wit_kind: wit_parser::FunctionKind,
 }
@@ -336,7 +337,7 @@ impl<'a> Summary<'a> {
         interface: Option<MyInterface<'a>>,
         name: &'a str,
         docs: Option<&'a str>,
-        params: &'a [(String, Type)],
+        params: &'a [Param],
         result: &'a Option<Type>,
         direction: Direction,
         wit_kind: wit_parser::FunctionKind,
@@ -471,7 +472,7 @@ impl<'a> Summary<'a> {
                     );
                 }
 
-                WorldItem::Type(ty) => self.visit_type(Type::Id(*ty), world),
+                WorldItem::Type { id, .. } => self.visit_type(Type::Id(*id), world),
             }
         }
         Ok(())
@@ -973,9 +974,9 @@ impl<'a> Summary<'a> {
         let params = self_
             .map(|s| s.to_string())
             .into_iter()
-            .chain(function.params.iter().skip(skip_count).map(|(name, ty)| {
-                let snake = name.to_snake_case().escape();
-                format!("{snake}: {}", type_name(*ty))
+            .chain(function.params.iter().skip(skip_count).map(|p| {
+                let snake = p.name.to_snake_case().escape();
+                format!("{snake}: {}", type_name(p.ty))
             }))
             .collect::<Vec<_>>()
             .join(", ");
@@ -983,7 +984,7 @@ impl<'a> Summary<'a> {
         let args = function
             .params
             .iter()
-            .map(|(name, _)| name.to_snake_case().escape())
+            .map(|p| p.name.to_snake_case().escape())
             .collect::<Vec<_>>()
             .join(", ");
 
@@ -1117,8 +1118,8 @@ impl<'a> Summary<'a> {
                             visited.insert(id);
 
                             let sort = |function: &MyFunction, sorted: &mut _, visited: &mut _| {
-                                for (_, ty) in function.params {
-                                    self.sort(*ty, &mut *sorted, &mut *visited);
+                                for p in function.params {
+                                    self.sort(p.ty, &mut *sorted, &mut *visited);
                                 }
 
                                 for ty in function.result.types() {
@@ -1278,7 +1279,7 @@ impl<'a> Summary<'a> {
                 .params
                 .iter()
                 .skip(skip_count)
-                .map(|(name, _)| name.to_snake_case().escape())
+                .map(|p| p.name.to_snake_case().escape())
                 .collect::<Vec<_>>()
                 .join(", ");
 
@@ -1401,6 +1402,10 @@ impl<'a> Summary<'a> {
         let mut seen = HashSet::new();
         let mut stream_payloads = HashSet::new();
         let mut future_payloads = HashSet::new();
+        let mut types = Types::default();
+        types.analyze(self.resolve);
+        types.collect_equal_types(self.resolve, &|_| true);
+
         for (index, id) in self.types.iter().copied().enumerate() {
             if !self
                 .world_types
@@ -1742,10 +1747,11 @@ class {camel}(Protocol):
                     | TypeDefKind::Result(_)
                     | TypeDefKind::Handle(_) => (None, Vec::new()),
                     TypeDefKind::Stream(ty) => {
-                        let code = if stream_payloads.contains(ty) {
+                        let canonical = canonical_payload(self.resolve, &mut types, ty);
+                        let code = if stream_payloads.contains(&canonical) {
                             None
                         } else {
-                            stream_payloads.insert(ty);
+                            stream_payloads.insert(canonical);
 
                             Some(if let Some(Type::U8 | Type::S8) = ty {
                                 if stub_runtime_calls {
@@ -1795,10 +1801,11 @@ def {snake}_stream() -> tuple[StreamWriter[{camel}], StreamReader[{camel}]]:
                         (code.map(Code::Shared), Vec::new())
                     }
                     TypeDefKind::Future(ty) => {
-                        let code = if future_payloads.contains(ty) {
+                        let canonical = canonical_payload(self.resolve, &mut types, ty);
+                        let code = if future_payloads.contains(&canonical) {
                             None
                         } else {
-                            future_payloads.insert(ty);
+                            future_payloads.insert(canonical);
 
                             let snake = ty
                                 .map(|ty| names.mangle_name(ty))
@@ -2638,6 +2645,19 @@ fn docstring(
         format!(r#""""{newline}{docs}{indent}"""{newline}{indent}"#)
     } else {
         String::new()
+    }
+}
+
+fn canonical_payload(resolve: &Resolve, types: &mut Types, ty: &Option<Type>) -> Option<Type> {
+    match ty {
+        Some(Type::Id(id)) => {
+            let id = types.get_representative_type(*id);
+            match resolve.types[id].kind {
+                TypeDefKind::Type(t) => Some(t),
+                _ => Some(Type::Id(id)),
+            }
+        }
+        other => *other,
     }
 }
 
