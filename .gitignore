@@ -15,6 +15,7 @@ examples/http/poll_loop.py
 examples/tcp-p3/tcp.wasm
 examples/tcp/tcp.wasm
 examples/tcp/command
+examples/tls-p3/tls.wasm
 examples/cli-p3/cli.wasm
 examples/cli/cli.wasm
 examples/cli/command
