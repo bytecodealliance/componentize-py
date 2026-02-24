@@ -372,7 +372,7 @@ pub async fn componentize(
         docs: Default::default(),
         stability: Stability::Unknown,
         includes: Default::default(),
-        include_names: Default::default(),
+        span: Default::default(),
     });
 
     resolve.packages[union_package]
@@ -803,7 +803,7 @@ fn add_wasi_and_stubs(
                         .or_default()
                         .push(Stub::Function(&function.name, &function.kind));
                 }
-                WorldItem::Type(id) => {
+                WorldItem::Type { id, .. } => {
                     let ty = &resolve.types[*id];
                     if let TypeDefKind::Resource = &ty.kind {
                         stubs
