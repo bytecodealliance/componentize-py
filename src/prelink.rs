@@ -16,7 +16,17 @@ use zstd::Decoder;
 
 use crate::{ComponentizePyConfig, ConfigContext, Library, RawComponentizePyConfig};
 
-static NATIVE_EXTENSION_SUFFIX: &str = ".cpython-314-wasm32-wasi.so";
+static NATIVE_EXTENSION_SUFFIXES: &[&str] = &[
+    ".cpython-314-wasm32-wasi.so",
+    ".abi3.so",
+];
+
+/// Check if a file starts with the WASM magic bytes (`\0asm`).
+fn is_wasm_file(path: &Path) -> bool {
+    fs::read(path)
+        .map(|bytes| bytes.starts_with(b"\0asm"))
+        .unwrap_or(false)
+}
 
 type ConfigsMatchedWorlds<'a> =
     IndexMap<String, (ConfigContext<ComponentizePyConfig>, Option<&'a str>)>;
@@ -235,7 +245,9 @@ fn search_directory(
             search_directory(root, &entry?.path(), libraries, configs, modules_seen)?;
         }
     } else if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
-        if name.ends_with(NATIVE_EXTENSION_SUFFIX) {
+        if NATIVE_EXTENSION_SUFFIXES.iter().any(|suffix| name.ends_with(suffix))
+            && is_wasm_file(path)
+        {
             libraries.push(path.to_owned());
         } else if name == "componentize-py.toml" {
             let root = root
