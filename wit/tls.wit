@@ -1,0 +1,4 @@
+world tls-p3 {
+  include wasi:cli/command@0.3.0-rc-2026-02-09;
+  include wasi:tls/imports@0.3.0-draft;
+}

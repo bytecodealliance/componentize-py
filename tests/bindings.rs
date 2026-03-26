@@ -190,6 +190,25 @@ fn lint_tcp_p3_bindings() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn lint_tls_p3_bindings() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    fs_extra::copy_items(
+        &["./examples/tls-p3", "./wit"],
+        dir.path(),
+        &CopyOptions::new(),
+    )?;
+    let path = dir.path().join("tls-p3");
+
+    generate_bindings(&path, "tls-p3")?;
+
+    assert!(predicate::path::is_dir().eval(&path.join("wit_world")));
+
+    mypy_check(&path, ["--strict", "-m", "app"]);
+
+    Ok(())
+}
+
 fn generate_bindings(path: &Path, world: &str) -> Result<Assert, anyhow::Error> {
     Ok(cargo::cargo_bin_cmd!("componentize-py")
         .current_dir(path)
