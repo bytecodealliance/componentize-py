@@ -506,7 +506,7 @@ fn make_runtime(
 
     cmd.env(
         "RUSTFLAGS",
-        "-C relocation-model=pic --cfg pyo3_disable_reference_pool",
+        "-C relocation-model=pic -Z default-visibility=hidden --cfg pyo3_disable_reference_pool",
     )
     .env("CARGO_TARGET_DIR", out_dir.join(target))
     .env("PYO3_CONFIG_FILE", out_dir.join("pyo3-config.txt"));
