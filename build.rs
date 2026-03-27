@@ -6,16 +6,20 @@ use {
         env,
         fmt::Write as _,
         fs::{self, File},
-        io::{self, Write},
-        iter,
+        io::{self, Cursor, Write},
+        iter, mem,
         path::{Path, PathBuf},
         process::Command,
     },
     tar::Builder,
+    wasm_encoder::{ComponentSectionId, Encode as _, RawSection, Section as _},
+    wasmparser::{Parser, Payload},
     zstd::Encoder,
 };
 
-const ZSTD_COMPRESSION_LEVEL: i32 = 19;
+const DEBUG_RUNTIME: bool = false;
+const STRIP_RUNTIME: bool = !DEBUG_RUNTIME;
+const ZSTD_COMPRESSION_LEVEL: i32 = if DEBUG_RUNTIME { 0 } else { 19 };
 const DEFAULT_SDK_VERSION: &str = "30";
 
 // SQLite version to build - 3.51.2 (latest as of Jan 2026)
@@ -249,7 +253,11 @@ fn compress(src_dir: &Path, name: &str, dst_dir: &Path, rerun_if_changed: bool) 
             File::create(dst_dir.join(format!("{name}.zst")))?,
             ZSTD_COMPRESSION_LEVEL,
         )?;
-        io::copy(&mut File::open(path)?, &mut encoder)?;
+        if STRIP_RUNTIME && name.ends_with(".so") {
+            io::copy(&mut Cursor::new(strip(&fs::read(path)?)?), &mut encoder)?;
+        } else {
+            io::copy(&mut File::open(path)?, &mut encoder)?;
+        }
         encoder.do_finish()?;
         Ok(())
     } else {
@@ -485,8 +493,11 @@ fn make_runtime(
         .arg("build")
         .arg("-Z")
         .arg("build-std=panic_abort,std")
-        .arg("--release")
         .arg("--target=wasm32-wasip1");
+
+    if !DEBUG_RUNTIME {
+        cmd.arg("--release");
+    }
 
     if async_ {
         cmd.arg("--features=async");
@@ -515,9 +526,10 @@ fn make_runtime(
     assert!(status.success());
     println!("cargo:rerun-if-changed=runtime");
 
-    let path = out_dir
-        .join(target)
-        .join("wasm32-wasip1/release/libcomponentize_py_runtime.a");
+    let build = if DEBUG_RUNTIME { "debug" } else { "release" };
+    let path = out_dir.join(target).join(format!(
+        "wasm32-wasip1/{build}/libcomponentize_py_runtime.a"
+    ));
 
     if path.exists() {
         let clang = wasi_sdk.join(format!("bin/{CLANG_EXECUTABLE}"));
@@ -725,4 +737,64 @@ fn build_sqlite(wasi_sdk: &Path, install_dir: &Path) -> Result<()> {
     );
 
     Ok(())
+}
+
+fn strip(input: &[u8]) -> anyhow::Result<Vec<u8>> {
+    // Adapted from https://github.com/bytecodealliance/wasm-tools/blob/main/src/bin/wasm-tools/strip.rs
+    //
+    // TODO: Move that code into e.g. `wasm_encoder` so we can reuse it here
+    // instead of duplicating it.
+
+    let mut output = Vec::new();
+    let mut stack = Vec::new();
+
+    for payload in Parser::new(0).parse_all(input) {
+        let payload = payload?;
+
+        // Track nesting depth, so that we don't mess with inner producer sections:
+        match payload {
+            Payload::Version { encoding, .. } => {
+                output.extend_from_slice(match encoding {
+                    wasmparser::Encoding::Component => &wasm_encoder::Component::HEADER,
+                    wasmparser::Encoding::Module => &wasm_encoder::Module::HEADER,
+                });
+            }
+            Payload::ModuleSection { .. } | Payload::ComponentSection { .. } => {
+                stack.push(mem::take(&mut output));
+                continue;
+            }
+            Payload::End { .. } => {
+                let mut parent = match stack.pop() {
+                    Some(c) => c,
+                    None => break,
+                };
+                if output.starts_with(&wasm_encoder::Component::HEADER) {
+                    parent.push(ComponentSectionId::Component as u8);
+                    output.encode(&mut parent);
+                } else {
+                    parent.push(ComponentSectionId::CoreModule as u8);
+                    output.encode(&mut parent);
+                }
+                output = parent;
+            }
+            _ => {}
+        }
+
+        if let Payload::CustomSection(ref c) = payload {
+            let name = c.name();
+            if name != "name" && !name.starts_with("component-type:") && name != "dylink.0" {
+                continue;
+            }
+        }
+
+        if let Some((id, range)) = payload.as_section() {
+            RawSection {
+                id,
+                data: &input[range],
+            }
+            .append_to(&mut output);
+        }
+    }
+
+    Ok(output)
 }

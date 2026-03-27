@@ -79,6 +79,8 @@ tar = "0.4.41"
 zstd = "0.13.2"
 test-generator = { path = "test-generator" }
 flate2 = "1.1.1"
+wasmparser = "0.245.0"
+wasm-encoder = "0.245.0"
 
 [workspace]
 members = ["runtime", "test-generator"]
