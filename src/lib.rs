@@ -90,6 +90,8 @@ struct RawComponentizePyConfig {
     import_interface_names: HashMap<String, String>,
     #[serde(default)]
     export_interface_names: HashMap<String, String>,
+    #[serde(default)]
+    full_names: bool,
 }
 
 #[derive(Debug)]
@@ -98,6 +100,7 @@ struct ComponentizePyConfig {
     wit_directory: Option<PathBuf>,
     import_interface_names: HashMap<String, String>,
     export_interface_names: HashMap<String, String>,
+    full_names: bool,
 }
 
 impl TryFrom<(&Path, RawComponentizePyConfig)> for ComponentizePyConfig {
@@ -118,6 +121,7 @@ impl TryFrom<(&Path, RawComponentizePyConfig)> for ComponentizePyConfig {
             wit_directory: raw.wit_directory.map(convert).transpose()?,
             import_interface_names: raw.import_interface_names,
             export_interface_names: raw.export_interface_names,
+            full_names: raw.full_names,
         })
     }
 }
@@ -173,513 +177,568 @@ impl Invoker for MyInvoker {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn generate_bindings(
-    wit_path: &[impl AsRef<Path>],
-    worlds: &[&str],
-    features: &[&str],
-    all_features: bool,
-    world_module: Option<&str>,
-    output_dir: &Path,
-    import_interface_names: &HashMap<&str, &str>,
-    export_interface_names: &HashMap<&str, &str>,
-) -> Result<()> {
-    // TODO: Split out and reuse the code responsible for finding and using
-    // componentize-py.toml files in the `componentize` function below, since
-    // that can affect the bindings we should be generating.
-
-    let (resolve, world) = parse_wit(wit_path, worlds, features, all_features, "union")?;
-    let import_function_indexes = &HashMap::new();
-    let export_function_indexes = &HashMap::new();
-    let stream_and_future_indexes = &HashMap::new();
-    let summary = Summary::try_new(
-        &resolve,
-        &iter::once(world).collect(),
-        import_interface_names,
-        export_interface_names,
-        import_function_indexes,
-        export_function_indexes,
-        stream_and_future_indexes,
-    )?;
-    let world_module = world_module.unwrap_or(DEFAULT_WORLD_MODULE);
-    let world_dir = output_dir.join(world_module.replace('.', "/"));
-    fs::create_dir_all(&world_dir)?;
-    summary.generate_code(
-        &world_dir,
-        world,
-        world_module,
-        &mut Locations::default(),
-        true,
-    )?;
-
-    Archive::new(Decoder::new(Cursor::new(include_bytes!(concat!(
-        env!("OUT_DIR"),
-        "/bundled.tar.zst"
-    ))))?)
-    .unpack(output_dir)
-    .unwrap();
-
-    Ok(())
+pub struct BindingsGenerator<'a> {
+    pub wit_path: &'a [&'a Path],
+    pub worlds: &'a [&'a str],
+    pub features: &'a [&'a str],
+    pub all_features: bool,
+    pub world_module: Option<&'a str>,
+    pub output_dir: &'a Path,
+    pub import_interface_names: &'a HashMap<&'a str, &'a str>,
+    pub export_interface_names: &'a HashMap<&'a str, &'a str>,
+    pub full_names: bool,
 }
 
-#[allow(clippy::type_complexity, clippy::too_many_arguments)]
-pub async fn componentize(
-    wit_path: &[impl AsRef<Path>],
-    worlds: &[&str],
-    features: &[&str],
-    all_features: bool,
-    world_module: Option<&str>,
-    python_path: &[&str],
-    module_worlds: &[(&str, &[&str])],
-    app_name: &str,
-    output_path: &Path,
-    add_to_linker: Option<&dyn Fn(&mut Linker<Ctx>) -> Result<()>>,
-    stub_wasi: bool,
-    import_interface_names: &HashMap<&str, &str>,
-    export_interface_names: &HashMap<&str, &str>,
-) -> Result<()> {
-    // Remove non-existent elements from `python_path` so we don't choke on them
-    // later:
-    let python_path = &python_path
-        .iter()
-        .filter_map(|&s| Path::new(s).exists().then_some(s))
-        .collect::<Vec<_>>();
+impl BindingsGenerator<'_> {
+    pub fn generate(&self) -> Result<()> {
+        // TODO: Split out and reuse the code responsible for finding and using
+        // componentize-py.toml files in the `componentize` function below, since
+        // that can affect the bindings we should be generating.
 
-    let embedded_python_standard_lib = prelink::embedded_python_standard_library()?;
-    let embedded_helper_utils = prelink::embedded_helper_utils()?;
-
-    let (configs, libraries) =
-        prelink::search_for_libraries_and_configs(python_path, module_worlds, worlds)?;
-
-    let mut union_number = 0;
-    let mut next_union_name = move || {
-        let name = format!("union{union_number}");
-        union_number += 1;
-        name
-    };
-
-    // Next, iterate over all the WIT directories, merging them into a single
-    // `Resolve`, and matching Python packages to `WorldId`s.
-    let (mut resolve, mut main_world) = match wit_path {
-        [] => (None, None),
-        paths => {
-            let (resolve, world) =
-                parse_wit(paths, worlds, features, all_features, &next_union_name())?;
-            (Some(resolve), Some(world))
-        }
-    };
-
-    let import_interface_names = import_interface_names
-        .iter()
-        .map(|(a, b)| (*a, *b))
-        .chain(configs.iter().flat_map(|(_, (config, _))| {
-            config
-                .config
-                .import_interface_names
-                .iter()
-                .map(|(a, b)| (a.as_str(), b.as_str()))
-        }))
-        .collect();
-
-    let export_interface_names = export_interface_names
-        .iter()
-        .map(|(a, b)| (*a, *b))
-        .chain(configs.iter().flat_map(|(_, (config, _))| {
-            config
-                .config
-                .export_interface_names
-                .iter()
-                .map(|(a, b)| (a.as_str(), b.as_str()))
-        }))
-        .collect();
-
-    let configs = configs
-        .iter()
-        .map(|(module, (config, worlds))| {
-            Ok((module, match (worlds, config.config.wit_directory.as_deref()) {
-                (_, Some(wit_path)) => {
-                    let paths = &[config.path.join(wit_path)];
-                    let (my_resolve, mut world) = parse_wit(paths, worlds, features, all_features, &next_union_name())?;
-
-                    if let Some(resolve) = &mut resolve {
-                        let remap = resolve.merge(my_resolve)?;
-                        world = remap.worlds[world.index()].expect("missing world");
-                    } else {
-                        resolve = Some(my_resolve);
-                    }
-
-                    (config, Some(world))
-                }
-                ([], None) => (config, None),
-                (_, None) => {
-                    bail!("no `wit-directory` specified in `componentize-py.toml` for module `{module}`");
-                }
-            }))
-        })
-        .collect::<Result<IndexMap<_, _>>>()?;
-
-    let mut resolve = if let Some(resolve) = resolve {
-        resolve
-    } else {
-        // If no WIT directory was provided as a parameter and none were
-        // referenced by Python packages, use the default values.
-        let paths: &[&Path] = &[];
-        let (my_resolve, world) =
-            parse_wit(paths, worlds, features, all_features, &next_union_name()).context(
-                "no WIT files found; please specify the directory or file \
-                 containing the WIT world you wish to target",
-            )?;
-        main_world = Some(world);
-        my_resolve
-    };
-
-    // Extract relevant metadata from the `Resolve` into a `Summary` instance,
-    // which we'll use to generate Wasm- and Python-level bindings.
-
-    let worlds = configs
-        .values()
-        .filter_map(|(_, world)| *world)
-        .chain(main_world)
-        .collect::<IndexSet<_>>();
-
-    let mut clone_maps = CloneMaps::default();
-    let union_world = union_world(
-        &mut resolve,
-        &next_union_name(),
-        &worlds.iter().copied().collect::<Vec<_>>(),
-        &mut clone_maps,
-    )?;
-
-    let (mut bindings, metadata) = wit_dylib::create_with_metadata(
-        &resolve,
-        union_world,
-        Some(&mut DylibOpts {
-            interpreter: Some("libcomponentize_py_runtime.so".into()),
-            async_: Default::default(),
-        }),
-    );
-
-    CustomSection {
-        name: Cow::Borrowed("component-type:componentize-py-union"),
-        data: Cow::Owned(metadata::encode(
+        let (resolve, world) = parse_wit(
+            self.wit_path,
+            self.worlds,
+            self.features,
+            self.all_features,
+            "union",
+        )?;
+        let import_function_indexes = &HashMap::new();
+        let export_function_indexes = &HashMap::new();
+        let stream_and_future_indexes = &HashMap::new();
+        let summary = Summary::try_new(
             &resolve,
-            union_world,
-            wit_component::StringEncoding::UTF8,
-            None,
-        )?),
-    }
-    .append_to(&mut bindings);
-
-    let imported_function_indexes = metadata
-        .import_funcs
-        .iter()
-        .enumerate()
-        .map(|(index, func)| ((func.interface.as_deref(), func.name.as_str()), index))
-        .collect();
-
-    let exported_function_indexes = metadata
-        .export_funcs
-        .iter()
-        .enumerate()
-        .map(|(index, func)| ((func.interface.as_deref(), func.name.as_str()), index))
-        .collect();
-
-    let mut reverse_cloned_types = HashMap::new();
-    for (&original, &clone) in clone_maps.types() {
-        assert!(reverse_cloned_types.insert(clone, original).is_none());
-    }
-
-    let original = |ty| {
-        if let Some(&original) = reverse_cloned_types.get(&ty) {
-            original
-        } else {
-            ty
-        }
-    };
-
-    let stream_and_future_indexes = metadata
-        .streams
-        .iter()
-        .enumerate()
-        .map(|(index, stream)| (original(stream.id), index))
-        .chain(
-            metadata
-                .futures
-                .iter()
-                .enumerate()
-                .map(|(index, future)| (original(future.id), index)),
-        )
-        .collect();
-
-    let summary = Summary::try_new(
-        &resolve,
-        &worlds,
-        &import_interface_names,
-        &export_interface_names,
-        &imported_function_indexes,
-        &exported_function_indexes,
-        &stream_and_future_indexes,
-    )?;
-
-    let need_async = summary.need_async();
-
-    // Now that we know whether to use the sync or async version of
-    // `libcomponentize_py_runtime.so`, update `libraries` accordingly.
-    //
-    // Note that we have two separate versions because older runtimes don't
-    // understand the new async ABI, so we only use the async version if it's
-    // actually needed.
-    let mut libraries = libraries
-        .into_iter()
-        .filter_map(|library| match (need_async, library.name.as_str()) {
-            (true, "libcomponentize_py_runtime_sync.so")
-            | (false, "libcomponentize_py_runtime_async.so") => None,
-            (true, "libcomponentize_py_runtime_async.so")
-            | (false, "libcomponentize_py_runtime_sync.so") => Some(Library {
-                name: "libcomponentize_py_runtime.so".into(),
-                ..library
-            }),
-            _ => Some(library),
-        })
-        .collect::<Vec<_>>();
-
-    libraries.push(Library {
-        name: "libcomponentize_py_bindings.so".into(),
-        module: bindings,
-        dl_openable: false,
-    });
-
-    let component = link::link_libraries(&libraries)?;
-
-    let stubbed_component = if stub_wasi {
-        stubwasi::link_stub_modules(libraries)?
-    } else {
-        None
-    };
-
-    // Pre-initialize the component by running it through
-    // `component_init_transform::initialize`.  Currently, this is the
-    // application's first and only chance to load any standard or third-party
-    // modules since we do not yet include a virtual filesystem in the component
-    // to make those modules available at runtime.
-
-    let stdout = MemoryOutputPipe::new(10000);
-    let stderr = MemoryOutputPipe::new(10000);
-
-    let mut wasi = WasiCtxBuilder::new();
-    wasi.stdin(MemoryInputPipe::new(Bytes::new()))
-        .stdout(stdout.clone())
-        .stderr(stderr.clone())
-        .env("PYTHONUNBUFFERED", "1")
-        .env("PYTHONHOME", "/python")
-        .preopened_dir(
-            embedded_python_standard_lib.path(),
-            "python",
-            DirPerms::all(),
-            FilePerms::all(),
-        )?
-        .preopened_dir(
-            embedded_helper_utils.path(),
-            "bundled",
-            DirPerms::all(),
-            FilePerms::all(),
+            &iter::once(world).collect(),
+            self.import_interface_names,
+            self.export_interface_names,
+            import_function_indexes,
+            export_function_indexes,
+            stream_and_future_indexes,
+            self.full_names,
+        )?;
+        let world_module = self.world_module.unwrap_or(DEFAULT_WORLD_MODULE);
+        let world_dir = self.output_dir.join(world_module.replace('.', "/"));
+        fs::create_dir_all(&world_dir)?;
+        summary.generate_code(
+            &world_dir,
+            world,
+            world_module,
+            &mut Locations::default(),
+            true,
         )?;
 
-    // Generate guest mounts for each host directory in `python_path`.
-    for (index, path) in python_path.iter().enumerate() {
-        wasi.preopened_dir(path, index.to_string(), DirPerms::all(), FilePerms::all())?;
+        Archive::new(Decoder::new(Cursor::new(include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/bundled.tar.zst"
+        ))))?)
+        .unpack(self.output_dir)
+        .unwrap();
+
+        Ok(())
     }
+}
 
-    // For each Python package with a `componentize-py.toml` file that specifies
-    // where generated bindings for that package should be placed, generate the
-    // bindings and place them as indicated.
+pub type AddToLinker<'a> = Option<&'a dyn Fn(&mut Linker<Ctx>) -> Result<()>>;
 
-    let mut world_dir_mounts = Vec::new();
-    let mut locations = Locations::default();
-    let mut saw_main_world = false;
+pub struct ComponentGenerator<'a> {
+    pub wit_path: &'a [&'a Path],
+    pub worlds: &'a [&'a str],
+    pub features: &'a [&'a str],
+    pub all_features: bool,
+    pub world_module: Option<&'a str>,
+    pub python_path: &'a [&'a str],
+    pub module_worlds: &'a [(&'a str, &'a [&'a str])],
+    pub app_name: &'a str,
+    pub output_path: &'a Path,
+    pub add_to_linker: AddToLinker<'a>,
+    pub stub_wasi: bool,
+    pub import_interface_names: &'a HashMap<&'a str, &'a str>,
+    pub export_interface_names: &'a HashMap<&'a str, &'a str>,
+    pub full_names: bool,
+}
 
-    for (config, world, binding_path) in configs
-        .values()
-        .filter_map(|(config, world)| Some((config, world, config.config.bindings.as_deref()?)))
-    {
-        if *world == main_world {
-            saw_main_world = true;
-        }
+impl ComponentGenerator<'_> {
+    pub async fn generate(&self) -> Result<()> {
+        // Remove non-existent elements from `python_path` so we don't choke on them
+        // later:
+        let python_path = &self
+            .python_path
+            .iter()
+            .filter_map(|&s| Path::new(s).exists().then_some(s))
+            .collect::<Vec<_>>();
 
-        let Some(world) = *world else {
-            bail!("please specify a world for module `{}`", config.module);
+        let embedded_python_standard_lib = prelink::embedded_python_standard_library()?;
+        let embedded_helper_utils = prelink::embedded_helper_utils()?;
+
+        let (configs, libraries) = prelink::search_for_libraries_and_configs(
+            python_path,
+            self.module_worlds,
+            self.worlds,
+        )?;
+
+        let mut union_number = 0;
+        let mut next_union_name = move || {
+            let name = format!("union{union_number}");
+            union_number += 1;
+            name
         };
 
-        let paths = python_path
+        // Next, iterate over all the WIT directories, merging them into a single
+        // `Resolve`, and matching Python packages to `WorldId`s.
+        let (mut resolve, mut main_world) = match self.wit_path {
+            [] => (None, None),
+            paths => {
+                let (resolve, world) = parse_wit(
+                    paths,
+                    self.worlds,
+                    self.features,
+                    self.all_features,
+                    &next_union_name(),
+                )?;
+                (Some(resolve), Some(world))
+            }
+        };
+
+        let import_interface_names = self
+            .import_interface_names
             .iter()
-            .enumerate()
-            .map(|(index, dir)| {
-                let dir = Path::new(dir).canonicalize()?;
-                Ok(if config.root == dir {
-                    config
-                        .path
-                        .join(binding_path)
-                        .strip_prefix(dir)
-                        .ok()
-                        .map(|p| (index, p.to_str().unwrap().replace('\\', "/")))
-                } else {
-                    None
-                })
+            .map(|(a, b)| (*a, *b))
+            .chain(configs.iter().flat_map(|(_, (config, _))| {
+                config
+                    .config
+                    .import_interface_names
+                    .iter()
+                    .map(|(a, b)| (a.as_str(), b.as_str()))
+            }))
+            .collect();
+
+        let export_interface_names = self
+            .export_interface_names
+            .iter()
+            .map(|(a, b)| (*a, *b))
+            .chain(configs.iter().flat_map(|(_, (config, _))| {
+                config
+                    .config
+                    .export_interface_names
+                    .iter()
+                    .map(|(a, b)| (a.as_str(), b.as_str()))
+            }))
+            .collect();
+
+        let configs = configs
+            .iter()
+            .map(|(module, (config, worlds))| {
+                Ok((
+                    module,
+                    match (worlds, config.config.wit_directory.as_deref()) {
+                        (_, Some(wit_path)) => {
+                            let path = config.path.join(wit_path);
+                            let paths = &[path.as_path()];
+                            let (my_resolve, mut world) = parse_wit(
+                                paths,
+                                worlds,
+                                self.features,
+                                self.all_features,
+                                &next_union_name(),
+                            )?;
+
+                            if let Some(resolve) = &mut resolve {
+                                let remap = resolve.merge(my_resolve)?;
+                                world = remap.worlds[world.index()].expect("missing world");
+                            } else {
+                                resolve = Some(my_resolve);
+                            }
+
+                            (config, Some(world))
+                        }
+                        ([], None) => (config, None),
+                        (_, None) => {
+                            bail!(
+                                "no `wit-directory` specified in \
+                                 `componentize-py.toml` for module `{module}`"
+                            );
+                        }
+                    },
+                ))
             })
-            .filter_map(Result::transpose)
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<IndexMap<_, _>>>()?;
 
-        let binding_module = paths.first().unwrap().1.replace('/', ".");
+        let mut resolve = if let Some(resolve) = resolve {
+            resolve
+        } else {
+            // If no WIT directory was provided as a parameter and none were
+            // referenced by Python packages, use the default values.
+            let paths: &[&Path] = &[];
+            let (my_resolve, world) = parse_wit(
+                paths,
+                self.worlds,
+                self.features,
+                self.all_features,
+                &next_union_name(),
+            )
+            .context(
+                "no WIT files found; please specify the directory or file \
+                     containing the WIT world you wish to target",
+            )?;
+            main_world = Some(world);
+            my_resolve
+        };
 
-        let world_dir = tempfile::tempdir()?;
+        // Extract relevant metadata from the `Resolve` into a `Summary` instance,
+        // which we'll use to generate Wasm- and Python-level bindings.
 
-        summary.generate_code(
-            world_dir.path(),
-            world,
-            &binding_module,
-            &mut locations,
-            false,
+        let worlds = configs
+            .values()
+            .filter_map(|(_, world)| *world)
+            .chain(main_world)
+            .collect::<IndexSet<_>>();
+
+        let mut clone_maps = CloneMaps::default();
+        let union_world = union_world(
+            &mut resolve,
+            &next_union_name(),
+            &worlds.iter().copied().collect::<Vec<_>>(),
+            &mut clone_maps,
         )?;
 
-        world_dir_mounts.push((
-            paths
-                .iter()
-                .map(|(index, p)| format!("{index}/{p}"))
-                .collect(),
-            world_dir,
-        ));
-    }
+        let (mut bindings, metadata) = wit_dylib::create_with_metadata(
+            &resolve,
+            union_world,
+            Some(&mut DylibOpts {
+                interpreter: Some("libcomponentize_py_runtime.so".into()),
+                async_: Default::default(),
+            }),
+        );
 
-    // If the caller specified a world and we haven't already generated bindings
-    // for it above, do so now.
-    if let (Some(world), false) = (main_world, saw_main_world) {
-        let module = world_module.unwrap_or(DEFAULT_WORLD_MODULE);
-        let world_dir = tempfile::tempdir()?;
-        let module_path = world_dir.path().join(module);
-        fs::create_dir_all(&module_path)?;
-        summary.generate_code(&module_path, world, module, &mut locations, false)?;
-        world_dir_mounts.push((vec!["world".to_owned()], world_dir));
+        CustomSection {
+            name: Cow::Borrowed("component-type:componentize-py-union"),
+            data: Cow::Owned(metadata::encode(
+                &resolve,
+                union_world,
+                wit_component::StringEncoding::UTF8,
+                None,
+            )?),
+        }
+        .append_to(&mut bindings);
 
-        // The helper utilities are hard-coded to assume the world module is
-        // named `wit_world`.  Here we replace that with the actual world module
-        // name.
-        fn replace(path: &Path, pattern: &str, replacement: &str) -> Result<()> {
-            if path.is_dir() {
-                for entry in fs::read_dir(path)? {
-                    replace(&entry?.path(), pattern, replacement)?;
-                }
+        let imported_function_indexes = metadata
+            .import_funcs
+            .iter()
+            .enumerate()
+            .map(|(index, func)| ((func.interface.as_deref(), func.name.as_str()), index))
+            .collect();
+
+        let exported_function_indexes = metadata
+            .export_funcs
+            .iter()
+            .enumerate()
+            .map(|(index, func)| ((func.interface.as_deref(), func.name.as_str()), index))
+            .collect();
+
+        let mut reverse_cloned_types = HashMap::new();
+        for (&original, &clone) in clone_maps.types() {
+            assert!(reverse_cloned_types.insert(clone, original).is_none());
+        }
+
+        let original = |ty| {
+            if let Some(&original) = reverse_cloned_types.get(&ty) {
+                original
             } else {
-                fs::write(
-                    path,
-                    fs::read_to_string(path)?
-                        .replace(pattern, replacement)
-                        .as_bytes(),
-                )?;
+                ty
+            }
+        };
+
+        let stream_and_future_indexes = metadata
+            .streams
+            .iter()
+            .enumerate()
+            .map(|(index, stream)| (original(stream.id), index))
+            .chain(
+                metadata
+                    .futures
+                    .iter()
+                    .enumerate()
+                    .map(|(index, future)| (original(future.id), index)),
+            )
+            .collect();
+
+        let summary = Summary::try_new(
+            &resolve,
+            &worlds,
+            &import_interface_names,
+            &export_interface_names,
+            &imported_function_indexes,
+            &exported_function_indexes,
+            &stream_and_future_indexes,
+            // TODO: We should restrict the `full_names` setting found in a give
+            // config file to only the world(s) covered by that config file, if
+            // feasible.
+            self.full_names
+                || configs
+                    .values()
+                    .any(|(config, ..)| config.config.full_names),
+        )?;
+
+        let need_async = summary.need_async();
+
+        // Now that we know whether to use the sync or async version of
+        // `libcomponentize_py_runtime.so`, update `libraries` accordingly.
+        //
+        // Note that we have two separate versions because older runtimes don't
+        // understand the new async ABI, so we only use the async version if it's
+        // actually needed.
+        let mut libraries = libraries
+            .into_iter()
+            .filter_map(|library| match (need_async, library.name.as_str()) {
+                (true, "libcomponentize_py_runtime_sync.so")
+                | (false, "libcomponentize_py_runtime_async.so") => None,
+                (true, "libcomponentize_py_runtime_async.so")
+                | (false, "libcomponentize_py_runtime_sync.so") => Some(Library {
+                    name: "libcomponentize_py_runtime.so".into(),
+                    ..library
+                }),
+                _ => Some(library),
+            })
+            .collect::<Vec<_>>();
+
+        libraries.push(Library {
+            name: "libcomponentize_py_bindings.so".into(),
+            module: bindings,
+            dl_openable: false,
+        });
+
+        let component = link::link_libraries(&libraries)?;
+
+        let stubbed_component = if self.stub_wasi {
+            stubwasi::link_stub_modules(libraries)?
+        } else {
+            None
+        };
+
+        // Pre-initialize the component by running it through
+        // `component_init_transform::initialize`.  Currently, this is the
+        // application's first and only chance to load any standard or third-party
+        // modules since we do not yet include a virtual filesystem in the component
+        // to make those modules available at runtime.
+
+        let stdout = MemoryOutputPipe::new(10000);
+        let stderr = MemoryOutputPipe::new(10000);
+
+        let mut wasi = WasiCtxBuilder::new();
+        wasi.stdin(MemoryInputPipe::new(Bytes::new()))
+            .stdout(stdout.clone())
+            .stderr(stderr.clone())
+            .env("PYTHONUNBUFFERED", "1")
+            .env("PYTHONHOME", "/python")
+            .preopened_dir(
+                embedded_python_standard_lib.path(),
+                "python",
+                DirPerms::all(),
+                FilePerms::all(),
+            )?
+            .preopened_dir(
+                embedded_helper_utils.path(),
+                "bundled",
+                DirPerms::all(),
+                FilePerms::all(),
+            )?;
+
+        // Generate guest mounts for each host directory in `python_path`.
+        for (index, path) in python_path.iter().enumerate() {
+            wasi.preopened_dir(path, index.to_string(), DirPerms::all(), FilePerms::all())?;
+        }
+
+        // For each Python package with a `componentize-py.toml` file that specifies
+        // where generated bindings for that package should be placed, generate the
+        // bindings and place them as indicated.
+
+        let mut world_dir_mounts = Vec::new();
+        let mut locations = Locations::default();
+        let mut saw_main_world = false;
+
+        for (config, world, binding_path) in configs
+            .values()
+            .filter_map(|(config, world)| Some((config, world, config.config.bindings.as_deref()?)))
+        {
+            if *world == main_world {
+                saw_main_world = true;
             }
 
-            Ok(())
+            let Some(world) = *world else {
+                bail!("please specify a world for module `{}`", config.module);
+            };
+
+            let paths = python_path
+                .iter()
+                .enumerate()
+                .map(|(index, dir)| {
+                    let dir = Path::new(dir).canonicalize()?;
+                    Ok(if config.root == dir {
+                        config
+                            .path
+                            .join(binding_path)
+                            .strip_prefix(dir)
+                            .ok()
+                            .map(|p| (index, p.to_str().unwrap().replace('\\', "/")))
+                    } else {
+                        None
+                    })
+                })
+                .filter_map(Result::transpose)
+                .collect::<Result<Vec<_>>>()?;
+
+            let binding_module = paths.first().unwrap().1.replace('/', ".");
+
+            let world_dir = tempfile::tempdir()?;
+
+            summary.generate_code(
+                world_dir.path(),
+                world,
+                &binding_module,
+                &mut locations,
+                false,
+            )?;
+
+            world_dir_mounts.push((
+                paths
+                    .iter()
+                    .map(|(index, p)| format!("{index}/{p}"))
+                    .collect(),
+                world_dir,
+            ));
         }
-        replace(embedded_helper_utils.path(), "wit_world", module)?;
-    };
 
-    for (mounts, world_dir) in world_dir_mounts.iter() {
-        for mount in mounts {
-            if DEBUG_PYTHON_BINDINGS {
-                eprintln!("world dir path: {}", world_dir.path().display());
-            }
-            wasi.preopened_dir(world_dir.path(), mount, DirPerms::all(), FilePerms::all())?;
-        }
-    }
+        // If the caller specified a world and we haven't already generated bindings
+        // for it above, do so now.
+        if let (Some(world), false) = (main_world, saw_main_world) {
+            let module = self.world_module.unwrap_or(DEFAULT_WORLD_MODULE);
+            let world_dir = tempfile::tempdir()?;
+            let module_path = world_dir.path().join(module);
+            fs::create_dir_all(&module_path)?;
+            summary.generate_code(&module_path, world, module, &mut locations, false)?;
+            world_dir_mounts.push((vec!["world".to_owned()], world_dir));
 
-    if DEBUG_PYTHON_BINDINGS {
-        // Prevent temporary directories from being deleted:
-        std::mem::forget(world_dir_mounts);
-    }
-
-    // Generate a `Symbols` object containing metadata to be passed to the
-    // pre-init function.  The runtime library will use this to look up types
-    // and functions that will later be referenced by the generated Wasm code.
-    let symbols = summary.collect_symbols(&locations, &metadata, &clone_maps);
-
-    // Finally, pre-initialize the component, writing the result to
-    // `output_path`.
-
-    let python_path = (0..python_path.len())
-        .map(|index| format!("/{index}"))
-        .collect::<Vec<_>>()
-        .join(":");
-
-    let table = ResourceTable::new();
-    let wasi = wasi
-        .env(
-            "PYTHONPATH",
-            format!("/python:/world:{python_path}:/bundled"),
-        )
-        .build();
-
-    let mut config = Config::new();
-    config.wasm_component_model(true);
-    config.wasm_component_model_async(true);
-
-    let engine = Engine::new(&config)?;
-
-    let mut linker = Linker::new(&engine);
-    let added_to_linker = if let Some(add_to_linker) = add_to_linker {
-        add_to_linker(&mut linker)?;
-        true
-    } else {
-        false
-    };
-
-    let mut store = Store::new(&engine, Ctx { wasi, table });
-
-    let app_name = app_name.to_owned();
-    let component = component_init_transform::initialize_staged(
-        &component,
-        stubbed_component
-            .as_ref()
-            .map(|(component, map)| (component.deref(), map as &dyn Fn(u32) -> u32)),
-        move |instrumented| {
-            async move {
-                let component = &Component::new(&engine, instrumented)?;
-                if !added_to_linker {
-                    add_wasi_and_stubs(&resolve, &worlds, &mut linker)?;
+            // The helper utilities are hard-coded to assume the world module is
+            // named `wit_world`.  Here we replace that with the actual world module
+            // name.
+            fn replace(path: &Path, pattern: &str, replacement: &str) -> Result<()> {
+                if path.is_dir() {
+                    for entry in fs::read_dir(path)? {
+                        replace(&entry?.path(), pattern, replacement)?;
+                    }
+                } else {
+                    fs::write(
+                        path,
+                        fs::read_to_string(path)?
+                            .replace(pattern, replacement)
+                            .as_bytes(),
+                    )?;
                 }
 
-                let pre = InitPre::new(linker.instantiate_pre(component)?)?;
-                let instance = pre.instance_pre.instantiate_async(&mut store).await?;
-                let guest = pre.indices.interface0.load(&mut store, &instance)?;
-
-                guest
-                    .call_init(&mut store, &app_name, &symbols, stub_wasi)
-                    .await?
-                    .map_err(|e| anyhow!("{e}"))?;
-
-                Ok(Box::new(MyInvoker { store, instance }) as Box<dyn Invoker>)
+                Ok(())
             }
-            .boxed()
-        },
-    )
-    .await
-    .with_context(move || {
-        format!(
-            "{}{}",
-            String::from_utf8_lossy(&stdout.try_into_inner().unwrap()),
-            String::from_utf8_lossy(&stderr.try_into_inner().unwrap())
+            replace(embedded_helper_utils.path(), "wit_world", module)?;
+        };
+
+        for (mounts, world_dir) in world_dir_mounts.iter() {
+            for mount in mounts {
+                if DEBUG_PYTHON_BINDINGS {
+                    eprintln!("world dir path: {}", world_dir.path().display());
+                }
+                wasi.preopened_dir(world_dir.path(), mount, DirPerms::all(), FilePerms::all())?;
+            }
+        }
+
+        if DEBUG_PYTHON_BINDINGS {
+            // Prevent temporary directories from being deleted:
+            std::mem::forget(world_dir_mounts);
+        }
+
+        // Generate a `Symbols` object containing metadata to be passed to the
+        // pre-init function.  The runtime library will use this to look up types
+        // and functions that will later be referenced by the generated Wasm code.
+        let symbols = summary.collect_symbols(&locations, &metadata, &clone_maps);
+
+        // Finally, pre-initialize the component, writing the result to
+        // `self.output_path`.
+
+        let python_path = (0..python_path.len())
+            .map(|index| format!("/{index}"))
+            .collect::<Vec<_>>()
+            .join(":");
+
+        let table = ResourceTable::new();
+        let wasi = wasi
+            .env(
+                "PYTHONPATH",
+                format!("/python:/world:{python_path}:/bundled"),
+            )
+            .build();
+
+        let mut config = Config::new();
+        config.wasm_component_model(true);
+        config.wasm_component_model_async(true);
+
+        let engine = Engine::new(&config)?;
+
+        let mut linker = Linker::new(&engine);
+        let added_to_linker = if let Some(add_to_linker) = self.add_to_linker {
+            add_to_linker(&mut linker)?;
+            true
+        } else {
+            false
+        };
+
+        let mut store = Store::new(&engine, Ctx { wasi, table });
+
+        let stub_wasi = self.stub_wasi;
+        let app_name = self.app_name.to_owned();
+        let component = component_init_transform::initialize_staged(
+            &component,
+            stubbed_component
+                .as_ref()
+                .map(|(component, map)| (component.deref(), map as &dyn Fn(u32) -> u32)),
+            move |instrumented| {
+                async move {
+                    let component = &Component::new(&engine, instrumented)?;
+                    if !added_to_linker {
+                        add_wasi_and_stubs(&resolve, &worlds, &mut linker)?;
+                    }
+
+                    let pre = InitPre::new(linker.instantiate_pre(component)?)?;
+                    let instance = pre.instance_pre.instantiate_async(&mut store).await?;
+                    let guest = pre.indices.interface0.load(&mut store, &instance)?;
+
+                    guest
+                        .call_init(&mut store, &app_name, &symbols, stub_wasi)
+                        .await?
+                        .map_err(|e| anyhow!("{e}"))?;
+
+                    Ok(Box::new(MyInvoker { store, instance }) as Box<dyn Invoker>)
+                }
+                .boxed()
+            },
         )
-    })?;
+        .await
+        .with_context(move || {
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&stdout.try_into_inner().unwrap()),
+                String::from_utf8_lossy(&stderr.try_into_inner().unwrap())
+            )
+        })?;
 
-    // Checks if the output directory exists, and creates it if it doesn't.
-    if let Some(parent) = output_path.parent() {
-        fs::create_dir_all(parent)?;
+        // Checks if the output directory exists, and creates it if it doesn't.
+        if let Some(parent) = self.output_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(self.output_path, component)?;
+
+        Ok(())
     }
-    fs::write(output_path, component)?;
-
-    Ok(())
 }
 
 fn parse_wit(
-    paths: &[impl AsRef<Path>],
+    paths: &[&Path],
     worlds: &[&str],
     features: &[&str],
     all_features: bool,
@@ -722,6 +781,29 @@ fn parse_wit(
         })
         .collect::<Result<Vec<_>>>()?;
 
+    let available_worlds = |resolve: &Resolve| {
+        resolve
+            .worlds
+            .iter()
+            .map(|(_, world)| {
+                if let Some(package) = world.package {
+                    let package = &resolve.packages[package].name;
+                    let version = if let Some(version) = &package.version {
+                        format!("@{version}")
+                    } else {
+                        String::new()
+                    };
+                    let package_namespace = &package.namespace;
+                    let package_name = &package.name;
+                    let name = &world.name;
+                    format!("{package_namespace}:{package_name}/{name}{version}")
+                } else {
+                    world.name.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+
     let worlds = worlds
         .iter()
         .map(|world| {
@@ -729,7 +811,12 @@ fn parse_wit(
                 .iter()
                 .find_map(|&pkg| resolve.select_world(&[pkg], Some(world)).ok())
                 .ok_or_else(|| {
-                    anyhow!("no world named `{world}` found in any of the loaded WIT packages")
+                    let worlds = available_worlds(&resolve);
+                    anyhow!(
+                        "No world named `{world}` found in any of the loaded WIT packages.\n\
+                         Available worlds: {worlds:#?}\n\
+                         WIT paths: {paths:#?}"
+                    )
                 })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -738,7 +825,14 @@ fn parse_wit(
         [] => packages
             .iter()
             .find_map(|&pkg| resolve.select_world(&[pkg], None).ok())
-            .ok_or_else(|| anyhow!("no default world found in any of the loaded WIT packages"))?,
+            .ok_or_else(|| {
+                let worlds = available_worlds(&resolve);
+                anyhow!(
+                    "No default world found in any of the loaded WIT packages.\n\
+                     Available worlds: {worlds:#?}\n\
+                     WIT paths: {paths:#?}"
+                )
+            })?,
         &[world] => world,
         worlds => union_world(&mut resolve, union_name, worlds, &mut CloneMaps::default())?,
     };

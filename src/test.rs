@@ -1,7 +1,7 @@
 #![deny(warnings)]
 
 use {
-    crate::Ctx,
+    crate::{ComponentGenerator, Ctx},
     anyhow::{Result, anyhow},
     once_cell::sync::Lazy,
     proptest::{
@@ -60,13 +60,13 @@ async fn make_component(
         fs::write(&path, content)?;
     }
 
-    crate::componentize(
-        &[tempdir.path().join("app.wit")],
-        &[],
-        &[],
-        false,
+    ComponentGenerator {
+        wit_path: &[&tempdir.path().join("app.wit")],
+        worlds: &[],
+        features: &[],
+        all_features: false,
         world_module,
-        &python_path
+        python_path: &python_path
             .iter()
             .copied()
             .chain(iter::once(tempdir.path().to_str().ok_or_else(|| {
@@ -74,13 +74,15 @@ async fn make_component(
             })?))
             .collect::<Vec<_>>(),
         module_worlds,
-        "app",
-        &tempdir.path().join("app.wasm"),
+        app_name: "app",
+        output_path: &tempdir.path().join("app.wasm"),
         add_to_linker,
-        false,
-        &HashMap::new(),
-        &HashMap::new(),
-    )
+        stub_wasi: false,
+        import_interface_names: &HashMap::new(),
+        export_interface_names: &HashMap::new(),
+        full_names: false,
+    }
+    .generate()
     .await?;
 
     Ok(fs::read(tempdir.path().join("app.wasm"))?)
