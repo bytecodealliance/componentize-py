@@ -2,9 +2,9 @@
 
 use {
     super::{Ctx, SEED, Tester},
-    anyhow::{Error, Result, anyhow},
+    anyhow::{Result, anyhow},
     exports::componentize_py::test::streams_and_futures,
-    futures::{FutureExt, TryStreamExt, stream::FuturesUnordered},
+    futures::{FutureExt, TryStreamExt, channel::oneshot, stream::FuturesUnordered},
     once_cell::sync::Lazy,
     std::{
         collections::BTreeMap,
@@ -31,7 +31,7 @@ wasmtime::component::bindgen!({
     path: "src/test/wit",
     world: "tests",
     imports: { default: async | trappable },
-    exports: { default: async | task_exit },
+    exports: { default: async },
     with: {
         "componentize-py:test/resource-import-and-export.thing": ThingU32,
         "componentize-py:test/resource-borrow-import.thing": ThingU32,
@@ -74,17 +74,17 @@ pub struct ThingString(String);
 pub struct MyFloat(f64);
 
 impl TestsImports for Ctx {
-    async fn output(&mut self, _: Frame) -> Result<()> {
+    async fn output(&mut self, _: Frame) -> wasmtime::Result<()> {
         unreachable!()
     }
 
-    async fn get_bytes(&mut self, count: u32) -> Result<Vec<u8>> {
+    async fn get_bytes(&mut self, count: u32) -> wasmtime::Result<Vec<u8>> {
         Ok(vec![42u8; usize::try_from(count).unwrap()])
     }
 }
 
 impl TestsImportsWithStore for HasSelf<Ctx> {
-    async fn sleep<T>(_: &Accessor<T, Self>, delay_millis: u32) -> Result<()> {
+    async fn sleep<T>(_: &Accessor<T, Self>, delay_millis: u32) -> wasmtime::Result<()> {
         tokio::time::sleep(Duration::from_millis(delay_millis as _)).await;
         Ok(())
     }
@@ -125,7 +125,7 @@ impl super::Host for Host {
     }
 
     async fn instantiate_pre(store: &mut Store<Ctx>, pre: InstancePre<Ctx>) -> Result<Self::World> {
-        TestsPre::new(pre)?.instantiate_async(store).await
+        Ok(TestsPre::new(pre)?.instantiate_async(store).await?)
     }
 }
 
@@ -139,9 +139,9 @@ impl super::Host for FooHost {
     }
 
     async fn instantiate_pre(store: &mut Store<Ctx>, pre: InstancePre<Ctx>) -> Result<Self::World> {
-        foo_sdk::FooWorldPre::new(pre)?
+        Ok(foo_sdk::FooWorldPre::new(pre)?
             .instantiate_async(store)
-            .await
+            .await?)
     }
 }
 
@@ -155,9 +155,9 @@ impl super::Host for BarHost {
     }
 
     async fn instantiate_pre(store: &mut Store<Ctx>, pre: InstancePre<Ctx>) -> Result<Self::World> {
-        bar_sdk::BarWorldPre::new(pre)?
+        Ok(bar_sdk::BarWorldPre::new(pre)?
             .instantiate_async(store)
-            .await
+            .await?)
     }
 }
 
@@ -167,7 +167,7 @@ static TESTER: Lazy<Tester<Host>> = Lazy::new(|| {
         Some("tests"),
         GUEST_CODE,
         &["src/test"],
-        &[("foo_sdk", "foo-world"), ("bar_sdk", "bar-world")],
+        &[("foo_sdk", &["foo-world"]), ("bar_sdk", &["bar-world"])],
         *SEED,
     )
     .unwrap()
@@ -194,18 +194,16 @@ fn simple_async_export() -> Result<()> {
     TESTER.test(|world, store, runtime| {
         assert_eq!(
             42 + 3,
-            runtime
-                .block_on(async {
-                    store
-                        .run_concurrent(async |store| {
-                            world
-                                .componentize_py_test_simple_async_export()
-                                .call_foo(store, 42)
-                                .await
-                        })
-                        .await?
-                })?
-                .0
+            runtime.block_on(async {
+                store
+                    .run_concurrent(async |store| {
+                        world
+                            .componentize_py_test_simple_async_export()
+                            .call_foo(store, 42)
+                            .await
+                    })
+                    .await?
+            })?
         );
 
         Ok(())
@@ -215,7 +213,7 @@ fn simple_async_export() -> Result<()> {
 #[test]
 fn simple_import_and_export() -> Result<()> {
     impl componentize_py::test::simple_import_and_export::Host for Ctx {
-        async fn foo(&mut self, v: u32) -> Result<u32> {
+        async fn foo(&mut self, v: u32) -> wasmtime::Result<u32> {
             Ok(v + 2)
         }
     }
@@ -239,7 +237,7 @@ fn simple_async_import_and_export() -> Result<()> {
     impl componentize_py::test::simple_async_import_and_export::Host for Ctx {}
 
     impl componentize_py::test::simple_async_import_and_export::HostWithStore for HasSelf<Ctx> {
-        async fn foo<T>(_: &Accessor<T, Self>, v: u32) -> Result<u32> {
+        async fn foo<T>(_: &Accessor<T, Self>, v: u32) -> wasmtime::Result<u32> {
             tokio::time::sleep(DELAY).await;
             Ok(v + 2)
         }
@@ -248,18 +246,16 @@ fn simple_async_import_and_export() -> Result<()> {
     TESTER.test(|world, store, runtime| {
         assert_eq!(
             42 + 2 + 3,
-            runtime
-                .block_on(async {
-                    store
-                        .run_concurrent(async |store| {
-                            world
-                                .componentize_py_test_simple_async_import_and_export()
-                                .call_foo(store, 42)
-                                .await
-                        })
-                        .await?
-                })?
-                .0
+            runtime.block_on(async {
+                store
+                    .run_concurrent(async |store| {
+                        world
+                            .componentize_py_test_simple_async_import_and_export()
+                            .call_foo(store, 42)
+                            .await
+                    })
+                    .await?
+            })?
         );
 
         Ok(())
@@ -271,15 +267,15 @@ fn resource_import_and_export() -> Result<()> {
     use componentize_py::test::resource_import_and_export::{Host, HostThing};
 
     impl HostThing for Ctx {
-        async fn new(&mut self, v: u32) -> Result<Resource<ThingU32>> {
+        async fn new(&mut self, v: u32) -> wasmtime::Result<Resource<ThingU32>> {
             Ok(self.ctx().table.push(ThingU32(v + 8))?)
         }
 
-        async fn foo(&mut self, this: Resource<ThingU32>) -> Result<u32> {
+        async fn foo(&mut self, this: Resource<ThingU32>) -> wasmtime::Result<u32> {
             Ok(self.ctx().table.get(&this)?.0 + 1)
         }
 
-        async fn bar(&mut self, this: Resource<ThingU32>, v: u32) -> Result<()> {
+        async fn bar(&mut self, this: Resource<ThingU32>, v: u32) -> wasmtime::Result<()> {
             self.ctx().table.get_mut(&this)?.0 = v + 5;
             Ok(())
         }
@@ -288,14 +284,14 @@ fn resource_import_and_export() -> Result<()> {
             &mut self,
             a: Resource<ThingU32>,
             b: Resource<ThingU32>,
-        ) -> Result<Resource<ThingU32>> {
+        ) -> wasmtime::Result<Resource<ThingU32>> {
             let a = self.ctx().table.get(&a)?.0;
             let b = self.ctx().table.get(&b)?.0;
 
             Ok(self.ctx().table.push(ThingU32(a + b + 6))?)
         }
 
-        async fn drop(&mut self, this: Resource<ThingU32>) -> Result<()> {
+        async fn drop(&mut self, this: Resource<ThingU32>) -> wasmtime::Result<()> {
             Ok(self.ctx().table.delete(this).map(|_| ())?)
         }
     }
@@ -336,7 +332,7 @@ fn resource_import_and_export() -> Result<()> {
 
 #[test]
 fn refcounts() -> Result<()> {
-    TESTER.test(|world, store, runtime| runtime.block_on(world.call_test_refcounts(store)))
+    TESTER.test(|world, store, runtime| Ok(runtime.block_on(world.call_test_refcounts(store))?))
 }
 
 #[test]
@@ -344,17 +340,17 @@ fn resource_borrow_import() -> Result<()> {
     use componentize_py::test::resource_borrow_import::{Host, HostThing};
 
     impl HostThing for Ctx {
-        async fn new(&mut self, v: u32) -> Result<Resource<ThingU32>> {
+        async fn new(&mut self, v: u32) -> wasmtime::Result<Resource<ThingU32>> {
             Ok(self.ctx().table.push(ThingU32(v + 2))?)
         }
 
-        async fn drop(&mut self, this: Resource<ThingU32>) -> Result<()> {
+        async fn drop(&mut self, this: Resource<ThingU32>) -> wasmtime::Result<()> {
             Ok(self.ctx().table.delete(this).map(|_| ())?)
         }
     }
 
     impl Host for Ctx {
-        async fn foo(&mut self, this: Resource<ThingU32>) -> Result<u32> {
+        async fn foo(&mut self, this: Resource<ThingU32>) -> wasmtime::Result<u32> {
             Ok(self.ctx().table.get(&this)?.0 + 3)
         }
     }
@@ -389,29 +385,29 @@ fn resource_with_lists() -> Result<()> {
     use componentize_py::test::resource_with_lists::{Host, HostThing};
 
     impl HostThing for Ctx {
-        async fn new(&mut self, mut v: Vec<u8>) -> Result<Resource<ThingList>> {
+        async fn new(&mut self, mut v: Vec<u8>) -> wasmtime::Result<Resource<ThingList>> {
             v.extend(b" HostThing.new");
             Ok(self.ctx().table.push(ThingList(v))?)
         }
 
-        async fn foo(&mut self, this: Resource<ThingList>) -> Result<Vec<u8>> {
+        async fn foo(&mut self, this: Resource<ThingList>) -> wasmtime::Result<Vec<u8>> {
             let mut v = self.ctx().table.get(&this)?.0.clone();
             v.extend(b" HostThing.foo");
             Ok(v)
         }
 
-        async fn bar(&mut self, this: Resource<ThingList>, mut v: Vec<u8>) -> Result<()> {
+        async fn bar(&mut self, this: Resource<ThingList>, mut v: Vec<u8>) -> wasmtime::Result<()> {
             v.extend(b" HostThing.bar");
             self.ctx().table.get_mut(&this)?.0 = v;
             Ok(())
         }
 
-        async fn baz(&mut self, mut v: Vec<u8>) -> Result<Vec<u8>> {
+        async fn baz(&mut self, mut v: Vec<u8>) -> wasmtime::Result<Vec<u8>> {
             v.extend(b" HostThing.baz");
             Ok(v)
         }
 
-        async fn drop(&mut self, this: Resource<ThingList>) -> Result<()> {
+        async fn drop(&mut self, this: Resource<ThingList>) -> wasmtime::Result<()> {
             Ok(self.ctx().table.delete(this).map(|_| ())?)
         }
     }
@@ -454,11 +450,11 @@ fn resource_aggregates() -> Result<()> {
         };
 
         impl HostThing for Ctx {
-            async fn new(&mut self, v: u32) -> Result<Resource<ThingU32>> {
+            async fn new(&mut self, v: u32) -> wasmtime::Result<Resource<ThingU32>> {
                 Ok(self.ctx().table.push(ThingU32(v + 2))?)
             }
 
-            async fn drop(&mut self, this: Resource<ThingU32>) -> Result<()> {
+            async fn drop(&mut self, this: Resource<ThingU32>) -> wasmtime::Result<()> {
                 Ok(self.ctx().table.delete(this).map(|_| ())?)
             }
         }
@@ -479,7 +475,7 @@ fn resource_aggregates() -> Result<()> {
                 o2: Option<Resource<ThingU32>>,
                 result1: Result<Resource<ThingU32>, ()>,
                 result2: Result<Resource<ThingU32>, ()>,
-            ) -> Result<u32> {
+            ) -> wasmtime::Result<u32> {
                 let V1::Thing(v1) = v1;
                 let V2::Thing(v2) = v2;
                 Ok(self.ctx().table.get(&r1.thing)?.0
@@ -491,19 +487,21 @@ fn resource_aggregates() -> Result<()> {
                     + self.ctx().table.get(&t2.0)?.0
                     + self.ctx().table.get(&v1)?.0
                     + self.ctx().table.get(&v2)?.0
-                    + l1.into_iter()
-                        .try_fold(0, |n, v| Ok::<_, Error>(self.ctx().table.get(&v)?.0 + n))?
-                    + l2.into_iter()
-                        .try_fold(0, |n, v| Ok::<_, Error>(self.ctx().table.get(&v)?.0 + n))?
-                    + o1.map(|v| Ok::<_, Error>(self.ctx().table.get(&v)?.0))
+                    + l1.into_iter().try_fold(0, |n, v| {
+                        Ok::<_, wasmtime::Error>(self.ctx().table.get(&v)?.0 + n)
+                    })?
+                    + l2.into_iter().try_fold(0, |n, v| {
+                        Ok::<_, wasmtime::Error>(self.ctx().table.get(&v)?.0 + n)
+                    })?
+                    + o1.map(|v| Ok::<_, wasmtime::Error>(self.ctx().table.get(&v)?.0))
                         .unwrap_or(Ok(0))?
-                    + o2.map(|v| Ok::<_, Error>(self.ctx().table.get(&v)?.0))
+                    + o2.map(|v| Ok::<_, wasmtime::Error>(self.ctx().table.get(&v)?.0))
                         .unwrap_or(Ok(0))?
                     + result1
-                        .map(|v| Ok::<_, Error>(self.ctx().table.get(&v)?.0))
+                        .map(|v| Ok::<_, wasmtime::Error>(self.ctx().table.get(&v)?.0))
                         .unwrap_or(Ok(0))?
                     + result2
-                        .map(|v| Ok::<_, Error>(self.ctx().table.get(&v)?.0))
+                        .map(|v| Ok::<_, wasmtime::Error>(self.ctx().table.get(&v)?.0))
                         .unwrap_or(Ok(0))?
                     + 3)
             }
@@ -558,21 +556,21 @@ fn resource_alias() -> Result<()> {
         use componentize_py::test::resource_alias1::{Foo, Host, HostThing};
 
         impl HostThing for Ctx {
-            async fn new(&mut self, s: String) -> Result<Resource<ThingString>> {
+            async fn new(&mut self, s: String) -> wasmtime::Result<Resource<ThingString>> {
                 Ok(self.ctx().table.push(ThingString(s + " HostThing::new"))?)
             }
 
-            async fn get(&mut self, this: Resource<ThingString>) -> Result<String> {
+            async fn get(&mut self, this: Resource<ThingString>) -> wasmtime::Result<String> {
                 Ok(format!("{} HostThing.get", self.ctx().table.get(&this)?.0))
             }
 
-            async fn drop(&mut self, this: Resource<ThingString>) -> Result<()> {
+            async fn drop(&mut self, this: Resource<ThingString>) -> wasmtime::Result<()> {
                 Ok(self.ctx().table.delete(this).map(|_| ())?)
             }
         }
 
         impl Host for Ctx {
-            async fn a(&mut self, f: Foo) -> Result<Vec<Resource<ThingString>>> {
+            async fn a(&mut self, f: Foo) -> wasmtime::Result<Vec<Resource<ThingString>>> {
                 Ok(vec![f.thing])
             }
         }
@@ -582,7 +580,7 @@ fn resource_alias() -> Result<()> {
         use componentize_py::test::resource_alias2::{Bar, Foo, Host, Thing};
 
         impl Host for Ctx {
-            async fn b(&mut self, f: Foo, g: Bar) -> Result<Vec<Resource<Thing>>> {
+            async fn b(&mut self, f: Foo, g: Bar) -> wasmtime::Result<Vec<Resource<Thing>>> {
                 Ok(vec![f.thing, g.thing])
             }
         }
@@ -676,20 +674,24 @@ fn resource_floats() -> Result<()> {
         use resource_floats_imports::{Host, HostFloat};
 
         impl HostFloat for Ctx {
-            async fn new(&mut self, v: f64) -> Result<Resource<MyFloat>> {
+            async fn new(&mut self, v: f64) -> wasmtime::Result<Resource<MyFloat>> {
                 Ok(self.ctx().table.push(MyFloat(v + 2_f64))?)
             }
 
-            async fn get(&mut self, this: Resource<MyFloat>) -> Result<f64> {
+            async fn get(&mut self, this: Resource<MyFloat>) -> wasmtime::Result<f64> {
                 Ok(self.ctx().table.get(&this)?.0 + 4_f64)
             }
 
-            async fn add(&mut self, a: Resource<MyFloat>, b: f64) -> Result<Resource<MyFloat>> {
+            async fn add(
+                &mut self,
+                a: Resource<MyFloat>,
+                b: f64,
+            ) -> wasmtime::Result<Resource<MyFloat>> {
                 let a = self.ctx().table.get(&a)?.0;
                 Ok(self.ctx().table.push(MyFloat(a + b + 6_f64))?)
             }
 
-            async fn drop(&mut self, this: Resource<MyFloat>) -> Result<()> {
+            async fn drop(&mut self, this: Resource<MyFloat>) -> wasmtime::Result<()> {
                 Ok(self.ctx().table.delete(this).map(|_| ())?)
             }
         }
@@ -701,15 +703,15 @@ fn resource_floats() -> Result<()> {
         use componentize_py::test::resource_floats::{Host, HostFloat};
 
         impl HostFloat for Ctx {
-            async fn new(&mut self, v: f64) -> Result<Resource<MyFloat>> {
+            async fn new(&mut self, v: f64) -> wasmtime::Result<Resource<MyFloat>> {
                 Ok(self.ctx().table.push(MyFloat(v + 1_f64))?)
             }
 
-            async fn get(&mut self, this: Resource<MyFloat>) -> Result<f64> {
+            async fn get(&mut self, this: Resource<MyFloat>) -> wasmtime::Result<f64> {
                 Ok(self.ctx().table.get(&this)?.0 + 3_f64)
             }
 
-            async fn drop(&mut self, this: Resource<MyFloat>) -> Result<()> {
+            async fn drop(&mut self, this: Resource<MyFloat>) -> wasmtime::Result<()> {
                 Ok(self.ctx().table.delete(this).map(|_| ())?)
             }
         }
@@ -765,21 +767,24 @@ fn resource_borrow_in_record() -> Result<()> {
         use componentize_py::test::resource_borrow_in_record::{Foo, Host, HostThing};
 
         impl HostThing for Ctx {
-            async fn new(&mut self, v: String) -> Result<Resource<ThingString>> {
+            async fn new(&mut self, v: String) -> wasmtime::Result<Resource<ThingString>> {
                 Ok(self.ctx().table.push(ThingString(v + " HostThing::new"))?)
             }
 
-            async fn get(&mut self, this: Resource<ThingString>) -> Result<String> {
+            async fn get(&mut self, this: Resource<ThingString>) -> wasmtime::Result<String> {
                 Ok(format!("{} HostThing.get", self.ctx().table.get(&this)?.0))
             }
 
-            async fn drop(&mut self, this: Resource<ThingString>) -> Result<()> {
+            async fn drop(&mut self, this: Resource<ThingString>) -> wasmtime::Result<()> {
                 Ok(self.ctx().table.delete(this).map(|_| ())?)
             }
         }
 
         impl Host for Ctx {
-            async fn test(&mut self, list: Vec<Foo>) -> Result<Vec<Resource<ThingString>>> {
+            async fn test(
+                &mut self,
+                list: Vec<Foo>,
+            ) -> wasmtime::Result<Vec<Resource<ThingString>>> {
                 list.into_iter()
                     .map(|foo| {
                         let value = self.ctx().table.get(&foo.thing)?.0.clone();
@@ -839,7 +844,7 @@ fn resource_borrow_in_record() -> Result<()> {
 #[test]
 fn multiworld() -> Result<()> {
     impl foo_sdk::foo::sdk::foo_interface::Host for Ctx {
-        fn test(&mut self, s: String) -> Result<String> {
+        fn test(&mut self, s: String) -> wasmtime::Result<String> {
             Ok(format!("{s} HostFoo::test"))
         }
     }
@@ -926,7 +931,7 @@ impl<D, T: Lift + Unpin + 'static> StreamProducer<D> for VecProducer<T> {
         _: StoreContextMut<D>,
         mut destination: Destination<Self::Item, Self::Buffer>,
         _: bool,
-    ) -> Poll<Result<StreamResult>> {
+    ) -> Poll<wasmtime::Result<StreamResult>> {
         let sleep = &mut self.as_mut().get_mut().sleep;
         task::ready!(sleep.as_mut().poll(cx));
         *sleep = async {}.boxed();
@@ -939,10 +944,11 @@ impl<D, T: Lift + Unpin + 'static> StreamProducer<D> for VecProducer<T> {
 struct VecConsumer<T> {
     destination: Arc<Mutex<Vec<T>>>,
     sleep: Pin<Box<dyn Future<Output = ()> + Send>>,
+    _tx: oneshot::Sender<()>,
 }
 
 impl<T> VecConsumer<T> {
-    fn new(destination: Arc<Mutex<Vec<T>>>, delay: bool) -> Self {
+    fn new(destination: Arc<Mutex<Vec<T>>>, delay: bool, tx: oneshot::Sender<()>) -> Self {
         Self {
             destination,
             sleep: if delay {
@@ -950,6 +956,7 @@ impl<T> VecConsumer<T> {
             } else {
                 async {}.boxed()
             },
+            _tx: tx,
         }
     }
 }
@@ -963,7 +970,7 @@ impl<D, T: Lift + 'static> StreamConsumer<D> for VecConsumer<T> {
         store: StoreContextMut<D>,
         mut source: Source<Self::Item>,
         _: bool,
-    ) -> Poll<Result<StreamResult>> {
+    ) -> Poll<wasmtime::Result<StreamResult>> {
         let sleep = &mut self.as_mut().get_mut().sleep;
         task::ready!(sleep.as_mut().poll(cx));
         *sleep = async {}.boxed();
@@ -992,19 +999,20 @@ fn test_echo_stream_u8(delay: bool) -> Result<()> {
                         b"Beware the Jubjub bird, and shun\n\tThe frumious Bandersnatch!";
                     let stream = store.with(|store| {
                         StreamReader::new(store, VecProducer::new(expected.to_vec(), delay))
-                    });
+                    })?;
 
-                    let (stream, task) = world
+                    let stream = world
                         .componentize_py_test_streams_and_futures()
                         .call_echo_stream_u8(store, stream)
                         .await?;
 
                     let received = Arc::new(Mutex::new(Vec::with_capacity(expected.len())));
+                    let (tx, rx) = oneshot::channel();
                     store.with(|store| {
-                        stream.pipe(store, VecConsumer::new(received.clone(), delay))
-                    });
+                        stream.pipe(store, VecConsumer::new(received.clone(), delay, tx))
+                    })?;
 
-                    task.block(store).await;
+                    _ = rx.await;
 
                     assert_eq!(expected, &received.lock().unwrap()[..]);
 
@@ -1043,7 +1051,7 @@ impl<D, T: Unpin + Send + 'static> FutureProducer<D> for OptionProducer<T> {
         cx: &mut Context<'_>,
         _: StoreContextMut<D>,
         _: bool,
-    ) -> Poll<Result<Option<T>>> {
+    ) -> Poll<wasmtime::Result<Option<T>>> {
         let sleep = &mut self.as_mut().get_mut().sleep;
         task::ready!(sleep.as_mut().poll(cx));
         *sleep = async {}.boxed();
@@ -1055,10 +1063,11 @@ impl<D, T: Unpin + Send + 'static> FutureProducer<D> for OptionProducer<T> {
 struct OptionConsumer<T> {
     destination: Arc<Mutex<Option<T>>>,
     sleep: Pin<Box<dyn Future<Output = ()> + Send>>,
+    _tx: oneshot::Sender<()>,
 }
 
 impl<T> OptionConsumer<T> {
-    fn new(destination: Arc<Mutex<Option<T>>>, delay: bool) -> Self {
+    fn new(destination: Arc<Mutex<Option<T>>>, delay: bool, tx: oneshot::Sender<()>) -> Self {
         Self {
             destination,
             sleep: if delay {
@@ -1066,6 +1075,7 @@ impl<T> OptionConsumer<T> {
             } else {
                 async {}.boxed()
             },
+            _tx: tx,
         }
     }
 }
@@ -1079,7 +1089,7 @@ impl<D, T: Lift + 'static> FutureConsumer<D> for OptionConsumer<T> {
         store: StoreContextMut<D>,
         mut source: Source<Self::Item>,
         _: bool,
-    ) -> Poll<Result<()>> {
+    ) -> Poll<wasmtime::Result<()>> {
         let sleep = &mut self.as_mut().get_mut().sleep;
         task::ready!(sleep.as_mut().poll(cx));
         *sleep = async {}.boxed();
@@ -1110,19 +1120,20 @@ fn test_echo_future_string(delay: bool) -> Result<()> {
                             store,
                             OptionProducer::new(Some(expected.to_string()), delay),
                         )
-                    });
+                    })?;
 
-                    let (future, task) = world
+                    let future = world
                         .componentize_py_test_streams_and_futures()
                         .call_echo_future_string(store, future)
                         .await?;
 
                     let received = Arc::new(Mutex::new(None::<String>));
+                    let (tx, rx) = oneshot::channel();
                     store.with(|store| {
-                        future.pipe(store, OptionConsumer::new(received.clone(), delay))
-                    });
+                        future.pipe(store, OptionConsumer::new(received.clone(), delay, tx))
+                    })?;
 
-                    task.block(store).await;
+                    _ = rx.await;
 
                     assert_eq!(
                         expected,
@@ -1142,10 +1153,11 @@ struct OneAtATime<T> {
     destination: Arc<Mutex<Vec<T>>>,
     sleep: Pin<Box<dyn Future<Output = ()> + Send>>,
     delay: bool,
+    _tx: oneshot::Sender<()>,
 }
 
 impl<T> OneAtATime<T> {
-    fn new(destination: Arc<Mutex<Vec<T>>>, delay: bool) -> Self {
+    fn new(destination: Arc<Mutex<Vec<T>>>, delay: bool, tx: oneshot::Sender<()>) -> Self {
         Self {
             destination,
             sleep: if delay {
@@ -1154,6 +1166,7 @@ impl<T> OneAtATime<T> {
                 async {}.boxed()
             },
             delay,
+            _tx: tx,
         }
     }
 }
@@ -1167,7 +1180,7 @@ impl<D, T: Lift + 'static> StreamConsumer<D> for OneAtATime<T> {
         store: StoreContextMut<D>,
         mut source: Source<Self::Item>,
         _: bool,
-    ) -> Poll<Result<StreamResult>> {
+    ) -> Poll<wasmtime::Result<StreamResult>> {
         let delay = self.delay;
         let sleep = &mut self.as_mut().get_mut().sleep;
         task::ready!(sleep.as_mut().poll(cx));
@@ -1213,20 +1226,21 @@ fn test_short_reads(delay: bool) -> Result<()> {
                     // one at a time, forcing us to retake ownership of the unwritten
                     // items between writes.
                     let stream = store
-                        .with(|store| StreamReader::new(store, VecProducer::new(things, delay)));
+                        .with(|store| StreamReader::new(store, VecProducer::new(things, delay)))?;
 
-                    let (stream, task) = instance.call_short_reads(store, stream).await?;
+                    let stream = instance.call_short_reads(store, stream).await?;
 
                     let received_things = Arc::new(Mutex::new(
                         Vec::<streams_and_futures::Thing>::with_capacity(count),
                     ));
+                    let (tx, rx) = oneshot::channel();
                     // Read only one item at a time, forcing the sender to retake
                     // ownership of any unwritten items.
                     store.with(|store| {
-                        stream.pipe(store, OneAtATime::new(received_things.clone(), delay))
-                    });
+                        stream.pipe(store, OneAtATime::new(received_things.clone(), delay, tx))
+                    })?;
 
-                    task.block(store).await;
+                    _ = rx.await;
 
                     assert_eq!(count, received_things.lock().unwrap().len());
 
@@ -1253,7 +1267,7 @@ fn test_short_reads(delay: bool) -> Result<()> {
                     }
 
                     let mut received_strings = BTreeMap::new();
-                    while let Some((index, (string, _))) = futures.try_next().await? {
+                    while let Some((index, string)) = futures.try_next().await? {
                         received_strings.insert(index, string);
                     }
 
@@ -1299,17 +1313,17 @@ fn test_short_reads_host(delay: bool) -> Result<()> {
         async fn get<T>(
             accessor: &Accessor<T, Self>,
             this: Resource<ThingString>,
-        ) -> Result<String> {
+        ) -> wasmtime::Result<String> {
             accessor.with(|mut store| Ok(store.get().table.get(&this)?.0.clone()))
         }
     }
 
     impl HostHostThing for Ctx {
-        async fn new(&mut self, v: String) -> Result<Resource<ThingString>> {
+        async fn new(&mut self, v: String) -> wasmtime::Result<Resource<ThingString>> {
             Ok(self.ctx().table.push(ThingString(v))?)
         }
 
-        async fn drop(&mut self, this: Resource<ThingString>) -> Result<()> {
+        async fn drop(&mut self, this: Resource<ThingString>) -> wasmtime::Result<()> {
             Ok(self.ctx().table.delete(this).map(|_| ())?)
         }
     }
@@ -1333,20 +1347,21 @@ fn test_short_reads_host(delay: bool) -> Result<()> {
                     // one at a time, forcing us to retake ownership of the unwritten
                     // items between writes.
                     let stream = store
-                        .with(|store| StreamReader::new(store, VecProducer::new(things, delay)));
+                        .with(|store| StreamReader::new(store, VecProducer::new(things, delay)))?;
 
-                    let (stream, task) = instance.call_short_reads_host(store, stream).await?;
+                    let stream = instance.call_short_reads_host(store, stream).await?;
 
                     let received_things = Arc::new(Mutex::new(
                         Vec::<Resource<ThingString>>::with_capacity(count),
                     ));
+                    let (tx, rx) = oneshot::channel();
                     // Read only one item at a time, forcing the sender to retake
                     // ownership of any unwritten items.
                     store.with(|store| {
-                        stream.pipe(store, OneAtATime::new(received_things.clone(), delay))
-                    });
+                        stream.pipe(store, OneAtATime::new(received_things.clone(), delay, tx))
+                    })?;
 
-                    task.block(store).await;
+                    _ = rx.await;
 
                     assert_eq!(count, received_things.lock().unwrap().len());
 
@@ -1393,24 +1408,25 @@ fn test_dropped_future_reader(delay: bool) -> Result<()> {
             let it = store
                 .run_concurrent(async |store| {
                     let expected = "Beware the Jubjub bird, and shun\n\tThe frumious Bandersnatch!";
-                    let ((mut rx1, rx2), task) = instance
+                    let (mut rx1, rx2) = instance
                         .call_dropped_future_reader(store, expected.into())
                         .await?;
                     // Close the future without reading the value.  This will
                     // force the sender to retake ownership of the value it
                     // tried to write.
-                    rx1.close_with(store);
+                    rx1.close_with(store)?;
 
                     let received = Arc::new(Mutex::new(None::<streams_and_futures::Thing>));
+                    let (tx, rx) = oneshot::channel();
                     store.with(|store| {
-                        rx2.pipe(store, OptionConsumer::new(received.clone(), delay))
-                    });
+                        rx2.pipe(store, OptionConsumer::new(received.clone(), delay, tx))
+                    })?;
 
-                    task.block(store).await;
+                    _ = rx.await;
 
                     let it = received.lock().unwrap().take().unwrap();
 
-                    assert_eq!(expected, &thing.call_get(store, it, 0).await?.0);
+                    assert_eq!(expected, &thing.call_get(store, it, 0).await?);
 
                     anyhow::Ok(it)
                 })
@@ -1443,20 +1459,21 @@ fn test_dropped_future_reader_host(delay: bool) -> Result<()> {
             store
                 .run_concurrent(async |store| {
                     let expected = "Beware the Jubjub bird, and shun\n\tThe frumious Bandersnatch!";
-                    let ((mut rx1, rx2), task) = instance
+                    let (mut rx1, rx2) = instance
                         .call_dropped_future_reader_host(store, expected.into())
                         .await?;
                     // Close the future without reading the value.  This will
                     // force the sender to retake ownership of the value it
                     // tried to write.
-                    rx1.close_with(store);
+                    rx1.close_with(store)?;
 
                     let received = Arc::new(Mutex::new(None::<Resource<ThingString>>));
+                    let (tx, rx) = oneshot::channel();
                     store.with(|store| {
-                        rx2.pipe(store, OptionConsumer::new(received.clone(), delay))
-                    });
+                        rx2.pipe(store, OptionConsumer::new(received.clone(), delay, tx))
+                    })?;
 
-                    task.block(store).await;
+                    _ = rx.await;
 
                     let it = store.with(|mut store| {
                         anyhow::Ok(

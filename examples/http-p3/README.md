@@ -1,7 +1,7 @@
 # Example: `http-p3`
 
 This is an example of how to use [componentize-py] and [Wasmtime] to build and
-run a Python-based component targetting version `0.3.0-rc-2026-01-06` of the
+run a Python-based component targetting version `0.3.0-rc-2026-03-15` of the
 [wasi-http] `service` world.
 
 [componentize-py]: https://github.com/bytecodealliance/componentize-py
@@ -10,16 +10,16 @@ run a Python-based component targetting version `0.3.0-rc-2026-01-06` of the
 
 ## Prerequisites
 
-* `Wasmtime` 41.0.3
-* `componentize-py` 0.21.0
+* `Wasmtime` 43.0.0
+* `componentize-py` 0.22.0
 
 Below, we use [Rust](https://rustup.rs/)'s `cargo` to install `Wasmtime`.  If
 you don't have `cargo`, you can download and install from
-https://github.com/bytecodealliance/wasmtime/releases/tag/v41.0.3.
+https://github.com/bytecodealliance/wasmtime/releases/tag/v43.0.0.
 
 ```
-cargo install --version 41.0.3 wasmtime-cli
-pip install componentize-py==0.21.0
+cargo install --version 43.0.0 wasmtime-cli
+pip install componentize-py==0.22.0
 ```
 
 ## Running the demo
@@ -27,7 +27,7 @@ pip install componentize-py==0.21.0
 First, build the app and run it:
 
 ```
-componentize-py -d ../../wit -w wasi:http/service@0.3.0-rc-2026-01-06 componentize app -o http.wasm
+componentize-py -d ../../wit -w wasi:http/service@0.3.0-rc-2026-03-15 componentize app -o http.wasm
 wasmtime serve -Sp3,common -Wcomponent-model-async http.wasm
 ```
 

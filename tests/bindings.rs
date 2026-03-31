@@ -39,7 +39,7 @@ fn lint_cli_p3_bindings() -> anyhow::Result<()> {
     )?;
     let path = dir.path().join("cli-p3");
 
-    generate_bindings(&path, "wasi:cli/command@0.3.0-rc-2026-01-06")?;
+    generate_bindings(&path, "wasi:cli/command@0.3.0-rc-2026-03-15")?;
 
     assert!(predicate::path::is_dir().eval(&path.join("wit_world")));
 
@@ -91,7 +91,7 @@ fn lint_http_p3_bindings() -> anyhow::Result<()> {
     )?;
     let path = dir.path().join("http-p3");
 
-    generate_bindings(&path, "wasi:http/service@0.3.0-rc-2026-01-06")?;
+    generate_bindings(&path, "wasi:http/service@0.3.0-rc-2026-03-15")?;
 
     assert!(predicate::path::is_dir().eval(&path.join("wit_world")));
 
@@ -181,7 +181,7 @@ fn lint_tcp_p3_bindings() -> anyhow::Result<()> {
     )?;
     let path = dir.path().join("tcp-p3");
 
-    generate_bindings(&path, "wasi:cli/command@0.3.0-rc-2026-01-06")?;
+    generate_bindings(&path, "wasi:cli/command@0.3.0-rc-2026-03-15")?;
 
     assert!(predicate::path::is_dir().eval(&path.join("wit_world")));
 

@@ -6,7 +6,6 @@ use {
     bytes::Bytes,
     component_init_transform::Invoker,
     futures::future::FutureExt,
-    heck::ToSnakeCase,
     indexmap::{IndexMap, IndexSet},
     serde::Deserialize,
     std::{
@@ -19,7 +18,7 @@ use {
         path::{Path, PathBuf},
         str,
     },
-    summary::{Escape, Locations, Summary},
+    summary::{Locations, Summary},
     tar::Archive,
     wasm_encoder::{CustomSection, Section as _},
     wasmtime::{
@@ -33,8 +32,8 @@ use {
     wit_component::metadata,
     wit_dylib::DylibOpts,
     wit_parser::{
-        CloneMaps, FunctionKind, Package, PackageName, Resolve, Stability, TypeDefKind,
-        UnresolvedPackageGroup, World, WorldId, WorldItem, WorldKey,
+        CloneMaps, FunctionKind, Package, PackageName, Resolve, Stability, TypeDefKind, World,
+        WorldId, WorldItem, WorldKey,
     },
     zstd::Decoder,
 };
@@ -142,53 +141,43 @@ impl Invoker for MyInvoker {
         let func = self
             .instance
             .get_typed_func::<(), (i32,)>(&mut self.store, function)?;
-        let result = func.call_async(&mut self.store, ()).await?.0;
-        func.post_return_async(&mut self.store).await?;
-        Ok(result)
+        Ok(func.call_async(&mut self.store, ()).await?.0)
     }
 
     async fn call_s64(&mut self, function: &str) -> Result<i64> {
         let func = self
             .instance
             .get_typed_func::<(), (i64,)>(&mut self.store, function)?;
-        let result = func.call_async(&mut self.store, ()).await?.0;
-        func.post_return_async(&mut self.store).await?;
-        Ok(result)
+        Ok(func.call_async(&mut self.store, ()).await?.0)
     }
 
     async fn call_f32(&mut self, function: &str) -> Result<f32> {
         let func = self
             .instance
             .get_typed_func::<(), (f32,)>(&mut self.store, function)?;
-        let result = func.call_async(&mut self.store, ()).await?.0;
-        func.post_return_async(&mut self.store).await?;
-        Ok(result)
+        Ok(func.call_async(&mut self.store, ()).await?.0)
     }
 
     async fn call_f64(&mut self, function: &str) -> Result<f64> {
         let func = self
             .instance
             .get_typed_func::<(), (f64,)>(&mut self.store, function)?;
-        let result = func.call_async(&mut self.store, ()).await?.0;
-        func.post_return_async(&mut self.store).await?;
-        Ok(result)
+        Ok(func.call_async(&mut self.store, ()).await?.0)
     }
 
     async fn call_list_u8(&mut self, function: &str) -> Result<Vec<u8>> {
         let func = self
             .instance
             .get_typed_func::<(), (Vec<u8>,)>(&mut self.store, function)?;
-        let result = func.call_async(&mut self.store, ()).await?.0;
-        func.post_return_async(&mut self.store).await?;
-        Ok(result)
+        Ok(func.call_async(&mut self.store, ()).await?.0)
     }
 }
 
 #[allow(clippy::too_many_arguments)]
 pub fn generate_bindings(
     wit_path: &[impl AsRef<Path>],
-    world: Option<&str>,
-    features: &[String],
+    worlds: &[&str],
+    features: &[&str],
     all_features: bool,
     world_module: Option<&str>,
     output_dir: &Path,
@@ -199,7 +188,7 @@ pub fn generate_bindings(
     // componentize-py.toml files in the `componentize` function below, since
     // that can affect the bindings we should be generating.
 
-    let (resolve, world) = parse_wit(wit_path, world, features, all_features)?;
+    let (resolve, world) = parse_wit(wit_path, worlds, features, all_features, "union")?;
     let import_function_indexes = &HashMap::new();
     let export_function_indexes = &HashMap::new();
     let stream_and_future_indexes = &HashMap::new();
@@ -236,12 +225,12 @@ pub fn generate_bindings(
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub async fn componentize(
     wit_path: &[impl AsRef<Path>],
-    world: Option<&str>,
-    features: &[String],
+    worlds: &[&str],
+    features: &[&str],
     all_features: bool,
     world_module: Option<&str>,
     python_path: &[&str],
-    module_worlds: &[(&str, &str)],
+    module_worlds: &[(&str, &[&str])],
     app_name: &str,
     output_path: &Path,
     add_to_linker: Option<&dyn Fn(&mut Linker<Ctx>) -> Result<()>>,
@@ -260,14 +249,22 @@ pub async fn componentize(
     let embedded_helper_utils = prelink::embedded_helper_utils()?;
 
     let (configs, libraries) =
-        prelink::search_for_libraries_and_configs(python_path, module_worlds, world)?;
+        prelink::search_for_libraries_and_configs(python_path, module_worlds, worlds)?;
+
+    let mut union_number = 0;
+    let mut next_union_name = move || {
+        let name = format!("union{union_number}");
+        union_number += 1;
+        name
+    };
 
     // Next, iterate over all the WIT directories, merging them into a single
     // `Resolve`, and matching Python packages to `WorldId`s.
     let (mut resolve, mut main_world) = match wit_path {
         [] => (None, None),
         paths => {
-            let (resolve, world) = parse_wit(paths, world, features, all_features)?;
+            let (resolve, world) =
+                parse_wit(paths, worlds, features, all_features, &next_union_name())?;
             (Some(resolve), Some(world))
         }
     };
@@ -298,11 +295,11 @@ pub async fn componentize(
 
     let configs = configs
         .iter()
-        .map(|(module, (config, world))| {
-            Ok((module, match (world, config.config.wit_directory.as_deref()) {
+        .map(|(module, (config, worlds))| {
+            Ok((module, match (worlds, config.config.wit_directory.as_deref()) {
                 (_, Some(wit_path)) => {
                     let paths = &[config.path.join(wit_path)];
-                    let (my_resolve, mut world) = parse_wit(paths, *world, features, all_features)?;
+                    let (my_resolve, mut world) = parse_wit(paths, worlds, features, all_features, &next_union_name())?;
 
                     if let Some(resolve) = &mut resolve {
                         let remap = resolve.merge(my_resolve)?;
@@ -313,8 +310,8 @@ pub async fn componentize(
 
                     (config, Some(world))
                 }
-                (None, None) => (config, None),
-                (Some(_), None) => {
+                ([], None) => (config, None),
+                (_, None) => {
                     bail!("no `wit-directory` specified in `componentize-py.toml` for module `{module}`");
                 }
             }))
@@ -327,10 +324,11 @@ pub async fn componentize(
         // If no WIT directory was provided as a parameter and none were
         // referenced by Python packages, use the default values.
         let paths: &[&Path] = &[];
-        let (my_resolve, world) = parse_wit(paths, world, features, all_features).context(
-            "no WIT files found; please specify the directory or file \
-             containing the WIT world you wish to target",
-        )?;
+        let (my_resolve, world) =
+            parse_wit(paths, worlds, features, all_features, &next_union_name()).context(
+                "no WIT files found; please specify the directory or file \
+                 containing the WIT world you wish to target",
+            )?;
         main_world = Some(world);
         my_resolve
     };
@@ -344,45 +342,13 @@ pub async fn componentize(
         .chain(main_world)
         .collect::<IndexSet<_>>();
 
-    if worlds
-        .iter()
-        .any(|&id| app_name == resolve.worlds[id].name.to_snake_case().escape())
-    {
-        bail!(
-            "App name `{app_name}` conflicts with world name; please rename your application module."
-        );
-    }
-
-    let union_package = resolve.packages.alloc(Package {
-        name: PackageName {
-            namespace: "componentize-py".into(),
-            name: "union".into(),
-            version: None,
-        },
-        docs: Default::default(),
-        interfaces: Default::default(),
-        worlds: Default::default(),
-    });
-
-    let union_world = resolve.worlds.alloc(World {
-        name: "union".into(),
-        imports: Default::default(),
-        exports: Default::default(),
-        package: Some(union_package),
-        docs: Default::default(),
-        stability: Stability::Unknown,
-        includes: Default::default(),
-        span: Default::default(),
-    });
-
-    resolve.packages[union_package]
-        .worlds
-        .insert("union".into(), union_world);
-
     let mut clone_maps = CloneMaps::default();
-    for &world in &worlds {
-        resolve.merge_worlds(world, union_world, &mut clone_maps)?;
-    }
+    let union_world = union_world(
+        &mut resolve,
+        &next_union_name(),
+        &worlds.iter().copied().collect::<Vec<_>>(),
+        &mut clone_maps,
+    )?;
 
     let (mut bindings, metadata) = wit_dylib::create_with_metadata(
         &resolve,
@@ -654,7 +620,6 @@ pub async fn componentize(
     let mut config = Config::new();
     config.wasm_component_model(true);
     config.wasm_component_model_async(true);
-    config.async_support(true);
 
     let engine = Engine::new(&config)?;
 
@@ -715,15 +680,16 @@ pub async fn componentize(
 
 fn parse_wit(
     paths: &[impl AsRef<Path>],
-    world: Option<&str>,
-    features: &[String],
+    worlds: &[&str],
+    features: &[&str],
     all_features: bool,
+    union_name: &str,
 ) -> Result<(Resolve, WorldId)> {
     // If no WIT directory was provided as a parameter and none were referenced
     // by Python packages, use ./wit by default.
     if paths.is_empty() {
         let paths = &[Path::new("wit")];
-        return parse_wit(paths, world, features, all_features);
+        return parse_wit(paths, worlds, features, all_features, union_name);
     }
     debug_assert!(!paths.is_empty(), "The paths should not be empty");
 
@@ -741,21 +707,82 @@ fn parse_wit(
         }
     }
 
-    let mut last_pkg = None;
-    for path in paths.iter().map(AsRef::as_ref) {
-        let pkg = if path.is_dir() {
-            resolve.push_dir(path)?.0
-        } else {
-            let pkg = UnresolvedPackageGroup::parse_file(path)?;
-            resolve.push_group(pkg)?
-        };
-        last_pkg = Some(pkg);
-    }
+    let packages = paths
+        .iter()
+        .map(|path| {
+            // Consolidates if the same package is referenced in multiple worlds
+            let mut tmp = Resolve {
+                all_features,
+                features: resolve.features.clone(),
+                ..Default::default()
+            };
+            let (pkg, _files) = tmp.push_path(path)?;
+            let consolidated = resolve.merge(tmp)?;
+            Ok(consolidated.packages[pkg.index()])
+        })
+        .collect::<Result<Vec<_>>>()?;
 
-    let pkg = last_pkg.unwrap(); // The paths should not be empty
-    let world = resolve.select_world(&[pkg], world)?;
+    let worlds = worlds
+        .iter()
+        .map(|world| {
+            packages
+                .iter()
+                .find_map(|&pkg| resolve.select_world(&[pkg], Some(world)).ok())
+                .ok_or_else(|| {
+                    anyhow!("no world named `{world}` found in any of the loaded WIT packages")
+                })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let world = match &worlds[..] {
+        [] => packages
+            .iter()
+            .find_map(|&pkg| resolve.select_world(&[pkg], None).ok())
+            .ok_or_else(|| anyhow!("no default world found in any of the loaded WIT packages"))?,
+        &[world] => world,
+        worlds => union_world(&mut resolve, union_name, worlds, &mut CloneMaps::default())?,
+    };
 
     Ok((resolve, world))
+}
+
+fn union_world(
+    resolve: &mut Resolve,
+    name: &str,
+    worlds: &[WorldId],
+    clone_maps: &mut CloneMaps,
+) -> Result<WorldId> {
+    let union_package = resolve.packages.alloc(Package {
+        name: PackageName {
+            namespace: "componentize-py".into(),
+            name: name.into(),
+            version: None,
+        },
+        docs: Default::default(),
+        interfaces: Default::default(),
+        worlds: Default::default(),
+    });
+
+    let union_world = resolve.worlds.alloc(World {
+        name: name.into(),
+        imports: Default::default(),
+        exports: Default::default(),
+        package: Some(union_package),
+        docs: Default::default(),
+        stability: Stability::Unknown,
+        includes: Default::default(),
+        span: Default::default(),
+    });
+
+    resolve.packages[union_package]
+        .worlds
+        .insert(name.into(), union_world);
+
+    for &world in worlds {
+        resolve.merge_worlds(world, union_world, clone_maps)?;
+    }
+
+    Ok(union_world)
 }
 
 fn add_wasi_and_stubs(
@@ -836,7 +863,7 @@ fn add_wasi_and_stubs(
                                         let interface_name = interface_name.clone();
                                         let name = name.clone();
                                         Box::pin(async move {
-                                            Err(anyhow!(
+                                            Err(wasmtime::format_err!(
                                                 "called trapping stub: {interface_name}#{name}"
                                             ))
                                         })
@@ -846,7 +873,7 @@ fn add_wasi_and_stubs(
                                 instance.func_new(name, {
                                     let name = name.clone();
                                     move |_, _, _, _| {
-                                        Err(anyhow!(
+                                        Err(wasmtime::format_err!(
                                             "called trapping stub: {interface_name}#{name}"
                                         ))
                                     }
@@ -857,7 +884,9 @@ fn add_wasi_and_stubs(
                             .resource(name, ResourceType::host::<()>(), {
                                 let name = name.clone();
                                 move |_, _| {
-                                    Err(anyhow!("called trapping stub: {interface_name}#{name}"))
+                                    Err(wasmtime::format_err!(
+                                        "called trapping stub: {interface_name}#{name}"
+                                    ))
                                 }
                             })
                             .map(drop),
@@ -874,22 +903,24 @@ fn add_wasi_and_stubs(
                                 let name = name.clone();
                                 move |_, _, _, _| {
                                     let name = name.clone();
-                                    Box::pin(
-                                        async move { Err(anyhow!("called trapping stub: {name}")) },
-                                    )
+                                    Box::pin(async move {
+                                        Err(wasmtime::format_err!("called trapping stub: {name}"))
+                                    })
                                 }
                             })
                         } else {
                             instance.func_new(name, {
                                 let name = name.clone();
-                                move |_, _, _, _| Err(anyhow!("called trapping stub: {name}"))
+                                move |_, _, _, _| {
+                                    Err(wasmtime::format_err!("called trapping stub: {name}"))
+                                }
                             })
                         }
                     }
                     Stub::Resource(name) => instance
                         .resource(name, ResourceType::host::<()>(), {
                             let name = name.clone();
-                            move |_, _| Err(anyhow!("called trapping stub: {name}"))
+                            move |_, _| Err(wasmtime::format_err!("called trapping stub: {name}"))
                         })
                         .map(drop),
                 }?;

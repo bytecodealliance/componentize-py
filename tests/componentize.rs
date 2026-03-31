@@ -1,6 +1,6 @@
 use core::net::Ipv4Addr;
 use std::{
-    io::Write,
+    io::{Read as _, Write as _},
     path::{Path, PathBuf},
     process::Stdio,
     thread::sleep,
@@ -20,7 +20,7 @@ fn cli_example() -> anyhow::Result<()> {
 
 #[test]
 fn cli_p3_example() -> anyhow::Result<()> {
-    test_cli_example("cli-p3", "wasi:cli/command@0.3.0-rc-2026-01-06")
+    test_cli_example("cli-p3", "wasi:cli/command@0.3.0-rc-2026-03-15")
 }
 
 fn test_cli_example(name: &str, world: &str) -> anyhow::Result<()> {
@@ -65,7 +65,7 @@ fn http_example() -> anyhow::Result<()> {
 
 #[test]
 fn http_p3_example() -> anyhow::Result<()> {
-    test_http_example("http-p3", "wasi:http/service@0.3.0-rc-2026-01-06", 8081)
+    test_http_example("http-p3", "wasi:http/service@0.3.0-rc-2026-03-15", 8081)
 }
 
 fn test_http_example(name: &str, world: &str, port: u16) -> anyhow::Result<()> {
@@ -247,7 +247,7 @@ fn tcp_example() -> anyhow::Result<()> {
 
 #[test]
 fn tcp_p3_example() -> anyhow::Result<()> {
-    test_tcp_example("tcp-p3", "wasi:cli/command@0.3.0-rc-2026-01-06")
+    test_tcp_example("tcp-p3", "wasi:cli/command@0.3.0-rc-2026-03-15")
 }
 
 fn test_tcp_example(name: &str, world: &str) -> anyhow::Result<()> {
@@ -291,6 +291,11 @@ fn test_tcp_example(name: &str, world: &str) -> anyhow::Result<()> {
         .spawn()?;
 
     let (mut stream, _) = listener.accept()?;
+
+    let mut buffer = vec![0; 256];
+    let count = stream.read(&mut buffer)?;
+    assert_eq!(String::from_utf8_lossy(&buffer[..count]), "hello, world!");
+
     stream.write_all(b"hello")?;
 
     let output = tcp_handle.wait_with_output()?;
@@ -299,6 +304,8 @@ fn test_tcp_example(name: &str, world: &str) -> anyhow::Result<()> {
         String::from_utf8_lossy(&output.stdout),
         "received: b'hello'\n"
     );
+
+    assert!(output.status.success());
 
     Ok(())
 }

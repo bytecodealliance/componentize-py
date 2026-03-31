@@ -36,7 +36,6 @@ static SEED: Lazy<[u8; 32]> = Lazy::new(|| get_seed().unwrap());
 
 static ENGINE: Lazy<Engine> = Lazy::new(|| {
     let mut config = Config::new();
-    config.async_support(true);
     config.wasm_component_model(true);
     config.wasm_component_model_async(true);
 
@@ -49,7 +48,7 @@ async fn make_component(
     world_module: Option<&str>,
     guest_code: &[(&str, &str)],
     python_path: &[&str],
-    module_worlds: &[(&str, &str)],
+    module_worlds: &[(&str, &[&str])],
     add_to_linker: Option<&dyn Fn(&mut Linker<Ctx>) -> Result<()>>,
 ) -> Result<Vec<u8>> {
     let tempdir = tempfile::tempdir()?;
@@ -63,7 +62,7 @@ async fn make_component(
 
     crate::componentize(
         &[tempdir.path().join("app.wit")],
-        None,
+        &[],
         &[],
         false,
         world_module,
@@ -125,7 +124,7 @@ impl<H: Host> Tester<H> {
         world_module: Option<&str>,
         guest_code: &[(&str, &str)],
         python_path: &[&str],
-        module_worlds: &[(&str, &str)],
+        module_worlds: &[(&str, &[&str])],
         seed: [u8; 32],
     ) -> Result<Self> {
         // TODO: create two versions of the component -- one with and one
