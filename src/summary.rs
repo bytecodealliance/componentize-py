@@ -145,10 +145,12 @@ pub struct Summary<'a> {
     imported_function_indexes: &'a HashMap<(Option<&'a str>, &'a str), usize>,
     exported_function_indexes: &'a HashMap<(Option<&'a str>, &'a str), usize>,
     stream_and_future_indexes: &'a HashMap<TypeId, usize>,
+    full_names: bool,
     need_async: bool,
 }
 
 impl<'a> Summary<'a> {
+    #[expect(clippy::too_many_arguments)]
     pub fn try_new(
         resolve: &'a Resolve,
         worlds: &IndexSet<WorldId>,
@@ -157,6 +159,7 @@ impl<'a> Summary<'a> {
         imported_function_indexes: &'a HashMap<(Option<&'a str>, &'a str), usize>,
         exported_function_indexes: &'a HashMap<(Option<&'a str>, &'a str), usize>,
         stream_and_future_indexes: &'a HashMap<TypeId, usize>,
+        full_names: bool,
     ) -> Result<Self> {
         let mut me = Self {
             resolve,
@@ -178,6 +181,7 @@ impl<'a> Summary<'a> {
             imported_function_indexes,
             exported_function_indexes,
             stream_and_future_indexes,
+            full_names,
             need_async: false,
         };
 
@@ -1205,30 +1209,31 @@ impl<'a> Summary<'a> {
                                     *id,
                                     if let Some(version) = version {
                                         if let Some(name) = interface_names.get(
-                                        format!(
-                                            "{package_namespace}:{package_name}/{name}@{version}"
-                                        )
-                                        .as_str(),
-                                    ) {
-                                        (*name).to_owned()
-                                    } else if versions.len() == 1 {
-                                        if packages.len() == 1 {
+                                            format!(
+                                                "{package_namespace}:{package_name}\
+                                                 /{name}@{version}"
+                                            )
+                                            .as_str(),
+                                        ) {
                                             (*name).to_owned()
+                                        } else if versions.len() == 1 && !self.full_names {
+                                            if packages.len() == 1 {
+                                                (*name).to_owned()
+                                            } else {
+                                                format!("{package_namespace}-{package_name}-{name}")
+                                            }
                                         } else {
-                                            format!("{package_namespace}-{package_name}-{name}")
+                                            format!(
+                                                "{package_namespace}-{package_name}-{name}-{}",
+                                                version.to_string().replace('.', "-")
+                                            )
                                         }
-                                    } else {
-                                        format!(
-                                            "{package_namespace}-{package_name}-{name}-{}",
-                                            version.to_string().replace('.', "-")
-                                        )
-                                    }
                                     } else if let Some(name) = interface_names.get(
                                         format!("{package_namespace}:{package_name}/{name}")
                                             .as_str()
                                     ) {
                                         (*name).to_owned()
-                                    } else if packages.len() == 1 {
+                                    } else if packages.len() == 1 && !self.full_names {
                                         (*name).to_owned()
                                     } else {
                                         format!("{package_namespace}-{package_name}-{name}",)

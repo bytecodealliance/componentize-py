@@ -17,127 +17,133 @@ wasmtime::component::bindgen!({
 });
 
 impl componentize_py::test::echoes::Host for Ctx {
-    async fn echo_nothing(&mut self) -> Result<()> {
+    async fn echo_nothing(&mut self) -> wasmtime::Result<()> {
         Ok(())
     }
 
-    async fn echo_bool(&mut self, v: bool) -> Result<bool> {
+    async fn echo_bool(&mut self, v: bool) -> wasmtime::Result<bool> {
         Ok(v)
     }
 
-    async fn echo_u8(&mut self, v: u8) -> Result<u8> {
+    async fn echo_u8(&mut self, v: u8) -> wasmtime::Result<u8> {
         Ok(v)
     }
 
-    async fn echo_s8(&mut self, v: i8) -> Result<i8> {
+    async fn echo_s8(&mut self, v: i8) -> wasmtime::Result<i8> {
         Ok(v)
     }
 
-    async fn echo_u16(&mut self, v: u16) -> Result<u16> {
+    async fn echo_u16(&mut self, v: u16) -> wasmtime::Result<u16> {
         Ok(v)
     }
 
-    async fn echo_s16(&mut self, v: i16) -> Result<i16> {
+    async fn echo_s16(&mut self, v: i16) -> wasmtime::Result<i16> {
         Ok(v)
     }
 
-    async fn echo_u32(&mut self, v: u32) -> Result<u32> {
+    async fn echo_u32(&mut self, v: u32) -> wasmtime::Result<u32> {
         Ok(v)
     }
 
-    async fn echo_s32(&mut self, v: i32) -> Result<i32> {
+    async fn echo_s32(&mut self, v: i32) -> wasmtime::Result<i32> {
         Ok(v)
     }
 
-    async fn echo_char(&mut self, v: char) -> Result<char> {
+    async fn echo_char(&mut self, v: char) -> wasmtime::Result<char> {
         Ok(v)
     }
 
-    async fn echo_u64(&mut self, v: u64) -> Result<u64> {
+    async fn echo_u64(&mut self, v: u64) -> wasmtime::Result<u64> {
         Ok(v)
     }
 
-    async fn echo_s64(&mut self, v: i64) -> Result<i64> {
+    async fn echo_s64(&mut self, v: i64) -> wasmtime::Result<i64> {
         Ok(v)
     }
 
-    async fn echo_f32(&mut self, v: f32) -> Result<f32> {
+    async fn echo_f32(&mut self, v: f32) -> wasmtime::Result<f32> {
         Ok(v)
     }
 
-    async fn echo_f64(&mut self, v: f64) -> Result<f64> {
+    async fn echo_f64(&mut self, v: f64) -> wasmtime::Result<f64> {
         Ok(v)
     }
 
-    async fn echo_string(&mut self, v: String) -> Result<String> {
+    async fn echo_string(&mut self, v: String) -> wasmtime::Result<String> {
         Ok(v)
     }
 
-    async fn echo_list_bool(&mut self, v: Vec<bool>) -> Result<Vec<bool>> {
+    async fn echo_list_bool(&mut self, v: Vec<bool>) -> wasmtime::Result<Vec<bool>> {
         Ok(v)
     }
 
-    async fn echo_list_u8(&mut self, v: Vec<u8>) -> Result<Vec<u8>> {
+    async fn echo_list_u8(&mut self, v: Vec<u8>) -> wasmtime::Result<Vec<u8>> {
         Ok(v)
     }
 
-    async fn echo_list_s8(&mut self, v: Vec<i8>) -> Result<Vec<i8>> {
+    async fn echo_list_s8(&mut self, v: Vec<i8>) -> wasmtime::Result<Vec<i8>> {
         Ok(v)
     }
 
-    async fn echo_list_u16(&mut self, v: Vec<u16>) -> Result<Vec<u16>> {
+    async fn echo_list_u16(&mut self, v: Vec<u16>) -> wasmtime::Result<Vec<u16>> {
         Ok(v)
     }
 
-    async fn echo_list_s16(&mut self, v: Vec<i16>) -> Result<Vec<i16>> {
+    async fn echo_list_s16(&mut self, v: Vec<i16>) -> wasmtime::Result<Vec<i16>> {
         Ok(v)
     }
 
-    async fn echo_list_u32(&mut self, v: Vec<u32>) -> Result<Vec<u32>> {
+    async fn echo_list_u32(&mut self, v: Vec<u32>) -> wasmtime::Result<Vec<u32>> {
         Ok(v)
     }
 
-    async fn echo_list_s32(&mut self, v: Vec<i32>) -> Result<Vec<i32>> {
+    async fn echo_list_s32(&mut self, v: Vec<i32>) -> wasmtime::Result<Vec<i32>> {
         Ok(v)
     }
 
-    async fn echo_list_char(&mut self, v: Vec<char>) -> Result<Vec<char>> {
+    async fn echo_list_char(&mut self, v: Vec<char>) -> wasmtime::Result<Vec<char>> {
         Ok(v)
     }
 
-    async fn echo_list_u64(&mut self, v: Vec<u64>) -> Result<Vec<u64>> {
+    async fn echo_list_u64(&mut self, v: Vec<u64>) -> wasmtime::Result<Vec<u64>> {
         Ok(v)
     }
 
-    async fn echo_list_s64(&mut self, v: Vec<i64>) -> Result<Vec<i64>> {
+    async fn echo_list_s64(&mut self, v: Vec<i64>) -> wasmtime::Result<Vec<i64>> {
         Ok(v)
     }
 
-    async fn echo_list_f32(&mut self, v: Vec<f32>) -> Result<Vec<f32>> {
+    async fn echo_list_f32(&mut self, v: Vec<f32>) -> wasmtime::Result<Vec<f32>> {
         Ok(v)
     }
 
-    async fn echo_list_f64(&mut self, v: Vec<f64>) -> Result<Vec<f64>> {
+    async fn echo_list_f64(&mut self, v: Vec<f64>) -> wasmtime::Result<Vec<f64>> {
         Ok(v)
     }
 
-    async fn echo_list_string(&mut self, v: Vec<String>) -> Result<Vec<String>> {
+    async fn echo_list_string(&mut self, v: Vec<String>) -> wasmtime::Result<Vec<String>> {
         Ok(v)
     }
 
-    async fn echo_list_list_u8(&mut self, v: Vec<Vec<u8>>) -> Result<Vec<Vec<u8>>> {
+    async fn echo_list_list_u8(&mut self, v: Vec<Vec<u8>>) -> wasmtime::Result<Vec<Vec<u8>>> {
         Ok(v)
     }
 
-    async fn echo_list_list_list_u8(&mut self, v: Vec<Vec<Vec<u8>>>) -> Result<Vec<Vec<Vec<u8>>>> {
+    async fn echo_list_list_list_u8(
+        &mut self,
+        v: Vec<Vec<Vec<u8>>>,
+    ) -> wasmtime::Result<Vec<Vec<Vec<u8>>>> {
         Ok(v)
     }
 
-    async fn echo_option_u8(&mut self, v: Option<u8>) -> Result<Option<u8>> {
+    async fn echo_option_u8(&mut self, v: Option<u8>) -> wasmtime::Result<Option<u8>> {
         Ok(v)
     }
 
-    async fn echo_option_option_u8(&mut self, v: Option<Option<u8>>) -> Result<Option<Option<u8>>> {
+    async fn echo_option_option_u8(
+        &mut self,
+        v: Option<Option<u8>>,
+    ) -> wasmtime::Result<Option<Option<u8>>> {
         Ok(v)
     }
 
@@ -159,7 +165,7 @@ impl componentize_py::test::echoes::Host for Ctx {
         v14: Vec<bool>,
         v15: Vec<u8>,
         v16: Vec<u16>,
-    ) -> Result<(
+    ) -> wasmtime::Result<(
         bool,
         u8,
         u16,
@@ -195,7 +201,7 @@ impl super::Host for Host {
     }
 
     async fn instantiate_pre(store: &mut Store<Ctx>, pre: InstancePre<Ctx>) -> Result<Self::World> {
-        EchoesTestPre::new(pre)?.instantiate_async(store).await
+        Ok(EchoesTestPre::new(pre)?.instantiate_async(store).await?)
     }
 }
 
@@ -327,121 +333,121 @@ static TESTER: Lazy<Tester<Host>> = Lazy::new(|| {
 #[test]
 fn nothing() -> Result<()> {
     TESTER.all_eq(&Just(()), |(), instance, store, runtime| {
-        runtime.block_on(
+        Ok(runtime.block_on(
             instance
                 .componentize_py_test_echoes()
                 .call_echo_nothing(store),
-        )
+        )?)
     })
 }
 
 #[test]
 fn bools() -> Result<()> {
     TESTER.all_eq(&proptest::bool::ANY, |v, instance, store, runtime| {
-        runtime.block_on(
+        Ok(runtime.block_on(
             instance
                 .componentize_py_test_echoes()
                 .call_echo_bool(store, v),
-        )
+        )?)
     })
 }
 
 #[test]
 fn u8s() -> Result<()> {
     TESTER.all_eq(&proptest::num::u8::ANY, |v, instance, store, runtime| {
-        runtime.block_on(
+        Ok(runtime.block_on(
             instance
                 .componentize_py_test_echoes()
                 .call_echo_u8(store, v),
-        )
+        )?)
     })
 }
 
 #[test]
 fn s8s() -> Result<()> {
     TESTER.all_eq(&proptest::num::i8::ANY, |v, instance, store, runtime| {
-        runtime.block_on(
+        Ok(runtime.block_on(
             instance
                 .componentize_py_test_echoes()
                 .call_echo_s8(store, v),
-        )
+        )?)
     })
 }
 
 #[test]
 fn u16s() -> Result<()> {
     TESTER.all_eq(&proptest::num::u16::ANY, |v, instance, store, runtime| {
-        runtime.block_on(
+        Ok(runtime.block_on(
             instance
                 .componentize_py_test_echoes()
                 .call_echo_u16(store, v),
-        )
+        )?)
     })
 }
 
 #[test]
 fn s16s() -> Result<()> {
     TESTER.all_eq(&proptest::num::i16::ANY, |v, instance, store, runtime| {
-        runtime.block_on(
+        Ok(runtime.block_on(
             instance
                 .componentize_py_test_echoes()
                 .call_echo_s16(store, v),
-        )
+        )?)
     })
 }
 
 #[test]
 fn u32s() -> Result<()> {
     TESTER.all_eq(&proptest::num::u32::ANY, |v, instance, store, runtime| {
-        runtime.block_on(
+        Ok(runtime.block_on(
             instance
                 .componentize_py_test_echoes()
                 .call_echo_u32(store, v),
-        )
+        )?)
     })
 }
 
 #[test]
 fn s32s() -> Result<()> {
     TESTER.all_eq(&proptest::num::i32::ANY, |v, instance, store, runtime| {
-        runtime.block_on(
+        Ok(runtime.block_on(
             instance
                 .componentize_py_test_echoes()
                 .call_echo_s32(store, v),
-        )
+        )?)
     })
 }
 
 #[test]
 fn u64s() -> Result<()> {
     TESTER.all_eq(&proptest::num::u64::ANY, |v, instance, store, runtime| {
-        runtime.block_on(
+        Ok(runtime.block_on(
             instance
                 .componentize_py_test_echoes()
                 .call_echo_u64(store, v),
-        )
+        )?)
     })
 }
 
 #[test]
 fn s64s() -> Result<()> {
     TESTER.all_eq(&proptest::num::i64::ANY, |v, instance, store, runtime| {
-        runtime.block_on(
+        Ok(runtime.block_on(
             instance
                 .componentize_py_test_echoes()
                 .call_echo_s64(store, v),
-        )
+        )?)
     })
 }
 
 #[test]
 fn chars() -> Result<()> {
     TESTER.all_eq(&proptest::char::any(), |v, instance, store, runtime| {
-        runtime.block_on(
+        Ok(runtime.block_on(
             instance
                 .componentize_py_test_echoes()
                 .call_echo_char(store, v),
-        )
+        )?)
     })
 }
 
@@ -484,11 +490,11 @@ fn strings() -> Result<()> {
     TESTER.all_eq(
         &proptest::string::string_regex(".*")?,
         |v, instance, store, runtime| {
-            runtime.block_on(
+            Ok(runtime.block_on(
                 instance
                     .componentize_py_test_echoes()
                     .call_echo_string(store, &v),
-            )
+            )?)
         },
     )
 }
@@ -498,11 +504,11 @@ fn list_bools() -> Result<()> {
     TESTER.all_eq(
         &proptest::collection::vec(proptest::bool::ANY, 0..MAX_SIZE),
         |v, instance, store, runtime| {
-            runtime.block_on(
+            Ok(runtime.block_on(
                 instance
                     .componentize_py_test_echoes()
                     .call_echo_list_bool(store, &v),
-            )
+            )?)
         },
     )
 }
@@ -512,11 +518,11 @@ fn list_u8s() -> Result<()> {
     TESTER.all_eq(
         &proptest::collection::vec(proptest::num::u8::ANY, 0..MAX_SIZE),
         |v, instance, store, runtime| {
-            runtime.block_on(
+            Ok(runtime.block_on(
                 instance
                     .componentize_py_test_echoes()
                     .call_echo_list_u8(store, &v),
-            )
+            )?)
         },
     )
 }
@@ -529,11 +535,11 @@ fn list_list_u8s() -> Result<()> {
             0..MAX_SIZE,
         ),
         |v, instance, store, runtime| {
-            runtime.block_on(
+            Ok(runtime.block_on(
                 instance
                     .componentize_py_test_echoes()
                     .call_echo_list_list_u8(store, &v),
-            )
+            )?)
         },
     )
 }
@@ -549,11 +555,11 @@ fn list_list_list_u8s() -> Result<()> {
             0..MAX_SIZE,
         ),
         |v, instance, store, runtime| {
-            runtime.block_on(
+            Ok(runtime.block_on(
                 instance
                     .componentize_py_test_echoes()
                     .call_echo_list_list_list_u8(store, &v),
-            )
+            )?)
         },
     )
 }
@@ -563,11 +569,11 @@ fn option_u8s() -> Result<()> {
     TESTER.all_eq(
         &proptest::option::of(proptest::num::u8::ANY),
         |v, instance, store, runtime| {
-            runtime.block_on(
+            Ok(runtime.block_on(
                 instance
                     .componentize_py_test_echoes()
                     .call_echo_option_u8(store, v),
-            )
+            )?)
         },
     )
 }
@@ -577,11 +583,11 @@ fn option_option_u8s() -> Result<()> {
     TESTER.all_eq(
         &proptest::option::of(proptest::option::of(proptest::num::u8::ANY)),
         |v, instance, store, runtime| {
-            runtime.block_on(
+            Ok(runtime.block_on(
                 instance
                     .componentize_py_test_echoes()
                     .call_echo_option_option_u8(store, v),
-            )
+            )?)
         },
     )
 }
@@ -591,11 +597,11 @@ fn list_s8s() -> Result<()> {
     TESTER.all_eq(
         &proptest::collection::vec(proptest::num::i8::ANY, 0..MAX_SIZE),
         |v, instance, store, runtime| {
-            runtime.block_on(
+            Ok(runtime.block_on(
                 instance
                     .componentize_py_test_echoes()
                     .call_echo_list_s8(store, &v),
-            )
+            )?)
         },
     )
 }
@@ -605,11 +611,11 @@ fn list_u16s() -> Result<()> {
     TESTER.all_eq(
         &proptest::collection::vec(proptest::num::u16::ANY, 0..MAX_SIZE),
         |v, instance, store, runtime| {
-            runtime.block_on(
+            Ok(runtime.block_on(
                 instance
                     .componentize_py_test_echoes()
                     .call_echo_list_u16(store, &v),
-            )
+            )?)
         },
     )
 }
@@ -619,11 +625,11 @@ fn list_s16s() -> Result<()> {
     TESTER.all_eq(
         &proptest::collection::vec(proptest::num::i16::ANY, 0..MAX_SIZE),
         |v, instance, store, runtime| {
-            runtime.block_on(
+            Ok(runtime.block_on(
                 instance
                     .componentize_py_test_echoes()
                     .call_echo_list_s16(store, &v),
-            )
+            )?)
         },
     )
 }
@@ -633,11 +639,11 @@ fn list_u32s() -> Result<()> {
     TESTER.all_eq(
         &proptest::collection::vec(proptest::num::u32::ANY, 0..MAX_SIZE),
         |v, instance, store, runtime| {
-            runtime.block_on(
+            Ok(runtime.block_on(
                 instance
                     .componentize_py_test_echoes()
                     .call_echo_list_u32(store, &v),
-            )
+            )?)
         },
     )
 }
@@ -647,11 +653,11 @@ fn list_s32s() -> Result<()> {
     TESTER.all_eq(
         &proptest::collection::vec(proptest::num::i32::ANY, 0..MAX_SIZE),
         |v, instance, store, runtime| {
-            runtime.block_on(
+            Ok(runtime.block_on(
                 instance
                     .componentize_py_test_echoes()
                     .call_echo_list_s32(store, &v),
-            )
+            )?)
         },
     )
 }
@@ -661,11 +667,11 @@ fn list_u64s() -> Result<()> {
     TESTER.all_eq(
         &proptest::collection::vec(proptest::num::u64::ANY, 0..MAX_SIZE),
         |v, instance, store, runtime| {
-            runtime.block_on(
+            Ok(runtime.block_on(
                 instance
                     .componentize_py_test_echoes()
                     .call_echo_list_u64(store, &v),
-            )
+            )?)
         },
     )
 }
@@ -675,11 +681,11 @@ fn list_s64s() -> Result<()> {
     TESTER.all_eq(
         &proptest::collection::vec(proptest::num::i64::ANY, 0..MAX_SIZE),
         |v, instance, store, runtime| {
-            runtime.block_on(
+            Ok(runtime.block_on(
                 instance
                     .componentize_py_test_echoes()
                     .call_echo_list_s64(store, &v),
-            )
+            )?)
         },
     )
 }
@@ -689,11 +695,11 @@ fn list_chars() -> Result<()> {
     TESTER.all_eq(
         &proptest::collection::vec(proptest::char::any(), 0..MAX_SIZE),
         |v, instance, store, runtime| {
-            runtime.block_on(
+            Ok(runtime.block_on(
                 instance
                     .componentize_py_test_echoes()
                     .call_echo_list_char(store, &v),
-            )
+            )?)
         },
     )
 }

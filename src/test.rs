@@ -1,7 +1,7 @@
 #![deny(warnings)]
 
 use {
-    crate::Ctx,
+    crate::{ComponentGenerator, Ctx},
     anyhow::{Result, anyhow},
     once_cell::sync::Lazy,
     proptest::{
@@ -36,7 +36,6 @@ static SEED: Lazy<[u8; 32]> = Lazy::new(|| get_seed().unwrap());
 
 static ENGINE: Lazy<Engine> = Lazy::new(|| {
     let mut config = Config::new();
-    config.async_support(true);
     config.wasm_component_model(true);
     config.wasm_component_model_async(true);
 
@@ -49,7 +48,7 @@ async fn make_component(
     world_module: Option<&str>,
     guest_code: &[(&str, &str)],
     python_path: &[&str],
-    module_worlds: &[(&str, &str)],
+    module_worlds: &[(&str, &[&str])],
     add_to_linker: Option<&dyn Fn(&mut Linker<Ctx>) -> Result<()>>,
 ) -> Result<Vec<u8>> {
     let tempdir = tempfile::tempdir()?;
@@ -61,13 +60,13 @@ async fn make_component(
         fs::write(&path, content)?;
     }
 
-    crate::componentize(
-        &[tempdir.path().join("app.wit")],
-        None,
-        &[],
-        false,
+    ComponentGenerator {
+        wit_path: &[&tempdir.path().join("app.wit")],
+        worlds: &[],
+        features: &[],
+        all_features: false,
         world_module,
-        &python_path
+        python_path: &python_path
             .iter()
             .copied()
             .chain(iter::once(tempdir.path().to_str().ok_or_else(|| {
@@ -75,13 +74,15 @@ async fn make_component(
             })?))
             .collect::<Vec<_>>(),
         module_worlds,
-        "app",
-        &tempdir.path().join("app.wasm"),
+        app_name: "app",
+        output_path: &tempdir.path().join("app.wasm"),
         add_to_linker,
-        false,
-        &HashMap::new(),
-        &HashMap::new(),
-    )
+        stub_wasi: false,
+        import_interface_names: &HashMap::new(),
+        export_interface_names: &HashMap::new(),
+        full_names: false,
+    }
+    .generate()
     .await?;
 
     Ok(fs::read(tempdir.path().join("app.wasm"))?)
@@ -125,7 +126,7 @@ impl<H: Host> Tester<H> {
         world_module: Option<&str>,
         guest_code: &[(&str, &str)],
         python_path: &[&str],
-        module_worlds: &[(&str, &str)],
+        module_worlds: &[(&str, &[&str])],
         seed: [u8; 32],
     ) -> Result<Self> {
         // TODO: create two versions of the component -- one with and one

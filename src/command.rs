@@ -1,4 +1,5 @@
 use {
+    crate::{BindingsGenerator, ComponentGenerator},
     anyhow::{Context, Result},
     clap::Parser as _,
     std::{
@@ -31,9 +32,12 @@ pub struct Common {
     #[arg(short = 'd', long)]
     pub wit_path: Vec<PathBuf>,
 
-    /// Name of world to target (or default world if `None`)
+    /// Name of world to target (or default world if not specified).
+    ///
+    /// This may be specified more than once, in which case the worlds will be
+    /// merged.
     #[arg(short = 'w', long)]
-    pub world: Option<String>,
+    pub world: Vec<String>,
 
     /// Disable non-error output
     #[arg(short = 'q', long)]
@@ -79,6 +83,16 @@ pub struct Common {
     /// If this is not specified, the module name will default to "wit_world".
     #[arg(long)]
     pub world_module: Option<String>,
+
+    /// When generating Python module names, include the WIT package name and
+    /// version even if only one version of that package is referenced by the
+    /// specified world or only one package uses that name.
+    ///
+    /// By default, the package name and version will only be included in the
+    /// name if the world references more than one version of the WIT package or
+    /// the name is used by more than one package.
+    #[arg(long)]
+    pub full_names: bool,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -168,24 +182,34 @@ pub fn run<T: Into<OsString> + Clone, I: IntoIterator<Item = T>>(args: I) -> Res
 }
 
 fn generate_bindings(common: Common, bindings: Bindings) -> Result<()> {
-    crate::generate_bindings(
-        &common.wit_path,
-        common.world.as_deref(),
-        &common.features,
-        common.all_features,
-        common.world_module.as_deref(),
-        &bindings.output_dir,
-        &common
+    BindingsGenerator {
+        wit_path: &common
+            .wit_path
+            .iter()
+            .map(|v| v.as_path())
+            .collect::<Vec<_>>(),
+        worlds: &common.world.iter().map(|v| v.as_str()).collect::<Vec<_>>(),
+        features: &common
+            .features
+            .iter()
+            .map(|v| v.as_str())
+            .collect::<Vec<_>>(),
+        all_features: common.all_features,
+        world_module: common.world_module.as_deref(),
+        output_dir: &bindings.output_dir,
+        import_interface_names: &common
             .import_interface_name
             .iter()
             .map(|(a, b)| (a.as_str(), b.as_str()))
             .collect(),
-        &common
+        export_interface_names: &common
             .export_interface_name
             .iter()
             .map(|(a, b)| (a.as_str(), b.as_str()))
             .collect(),
-    )
+        full_names: common.full_names,
+    }
+    .generate()
 }
 
 fn componentize(common: Common, componentize: Componentize) -> Result<()> {
@@ -200,33 +224,48 @@ fn componentize(common: Common, componentize: Componentize) -> Result<()> {
         );
     }
 
-    Runtime::new()?.block_on(crate::componentize(
-        &common.wit_path,
-        common.world.as_deref(),
-        &common.features,
-        common.all_features,
-        common.world_module.as_deref(),
-        &python_path.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
-        &componentize
-            .module_worlds
-            .iter()
-            .map(|(k, v)| (k.as_str(), v.as_str()))
-            .collect::<Vec<_>>(),
-        &componentize.app_name,
-        &componentize.output,
-        None,
-        componentize.stub_wasi,
-        &common
-            .import_interface_name
-            .iter()
-            .map(|(a, b)| (a.as_str(), b.as_str()))
-            .collect(),
-        &common
-            .export_interface_name
-            .iter()
-            .map(|(a, b)| (a.as_str(), b.as_str()))
-            .collect(),
-    ))?;
+    Runtime::new()?.block_on(
+        ComponentGenerator {
+            wit_path: &common
+                .wit_path
+                .iter()
+                .map(|v| v.as_path())
+                .collect::<Vec<_>>(),
+            worlds: &common.world.iter().map(|v| v.as_str()).collect::<Vec<_>>(),
+            features: &common
+                .features
+                .iter()
+                .map(|v| v.as_str())
+                .collect::<Vec<_>>(),
+            all_features: common.all_features,
+            world_module: common.world_module.as_deref(),
+            python_path: &python_path.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+            module_worlds: &componentize
+                .module_worlds
+                .iter()
+                .map(|(k, v)| (k.as_str(), [v.as_str()]))
+                .collect::<Vec<_>>()
+                .iter()
+                .map(|(k, v)| (*k, v as &[_]))
+                .collect::<Vec<_>>(),
+            app_name: &componentize.app_name,
+            output_path: &componentize.output,
+            add_to_linker: None,
+            stub_wasi: componentize.stub_wasi,
+            import_interface_names: &common
+                .import_interface_name
+                .iter()
+                .map(|(a, b)| (a.as_str(), b.as_str()))
+                .collect(),
+            export_interface_names: &common
+                .export_interface_name
+                .iter()
+                .map(|(a, b)| (a.as_str(), b.as_str()))
+                .collect(),
+            full_names: common.full_names,
+        }
+        .generate(),
+    )?;
 
     if !common.quiet {
         println!("Component built successfully");
@@ -355,13 +394,14 @@ mod tests {
         // When generating the bindings for this WIT world
         let common = Common {
             wit_path: vec![wit.path().into()],
-            world: None,
+            world: Vec::new(),
             world_module: Some("bindings".into()),
             quiet: false,
             features: vec![],
             all_features: false,
             import_interface_name: Vec::new(),
             export_interface_name: Vec::new(),
+            full_names: false,
         };
         let bindings = Bindings {
             output_dir: out_dir.path().into(),
@@ -385,13 +425,14 @@ mod tests {
         // When generating the bindings for this WIT world
         let common = Common {
             wit_path: vec![wit.path().into()],
-            world: None,
+            world: Vec::new(),
             world_module: Some("bindings".into()),
             quiet: false,
             features: vec!["x".to_owned()],
             all_features: false,
             import_interface_name: Vec::new(),
             export_interface_name: Vec::new(),
+            full_names: false,
         };
         let bindings = Bindings {
             output_dir: out_dir.path().into(),
@@ -415,13 +456,14 @@ mod tests {
         // When generating the bindings for this WIT world
         let common = Common {
             wit_path: vec![wit.path().into()],
-            world: None,
+            world: Vec::new(),
             world_module: Some("bindings".into()),
             quiet: false,
             features: vec![],
             all_features: true,
             import_interface_name: Vec::new(),
             export_interface_name: Vec::new(),
+            full_names: false,
         };
         let bindings = Bindings {
             output_dir: out_dir.path().into(),
@@ -444,13 +486,14 @@ mod tests {
         let out_dir = tempfile::tempdir()?;
         let common = Common {
             wit_path: vec![wit.path().into()],
-            world: None,
+            world: Vec::new(),
             world_module: Some("bindings".into()),
             quiet: false,
             features: vec!["x".to_owned()],
             all_features: false,
             import_interface_name: Vec::new(),
             export_interface_name: Vec::new(),
+            full_names: false,
         };
         let bindings = Bindings {
             output_dir: out_dir.path().into(),

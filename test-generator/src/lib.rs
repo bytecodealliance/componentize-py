@@ -679,7 +679,7 @@ pub fn generate() -> Result<()> {
 
             writeln!(
                 &mut host_functions,
-                "async fn echo{test_index}(&mut self, {params}) -> Result<{result_type}> {{ Ok({result}) }}"
+                "async fn echo{test_index}(&mut self, {params}) -> wasmtime::Result<{result_type}> {{ Ok({result}) }}"
             )
                 .unwrap();
         }

@@ -26,7 +26,7 @@ fn is_wasm_file(path: &Path) -> bool {
 }
 
 type ConfigsMatchedWorlds<'a> =
-    IndexMap<String, (ConfigContext<ComponentizePyConfig>, Option<&'a str>)>;
+    IndexMap<String, (ConfigContext<ComponentizePyConfig>, &'a [&'a str])>;
 
 pub fn embedded_python_standard_library() -> Result<TempDir> {
     // Untar the embedded copy of the Python standard library into a temporary
@@ -164,8 +164,8 @@ pub fn bundle_libraries(library_path: Vec<(&str, Vec<PathBuf>)>) -> Result<Vec<L
 
 pub fn search_for_libraries_and_configs<'a>(
     python_path: &'a Vec<&'a str>,
-    module_worlds: &'a [(&'a str, &'a str)],
-    world: Option<&'a str>,
+    module_worlds: &'a [(&'a str, &'a [&'a str])],
+    worlds: &'a [&'a str],
 ) -> Result<(ConfigsMatchedWorlds<'a>, Vec<Library>)> {
     let mut raw_configs: Vec<ConfigContext<RawComponentizePyConfig>> = Vec::new();
     let mut library_path: Vec<(&str, Vec<PathBuf>)> = Vec::with_capacity(python_path.len());
@@ -190,9 +190,9 @@ pub fn search_for_libraries_and_configs<'a>(
     // dependencies.
     //
     // For any packages which contain componentize-py.toml files but no
-    // corresponding `module_worlds` entry, we use the `world` parameter as a
+    // corresponding `module_worlds` entry, we use the `worlds` parameter as a
     // default.
-    let configs: IndexMap<String, (ConfigContext<ComponentizePyConfig>, Option<&str>)> = {
+    let configs: IndexMap<String, (ConfigContext<ComponentizePyConfig>, &[&str])> = {
         let mut configs = raw_configs
             .into_iter()
             .map(|raw_config| {
@@ -212,16 +212,16 @@ pub fn search_for_libraries_and_configs<'a>(
             .collect::<Result<HashMap<_, _>>>()?;
 
         let mut ordered = IndexMap::new();
-        for (module, world) in module_worlds {
-            if let Some(config) = configs.remove(*module) {
-                ordered.insert((*module).to_owned(), (config, Some(*world)));
+        for &(module, worlds) in module_worlds {
+            if let Some(config) = configs.remove(module) {
+                ordered.insert(module.to_owned(), (config, worlds));
             } else {
                 bail!("no `componentize-py.toml` file found for module `{module}`");
             }
         }
 
         for (module, config) in configs {
-            ordered.insert(module, (config, world));
+            ordered.insert(module, (config, worlds));
         }
 
         ordered

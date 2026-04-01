@@ -77,4 +77,4 @@ async def send_and_receive(address: IPAddress, port: int) -> None:
             data = await recv_rx.read(1024)
             print(f"received: {str(data)}")
             send_tx.__exit__(None, None, None)
-    await asyncio.gather(recv_fut.read(), read(), sock.send(send_rx), write())
+    await asyncio.gather(recv_fut.read(), read(), sock.send(send_rx).read(), write())
