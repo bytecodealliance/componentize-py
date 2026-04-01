@@ -134,7 +134,7 @@ jobs:
 
       - uses: taiki-e/install-action@v2
         with:
-          tool: wasmtime-cli@41.0.3
+          tool: wasmtime-cli@43.0.0
 
       - uses: actions/setup-python@v5
         with:
