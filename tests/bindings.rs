@@ -211,7 +211,7 @@ where
 
     Command::new(venv_path(path).join("pip"))
         .current_dir(path)
-        .args(["install", "mypy"])
+        .args(["install", "mypy==1.13.0"])
         .assert()
         .success();
 
