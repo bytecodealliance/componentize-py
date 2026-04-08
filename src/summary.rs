@@ -11,7 +11,7 @@ use {
     indexmap::{IndexMap, IndexSet},
     semver::Version,
     std::{
-        collections::{HashMap, HashSet, hash_map::Entry},
+        collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::Entry},
         fmt::Write as _,
         fs::{self, File},
         io::Write as _,
@@ -1448,7 +1448,7 @@ impl<'a> Summary<'a> {
                     "pass".to_owned().clone_into(&mut fields)
                 }
 
-                let docs = docstring(world_module, docs, 1, None);
+                let docs = docstring(docs, 1, None);
 
                 format!(
                     "
@@ -1505,7 +1505,7 @@ class {name}:
                             .collect::<Vec<_>>()
                             .join(", ");
 
-                        let docs = docstring(world_module, ty.docs.contents.as_deref(), 0, None);
+                        let docs = docstring(ty.docs.contents.as_deref(), 0, None);
 
                         (
                             Some(Code::Shared(format!(
@@ -1540,7 +1540,7 @@ class {name}:
                             .collect::<Vec<_>>()
                             .join("\n    ");
 
-                        let docs = docstring(world_module, ty.docs.contents.as_deref(), 1, None);
+                        let docs = docstring(ty.docs.contents.as_deref(), 1, None);
 
                         (
                             Some(Code::Shared(format!(
@@ -1567,7 +1567,7 @@ class {camel}(Enum):
                             flags
                         };
 
-                        let docs = docstring(world_module, ty.docs.contents.as_deref(), 1, None);
+                        let docs = docstring(ty.docs.contents.as_deref(), 1, None);
 
                         (
                             Some(Code::Shared(format!(
@@ -1582,7 +1582,7 @@ class {camel}(Flag):
                     TypeDefKind::Resource => {
                         let camel = camel();
 
-                        let docs = docstring(world_module, ty.docs.contents.as_deref(), 1, None);
+                        let docs = docstring(ty.docs.contents.as_deref(), 1, None);
 
                         let empty = &ResourceInfo::default();
 
@@ -1605,8 +1605,7 @@ class {camel}(Flag):
                                     Some(id),
                                 );
 
-                                let docs =
-                                    docstring(world_module, function.docs, 2, error.as_deref());
+                                let docs = docstring(function.docs, 2, error.as_deref());
 
                                 if let wit_parser::FunctionKind::Constructor(_) = function.wit_kind
                                 {
@@ -1710,8 +1709,7 @@ class {camel}:
                                     Some(id),
                                 );
 
-                                let docs =
-                                    docstring(world_module, function.docs, 2, error.as_deref());
+                                let docs = docstring(function.docs, 2, error.as_deref());
 
                                 self.generate_export_code(
                                     stub_runtime_calls,
@@ -1856,7 +1854,13 @@ def {snake}_future(default: Callable[[], {camel}]) -> tuple[FutureWriter[{camel}
 
                 let aliases = if let (Some(code), false) = (code.as_ref(), names.is_empty()) {
                     let aliases = iter::once(world_module_import(world_module, "peer"))
-                        .chain(names.iter().map(|name| format!("{name} = peer.{name}")))
+                        .chain(
+                            names
+                                .iter()
+                                .collect::<BTreeSet<_>>()
+                                .into_iter()
+                                .map(|name| format!("{name} = peer.{name}")),
+                        )
                         .collect::<Vec<_>>()
                         .join("\n");
 
@@ -1990,7 +1994,7 @@ def {snake}_future(default: Callable[[], {camel}]) -> tuple[FutureWriter[{camel}
 
                     match function.kind {
                         FunctionKind::Import => {
-                            let docs = docstring(world_module, function.docs, 1, error.as_deref());
+                            let docs = docstring(function.docs, 1, error.as_deref());
 
                             let code = self.generate_import_code(
                                 0,
@@ -2046,8 +2050,7 @@ def {snake}_future(default: Callable[[], {camel}]) -> tuple[FutureWriter[{camel}
                                     format!("self, {params}")
                                 };
 
-                                let function_docs =
-                                    docstring(world_module, function.docs, 2, error.as_deref());
+                                let function_docs = docstring(function.docs, 2, error.as_deref());
 
                                 let code = self.generate_export_code(
                                     stub_runtime_calls,
@@ -2094,7 +2097,7 @@ from componentize_py_async_support.futures import FutureReader, FutureWriter";
             let dir = path.join("imports");
             fs::create_dir(&dir)?;
             File::create(dir.join("__init__.py"))?;
-            for (id, code) in interface_imports {
+            for (id, code) in interface_imports.into_iter().collect::<BTreeMap<_, _>>() {
                 let name = self.imported_interface_names.get(&id).unwrap();
                 let mut file =
                     File::create(dir.join(format!("{}.py", name.to_snake_case().escape())))?;
@@ -2103,12 +2106,14 @@ from componentize_py_async_support.futures import FutureReader, FutureWriter";
                 let imports = code
                     .type_imports
                     .union(&code.function_imports)
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
                     .map(|&interface| import("..", interface))
                     .chain(self.need_async.then(|| async_imports.into()))
                     .chain((!stub_runtime_calls).then(|| "import componentize_py_runtime".into()))
                     .collect::<Vec<_>>()
                     .join("\n");
-                let docs = docstring(world_module, code.docs, 0, None);
+                let docs = docstring(code.docs, 0, None);
 
                 write!(
                     file,
@@ -2128,7 +2133,7 @@ from componentize_py_types import Result, Ok, Err, Some
 
             let mut protocol_imports = HashSet::new();
             let mut protocols = String::new();
-            for (id, code) in interface_exports {
+            for (id, code) in interface_exports.into_iter().collect::<BTreeMap<_, _>>() {
                 let name = self.exported_interface_names.get(&id).unwrap();
                 let mut file =
                     File::create(dir.join(format!("{}.py", name.to_snake_case().escape())))?;
@@ -2136,11 +2141,13 @@ from componentize_py_types import Result, Ok, Err, Some
                 let imports = code
                     .type_imports
                     .into_iter()
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
                     .map(|interface| import("..", interface))
                     .chain(self.need_async.then(|| async_imports.into()))
                     .collect::<Vec<_>>()
                     .join("\n");
-                let docs = docstring(world_module, code.docs, 0, None);
+                let docs = docstring(code.docs, 0, None);
 
                 write!(
                     file,
@@ -2184,6 +2191,8 @@ class {camel}(Protocol):
 
             let mut init = File::create(dir.join("__init__.py"))?;
             let imports = protocol_imports
+                .into_iter()
+                .collect::<BTreeSet<_>>()
                 .into_iter()
                 .map(|interface| import("..", interface))
                 .chain(self.need_async.then(|| async_imports.into()))
@@ -2230,13 +2239,15 @@ from componentize_py_types import Result, Ok, Err, Some
                         .copied()
                         .collect(),
                 )
+                .collect::<BTreeSet<_>>()
+                .into_iter()
                 .map(|&interface| import(".", interface))
                 .chain(self.need_async.then(|| async_imports.into()))
                 .chain((!stub_runtime_calls).then(|| "import componentize_py_runtime".into()))
                 .collect::<Vec<_>>()
                 .join("\n");
 
-            let docs = docstring(world_module, world_exports.docs, 0, None);
+            let docs = docstring(world_exports.docs, 0, None);
 
             write!(
                 file,
@@ -2620,15 +2631,10 @@ fn world_module_import(name: &str, alias: &str) -> String {
     }
 }
 
-fn docstring(
-    world_module: &str,
-    docs: Option<&str>,
-    indent_level: usize,
-    error: Option<&str>,
-) -> String {
+fn docstring(docs: Option<&str>, indent_level: usize, error: Option<&str>) -> String {
     let docs = match (
         docs,
-        error.map(|e| format!("Raises: `{world_module}.types.Err({e})`")),
+        error.map(|e| format!("Raises: `componentize_py_types.Err({e})`")),
     ) {
         (Some(docs), Some(error_docs)) => Some(format!("{docs}\n\n{error_docs}")),
         (Some(docs), None) => Some(docs.to_owned()),
