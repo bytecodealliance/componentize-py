@@ -870,6 +870,7 @@ class EchoesGenerated(exports.EchoesGenerated):
 static TESTER: Lazy<Tester<Host>> = Lazy::new(|| {{
     Tester::<Host>::new(
         include_str!({wit_path:?}),
+        &[],
         Some("echoes_generated_test"),
         GUEST_CODE,
         &[],

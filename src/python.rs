@@ -37,7 +37,7 @@ fn python_componentize(
     (|| {
         Runtime::new()?.block_on(
             ComponentGenerator {
-                wit_path: &wit_path.iter().map(|v| v.as_path()).collect::<Vec<_>>(),
+                wit_paths: &wit_path.iter().map(|v| v.as_path()).collect::<Vec<_>>(),
                 worlds: &worlds.iter().map(|v| v.as_str()).collect::<Vec<_>>(),
                 features: &features.iter().map(|v| v.as_str()).collect::<Vec<_>>(),
                 all_features,
@@ -86,7 +86,7 @@ fn python_generate_bindings(
     full_names: bool,
 ) -> PyResult<()> {
     BindingsGenerator {
-        wit_path: &wit_path.iter().map(|v| v.as_path()).collect::<Vec<_>>(),
+        wit_paths: &wit_path.iter().map(|v| v.as_path()).collect::<Vec<_>>(),
         worlds: &worlds.iter().map(|v| v.as_str()).collect::<Vec<_>>(),
         features: &features.iter().map(|v| v.as_str()).collect::<Vec<_>>(),
         all_features,

@@ -45,6 +45,7 @@ static ENGINE: Lazy<Engine> = Lazy::new(|| {
 #[allow(clippy::type_complexity)]
 async fn make_component(
     wit: &str,
+    worlds: &[&str],
     world_module: Option<&str>,
     guest_code: &[(&str, &str)],
     python_path: &[&str],
@@ -61,8 +62,8 @@ async fn make_component(
     }
 
     ComponentGenerator {
-        wit_path: &[&tempdir.path().join("app.wit")],
-        worlds: &[],
+        wit_paths: &[&tempdir.path().join("app.wit")],
+        worlds,
         features: &[],
         all_features: false,
         world_module,
@@ -123,6 +124,7 @@ struct Tester<H> {
 impl<H: Host> Tester<H> {
     fn new(
         wit: &str,
+        worlds: &[&str],
         world_module: Option<&str>,
         guest_code: &[(&str, &str)],
         python_path: &[&str],
@@ -136,6 +138,7 @@ impl<H: Host> Tester<H> {
         // mechanism when pre-initializing.
         let component = &Runtime::new()?.block_on(make_component(
             wit,
+            worlds,
             world_module,
             guest_code,
             python_path,

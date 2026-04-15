@@ -1,7 +1,7 @@
 #![deny(warnings)]
 
 use {
-    anyhow::{Context, Error, Result, anyhow, bail, ensure},
+    anyhow::{Context, Error, Result, anyhow, ensure},
     async_trait::async_trait,
     bytes::Bytes,
     component_init_transform::Invoker,
@@ -32,8 +32,8 @@ use {
     wit_component::metadata,
     wit_dylib::DylibOpts,
     wit_parser::{
-        CloneMaps, FunctionKind, Package, PackageName, Resolve, Stability, TypeDefKind, World,
-        WorldId, WorldItem, WorldKey,
+        CloneMaps, FunctionKind, Package, PackageId, PackageName, Resolve, Stability, TypeDefKind,
+        World, WorldId, WorldItem, WorldKey,
     },
     zstd::Decoder,
 };
@@ -178,7 +178,7 @@ impl Invoker for MyInvoker {
 }
 
 pub struct BindingsGenerator<'a> {
-    pub wit_path: &'a [&'a Path],
+    pub wit_paths: &'a [&'a Path],
     pub worlds: &'a [&'a str],
     pub features: &'a [&'a str],
     pub all_features: bool,
@@ -191,17 +191,44 @@ pub struct BindingsGenerator<'a> {
 
 impl BindingsGenerator<'_> {
     pub fn generate(&self) -> Result<()> {
-        // TODO: Split out and reuse the code responsible for finding and using
-        // componentize-py.toml files in the `componentize` function below, since
-        // that can affect the bindings we should be generating.
+        // Here we parse the specified WIT paths and resolve the specified
+        // worlds, then union them together and generate stub code for the
+        // unioned world.
+        //
+        // Note that this code is not meant to be run; every import raises a
+        // `NotImplementedError`.  This is only meant for use by e.g. IDEs, type
+        // checkers, and document generators.  The real code (i.e. the code
+        // which is actually hooked up to real component imports and exports)
+        // will be generated on-the-fly by `ComponentGenerator::componentize`.
+        //
+        // Note that, unlike in `ComponentGenerator::componentize`, we make no
+        // attempt to discover or use `componentize-py.toml` files here; we only
+        // use the paths in `self.wit_paths` and only output the generated code
+        // to a single directory.
 
-        let (resolve, world) = parse_wit(
-            self.wit_path,
-            self.worlds,
-            self.features,
-            self.all_features,
-            "union",
-        )?;
+        let mut resolve = Resolve {
+            all_features: self.all_features,
+            features: parse_features(self.features),
+            ..Default::default()
+        };
+
+        let mut packages = Vec::new();
+        for &path in self.wit_paths {
+            packages.push((path, resolve.push_path(path)?.0));
+        }
+
+        if packages.is_empty() {
+            // If no WIT directory was provided as a parameter, use ./wit by default.
+            packages.push((Path::new("wit"), resolve.push_path("wit")?.0));
+        }
+
+        let worlds = select_worlds(&resolve, self.worlds, &packages)?;
+        let world = match &worlds.iter().copied().collect::<Vec<_>>()[..] {
+            [] => select_world(&resolve, None, &packages)?,
+            &[world] => world,
+            worlds => union_world(&mut resolve, "union", worlds, &mut CloneMaps::default())?,
+        };
+
         let import_function_indexes = &HashMap::new();
         let export_function_indexes = &HashMap::new();
         let stream_and_future_indexes = &HashMap::new();
@@ -240,7 +267,7 @@ impl BindingsGenerator<'_> {
 pub type AddToLinker<'a> = Option<&'a dyn Fn(&mut Linker<Ctx>) -> Result<()>>;
 
 pub struct ComponentGenerator<'a> {
-    pub wit_path: &'a [&'a Path],
+    pub wit_paths: &'a [&'a Path],
     pub worlds: &'a [&'a str],
     pub features: &'a [&'a str],
     pub all_features: bool,
@@ -258,6 +285,44 @@ pub struct ComponentGenerator<'a> {
 
 impl ComponentGenerator<'_> {
     pub async fn generate(&self) -> Result<()> {
+        // This is a _big_ function.  Here's an overview of what it does.
+        //
+        // Our goal here is to collect one or more WIT paths, parse them, and
+        // resolve one or more WIT worlds, then generate a component that
+        // targets the union of those worlds.
+        //
+        // What complicates this process is that some of the WIT paths my have
+        // been specified explicitly via `self.wit_paths`, but some of them will
+        // be implicitly added as we traverse `self.python_path` and discover
+        // any `componentize-py.toml` files.  A Python module containing such a
+        // file may use it specify its own WIT path as well is where to place
+        // the generated code for any worlds which have been resolved in that
+        // WIT path.  In this case we say the Python module "covers" or "owns"
+        // those worlds. Therefore, while the output component will target the
+        // union of all the worlds, the code generated for that unioned world
+        // may be spread across multiple modules according to which modules
+        // "cover" which parts of the unioned world.
+        //
+        // Note that, when a given Python module "covers" a set of worlds, it
+        // may contain its own, pregenerated bindings for use by IDEs,
+        // type-checkers, and document generators.  Those bindings will be
+        // ignored here and replaced by code we generate on-the-fly and which is
+        // hooked up to the native Wasm imports and exports we'll be
+        // synthesizing.
+        //
+        // In a nutshell, our job here is to not only create a component which
+        // targets the union of the specified worlds, but to generate code and
+        // place it into one or more modules as directed by the configuration
+        // settings specified in `self` and any `componentize-py.toml` files
+        // discovered.
+        //
+        // Once we've done that, there's one final step: pre-initialize the
+        // component.  This involves running the top level script specified by
+        // `self.app_name` in a controled environment where it has access to all
+        // the directories in `self.python_path` plus directories containing any
+        // generated code produced earlier.  Assuming this step succeeds, we'll
+        // snapshot the result and emit the snapshot as the final output.
+
         // Remove non-existent elements from `python_path` so we don't choke on them
         // later:
         let python_path = &self
@@ -280,22 +345,6 @@ impl ComponentGenerator<'_> {
             let name = format!("union{union_number}");
             union_number += 1;
             name
-        };
-
-        // Next, iterate over all the WIT directories, merging them into a single
-        // `Resolve`, and matching Python packages to `WorldId`s.
-        let (mut resolve, mut main_world) = match self.wit_path {
-            [] => (None, None),
-            paths => {
-                let (resolve, world) = parse_wit(
-                    paths,
-                    self.worlds,
-                    self.features,
-                    self.all_features,
-                    &next_union_name(),
-                )?;
-                (Some(resolve), Some(world))
-            }
         };
 
         let import_interface_names = self
@@ -324,85 +373,159 @@ impl ComponentGenerator<'_> {
             }))
             .collect();
 
+        let features = parse_features(self.features);
+
+        let mut resolve = Resolve {
+            all_features: self.all_features,
+            features: features.clone(),
+            ..Default::default()
+        };
+
+        let mut packages = Vec::new();
+
         let configs = configs
             .iter()
-            .map(|(module, (config, worlds))| {
+            .map(|(module, &(ref config, worlds))| {
                 Ok((
                     module,
-                    match (worlds, config.config.wit_directory.as_deref()) {
-                        (_, Some(wit_path)) => {
-                            let path = config.path.join(wit_path);
-                            let paths = &[path.as_path()];
-                            let (my_resolve, mut world) = parse_wit(
-                                paths,
-                                worlds,
-                                self.features,
-                                self.all_features,
-                                &next_union_name(),
-                            )?;
+                    if let Some(path) = config.config.wit_directory.as_deref() {
+                        // The list of worlds we have here includes all the
+                        // worlds which might possibly be covered by this
+                        // particular Python module, but not all of them
+                        // necessarily _are_ covered by it.  Here we filter the
+                        // list by creating a `Resolve` which _only_ includes
+                        // the path specified in this module's
+                        // `componentize-py.toml` file and looking up the world
+                        // there.  If there's a match, we'll keep it; otherwise,
+                        // we toss it out and assume it will be (or has been)
+                        // covered elsewhere.
 
-                            if let Some(resolve) = &mut resolve {
-                                let remap = resolve.merge(my_resolve)?;
-                                world = remap.worlds[world.index()].expect("missing world");
-                            } else {
-                                resolve = Some(my_resolve);
-                            }
+                        let mut tmp = Resolve {
+                            all_features: self.all_features,
+                            features: features.clone(),
+                            ..Default::default()
+                        };
 
-                            (config, Some(world))
-                        }
-                        ([], None) => (config, None),
-                        (_, None) => {
-                            bail!(
-                                "no `wit-directory` specified in \
-                                 `componentize-py.toml` for module `{module}`"
-                            );
-                        }
+                        let package = tmp.push_path(path)?.0;
+
+                        let worlds = worlds
+                            .iter()
+                            .filter_map(|world| {
+                                select_world(&tmp, Some(world), &[(path, package)]).ok()
+                            })
+                            .collect::<Vec<_>>();
+
+                        let remap = resolve.merge(tmp)?;
+
+                        packages.push((path, remap.packages[package.index()]));
+
+                        let worlds = worlds
+                            .into_iter()
+                            .map(|v| remap.worlds[v.index()].unwrap())
+                            .collect();
+
+                        (config, worlds)
+                    } else {
+                        (config, Vec::new())
                     },
                 ))
             })
             .collect::<Result<IndexMap<_, _>>>()?;
 
-        let mut resolve = if let Some(resolve) = resolve {
-            resolve
-        } else {
+        for path in self.wit_paths {
+            packages.push((path, resolve.push_path(path)?.0));
+        }
+
+        if packages.is_empty() {
             // If no WIT directory was provided as a parameter and none were
-            // referenced by Python packages, use the default values.
-            let paths: &[&Path] = &[];
-            let (my_resolve, world) = parse_wit(
-                paths,
-                self.worlds,
-                self.features,
-                self.all_features,
-                &next_union_name(),
-            )
-            .context(
-                "no WIT files found; please specify the directory or file \
-                     containing the WIT world you wish to target",
-            )?;
-            main_world = Some(world);
-            my_resolve
+            // referenced by Python packages, use ./wit by default.
+            packages.push((Path::new("wit"), resolve.push_path("wit")?.0));
+        }
+
+        let worlds = select_worlds(&resolve, self.worlds, &packages)?;
+
+        let mut all_worlds = worlds
+            .iter()
+            .copied()
+            .chain(configs.values().flat_map(|(_, v)| v.iter().copied()))
+            .collect::<IndexSet<_>>();
+
+        if all_worlds.is_empty() {
+            // No worlds specified; pick the default one, if available:
+            all_worlds.insert(select_world(&resolve, None, &packages)?);
+        }
+
+        // Now that we've parsed all known WIT files and resolved all relevant
+        // worlds, we collect them all into a single world, unioning them
+        // together if there's more than one.
+        //
+        // This unified world represents the target world of the component we're
+        // creating, but note that, because parts of that world may be covered
+        // by dependencies, we may need to split code generation across several
+        // Python modules, so we still need to keep track of the original list
+        // of worlds and which modules they belong to.
+
+        let mut clone_maps = CloneMaps::default();
+
+        let mut unioned = |resolve: &mut _, worlds: &[_]| {
+            anyhow::Ok(match worlds {
+                [] => None,
+                &[world] => Some(world),
+                worlds => Some(union_world(
+                    resolve,
+                    &next_union_name(),
+                    worlds,
+                    &mut clone_maps,
+                )?),
+            })
         };
+
+        let world = unioned(
+            &mut resolve,
+            &all_worlds.iter().copied().collect::<Vec<_>>(),
+        )?
+        .unwrap();
+
+        // Determine which worlds are covered by which Python modules and, for
+        // each module, union the ones covered by the module into a single
+        // world.
+
+        let mut worlds_to_generate = all_worlds.clone();
+
+        let configs = configs
+            .iter()
+            .map(|(module, (config, worlds))| {
+                // If a `bindings` config is specified for this module, we will
+                // generate code for these worlds separately, so remove them
+                // from `worlds_to_generate`.
+                if config.config.bindings.is_some() {
+                    worlds_to_generate = worlds_to_generate
+                        .difference(&worlds.iter().copied().collect::<IndexSet<_>>())
+                        .copied()
+                        .collect();
+                }
+
+                let world = unioned(&mut resolve, worlds)?;
+
+                Ok((module, (config, world)))
+            })
+            .collect::<Result<IndexMap<_, _>>>()?;
+
+        // Here we union together any worlds not covered by any of the Python
+        // modules above.  We'll generate code for this world in its own,
+        // synthesized module.
+
+        let world_to_generate = unioned(
+            &mut resolve,
+            &worlds_to_generate.into_iter().collect::<Vec<_>>(),
+        )?;
 
         // Extract relevant metadata from the `Resolve` into a `Summary` instance,
         // which we'll use to generate Wasm- and Python-level bindings.
 
-        let worlds = configs
-            .values()
-            .filter_map(|(_, world)| *world)
-            .chain(main_world)
-            .collect::<IndexSet<_>>();
-
-        let mut clone_maps = CloneMaps::default();
-        let union_world = union_world(
-            &mut resolve,
-            &next_union_name(),
-            &worlds.iter().copied().collect::<Vec<_>>(),
-            &mut clone_maps,
-        )?;
-
         let (mut bindings, metadata) = wit_dylib::create_with_metadata(
             &resolve,
-            union_world,
+            world,
             Some(&mut DylibOpts {
                 interpreter: Some("libcomponentize_py_runtime.so".into()),
                 async_: Default::default(),
@@ -413,7 +536,7 @@ impl ComponentGenerator<'_> {
             name: Cow::Borrowed("component-type:componentize-py-union"),
             data: Cow::Owned(metadata::encode(
                 &resolve,
-                union_world,
+                world,
                 wit_component::StringEncoding::UTF8,
                 None,
             )?),
@@ -463,7 +586,7 @@ impl ComponentGenerator<'_> {
 
         let summary = Summary::try_new(
             &resolve,
-            &worlds,
+            &all_worlds,
             &import_interface_names,
             &export_interface_names,
             &imported_function_indexes,
@@ -547,26 +670,16 @@ impl ComponentGenerator<'_> {
             wasi.preopened_dir(path, index.to_string(), DirPerms::all(), FilePerms::all())?;
         }
 
-        // For each Python package with a `componentize-py.toml` file that specifies
-        // where generated bindings for that package should be placed, generate the
-        // bindings and place them as indicated.
+        // For each Python module with a `componentize-py.toml` file that
+        // specifies where generated bindings for that package should be placed,
+        // generate the bindings and place them as indicated.
 
         let mut world_dir_mounts = Vec::new();
         let mut locations = Locations::default();
-        let mut saw_main_world = false;
 
-        for (config, world, binding_path) in configs
-            .values()
-            .filter_map(|(config, world)| Some((config, world, config.config.bindings.as_deref()?)))
-        {
-            if *world == main_world {
-                saw_main_world = true;
-            }
-
-            let Some(world) = *world else {
-                bail!("please specify a world for module `{}`", config.module);
-            };
-
+        for (config, world, binding_path) in configs.values().filter_map(|&(ref config, world)| {
+            Some((config, world?, config.config.bindings.as_deref()?))
+        }) {
             let paths = python_path
                 .iter()
                 .enumerate()
@@ -607,9 +720,9 @@ impl ComponentGenerator<'_> {
             ));
         }
 
-        // If the caller specified a world and we haven't already generated bindings
-        // for it above, do so now.
-        if let (Some(world), false) = (main_world, saw_main_world) {
+        // Here we generate code for any worlds not covered by any of the Python
+        // modules we visited above.
+        if let Some(world) = world_to_generate {
             let module = self.world_module.unwrap_or(DEFAULT_WORLD_MODULE);
             let world_dir = tempfile::tempdir()?;
             let module_path = world_dir.path().join(module);
@@ -701,7 +814,7 @@ impl ComponentGenerator<'_> {
                 async move {
                     let component = &Component::new(&engine, instrumented)?;
                     if !added_to_linker {
-                        add_wasi_and_stubs(&resolve, &worlds, &mut linker)?;
+                        add_wasi_and_stubs(&resolve, &all_worlds, &mut linker)?;
                     }
 
                     let pre = InitPre::new(linker.instantiate_pre(component)?)?;
@@ -737,107 +850,78 @@ impl ComponentGenerator<'_> {
     }
 }
 
-fn parse_wit(
-    paths: &[&Path],
-    worlds: &[&str],
-    features: &[&str],
-    all_features: bool,
-    union_name: &str,
-) -> Result<(Resolve, WorldId)> {
-    // If no WIT directory was provided as a parameter and none were referenced
-    // by Python packages, use ./wit by default.
-    if paths.is_empty() {
-        let paths = &[Path::new("wit")];
-        return parse_wit(paths, worlds, features, all_features, union_name);
-    }
-    debug_assert!(!paths.is_empty(), "The paths should not be empty");
-
-    let mut resolve = Resolve {
-        all_features,
-        ..Default::default()
-    };
-    for features in features {
-        for feature in features
-            .split(',')
-            .flat_map(|s| s.split_whitespace())
-            .filter(|f| !f.is_empty())
-        {
-            resolve.features.insert(feature.to_string());
-        }
-    }
-
-    let packages = paths
+fn parse_features(features: &[&str]) -> IndexSet<String> {
+    features
         .iter()
-        .map(|path| {
-            // Consolidates if the same package is referenced in multiple worlds
-            let mut tmp = Resolve {
-                all_features,
-                features: resolve.features.clone(),
-                ..Default::default()
-            };
-            let (pkg, _files) = tmp.push_path(path)?;
-            let consolidated = resolve.merge(tmp)?;
-            Ok(consolidated.packages[pkg.index()])
+        .flat_map(|features| {
+            features
+                .split(',')
+                .flat_map(|s| s.split_whitespace())
+                .filter(|f| !f.is_empty())
         })
-        .collect::<Result<Vec<_>>>()?;
+        .map(String::from)
+        .collect()
+}
 
-    let available_worlds = |resolve: &Resolve| {
-        resolve
-            .worlds
-            .iter()
-            .map(|(_, world)| {
-                if let Some(package) = world.package {
-                    let package = &resolve.packages[package].name;
-                    let version = if let Some(version) = &package.version {
-                        format!("@{version}")
-                    } else {
-                        String::new()
-                    };
-                    let package_namespace = &package.namespace;
-                    let package_name = &package.name;
-                    let name = &world.name;
-                    format!("{package_namespace}:{package_name}/{name}{version}")
-                } else {
-                    world.name.clone()
-                }
-            })
-            .collect::<Vec<_>>()
-    };
-
-    let worlds = worlds
+fn available_worlds(resolve: &Resolve) -> Vec<String> {
+    resolve
+        .worlds
         .iter()
-        .map(|world| {
-            packages
-                .iter()
-                .find_map(|&pkg| resolve.select_world(&[pkg], Some(world)).ok())
-                .ok_or_else(|| {
-                    let worlds = available_worlds(&resolve);
-                    anyhow!(
-                        "No world named `{world}` found in any of the loaded WIT packages.\n\
+        .map(|(_, world)| {
+            if let Some(package) = world.package {
+                let package = &resolve.packages[package].name;
+                let version = if let Some(version) = &package.version {
+                    format!("@{version}")
+                } else {
+                    String::new()
+                };
+                let package_namespace = &package.namespace;
+                let package_name = &package.name;
+                let name = &world.name;
+                format!("{package_namespace}:{package_name}/{name}{version}")
+            } else {
+                world.name.clone()
+            }
+        })
+        .collect()
+}
+
+fn select_world(
+    resolve: &Resolve,
+    world: Option<&str>,
+    packages: &[(&Path, PackageId)],
+) -> Result<WorldId> {
+    // First, try looking in the top-level packages
+    resolve
+        .select_world(&packages.iter().map(|&(_, v)| v).collect::<Vec<_>>(), world)
+        .or_else(|_| {
+            // That didn't work; now try _all_ known packages
+            resolve
+                .select_world(
+                    &resolve.packages.iter().map(|(v, _)| v).collect::<Vec<_>>(),
+                    world,
+                )
+                .with_context(|| {
+                    let worlds = available_worlds(resolve);
+                    let paths = packages.iter().map(|&(v, _)| v).collect::<Vec<_>>();
+                    format!(
+                        "Unable to resolve `{world:?}`.\n\
                          Available worlds: {worlds:#?}\n\
                          WIT paths: {paths:#?}"
                     )
                 })
         })
-        .collect::<Result<Vec<_>>>()?;
+}
 
-    let world = match &worlds[..] {
-        [] => packages
-            .iter()
-            .find_map(|&pkg| resolve.select_world(&[pkg], None).ok())
-            .ok_or_else(|| {
-                let worlds = available_worlds(&resolve);
-                anyhow!(
-                    "No default world found in any of the loaded WIT packages.\n\
-                     Available worlds: {worlds:#?}\n\
-                     WIT paths: {paths:#?}"
-                )
-            })?,
-        &[world] => world,
-        worlds => union_world(&mut resolve, union_name, worlds, &mut CloneMaps::default())?,
-    };
-
-    Ok((resolve, world))
+fn select_worlds(
+    resolve: &Resolve,
+    worlds: &[&str],
+    packages: &[(&Path, PackageId)],
+) -> Result<IndexSet<WorldId>> {
+    worlds
+        .iter()
+        .map(|world| select_world(resolve, Some(world), packages))
+        .collect()
 }
 
 fn union_world(

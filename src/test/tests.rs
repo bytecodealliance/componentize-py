@@ -164,10 +164,14 @@ impl super::Host for BarHost {
 static TESTER: Lazy<Tester<Host>> = Lazy::new(|| {
     Tester::<Host>::new(
         include_str!("wit/tests.wit"),
+        &["componentize-py:test/tests"],
         Some("tests"),
         GUEST_CODE,
         &["src/test"],
-        &[("foo_sdk", &["foo-world"]), ("bar_sdk", &["bar-world"])],
+        &[
+            ("foo_sdk", &["foo:sdk/foo-world"]),
+            ("bar_sdk", &["bar:sdk/bar-world"]),
+        ],
         *SEED,
     )
     .unwrap()
