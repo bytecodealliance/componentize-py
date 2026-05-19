@@ -246,6 +246,6 @@ class FooInterface(foo_exports.FooInterface):
     def test(self, s: str) -> str:
         return foo_test(f"{s} FooInterface.test")
 
-class BarInterface(bar_exports.BarInterface):
+class BarSdkBarInterface(bar_exports.BarSdkBarInterface):
     def test(self, s: str) -> str:
         return bar_test(f"{s} BarInterface.test")

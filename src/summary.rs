@@ -31,6 +31,18 @@ const NOT_IMPLEMENTED: &str = "raise NotImplementedError";
 
 const ASYNC_START_PREFIX: &str = "_async_start_";
 
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum Naming {
+    Short,
+    Full,
+}
+
+impl Naming {
+    pub fn from_full(full: bool) -> Self {
+        if full { Self::Full } else { Self::Short }
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Direction {
     Import,
@@ -93,6 +105,7 @@ pub struct InterfaceInfo<'a> {
     package: Option<PackageName<'a>>,
     name: &'a str,
     docs: Option<&'a str>,
+    naming: Naming,
 }
 
 struct FunctionCode {
@@ -145,21 +158,18 @@ pub struct Summary<'a> {
     imported_function_indexes: &'a HashMap<(Option<&'a str>, &'a str), usize>,
     exported_function_indexes: &'a HashMap<(Option<&'a str>, &'a str), usize>,
     stream_and_future_indexes: &'a HashMap<TypeId, usize>,
-    full_names: bool,
     need_async: bool,
 }
 
 impl<'a> Summary<'a> {
-    #[expect(clippy::too_many_arguments)]
     pub fn try_new(
         resolve: &'a Resolve,
-        worlds: &IndexSet<WorldId>,
+        worlds: &IndexMap<WorldId, Naming>,
         import_interface_names: &HashMap<&str, &str>,
         export_interface_names: &HashMap<&str, &str>,
         imported_function_indexes: &'a HashMap<(Option<&'a str>, &'a str), usize>,
         exported_function_indexes: &'a HashMap<(Option<&'a str>, &'a str), usize>,
         stream_and_future_indexes: &'a HashMap<TypeId, usize>,
-        full_names: bool,
     ) -> Result<Self> {
         let mut me = Self {
             resolve,
@@ -181,24 +191,25 @@ impl<'a> Summary<'a> {
             imported_function_indexes,
             exported_function_indexes,
             stream_and_future_indexes,
-            full_names,
             need_async: false,
         };
 
         let mut import_keys_seen = HashSet::new();
         let mut export_keys_seen = HashSet::new();
-        for &world in worlds {
+        for (&world, &naming) in worlds {
             me.visit_functions(
                 &resolve.worlds[world].imports,
                 Direction::Import,
                 world,
                 &mut import_keys_seen,
+                naming,
             )?;
             me.visit_functions(
                 &resolve.worlds[world].exports,
                 Direction::Export,
                 world,
                 &mut export_keys_seen,
+                naming,
             )?;
         }
 
@@ -388,6 +399,7 @@ impl<'a> Summary<'a> {
         direction: Direction,
         world: WorldId,
         keys_seen: &mut HashSet<WorldKey>,
+        naming: Naming,
     ) -> Result<()> {
         for (key, item) in items {
             self.world_keys
@@ -433,6 +445,7 @@ impl<'a> Summary<'a> {
                         package,
                         name: item_name,
                         docs: interface.docs.contents.as_deref(),
+                        naming,
                     };
 
                     self.resource_state = Some(ResourceState { direction });
@@ -1193,7 +1206,7 @@ impl<'a> Summary<'a> {
                     .or_default()
                     .entry(info.package.map(|p| (p.namespace, p.name)))
                     .or_default()
-                    .insert(info.package.and_then(|p| p.version), id)
+                    .insert(info.package.and_then(|p| p.version), (id, info.naming))
                     .is_none()
             );
         }
@@ -1202,11 +1215,11 @@ impl<'a> Summary<'a> {
         for (name, packages) in &tree {
             for (package, versions) in packages {
                 if let Some((package_namespace, package_name)) = package {
-                    for (version, id) in versions {
+                    for (version, &(id, naming)) in versions {
                         assert!(
                             names
                                 .insert(
-                                    *id,
+                                    id,
                                     if let Some(version) = version {
                                         if let Some(name) = interface_names.get(
                                             format!(
@@ -1216,7 +1229,7 @@ impl<'a> Summary<'a> {
                                             .as_str(),
                                         ) {
                                             (*name).to_owned()
-                                        } else if versions.len() == 1 && !self.full_names {
+                                        } else if versions.len() == 1 && naming == Naming::Short {
                                             if packages.len() == 1 {
                                                 (*name).to_owned()
                                             } else {
@@ -1233,7 +1246,7 @@ impl<'a> Summary<'a> {
                                             .as_str()
                                     ) {
                                         (*name).to_owned()
-                                    } else if packages.len() == 1 && !self.full_names {
+                                    } else if packages.len() == 1 && naming == Naming::Short {
                                         (*name).to_owned()
                                     } else {
                                         format!("{package_namespace}-{package_name}-{name}",)
@@ -1246,7 +1259,7 @@ impl<'a> Summary<'a> {
                     assert!(
                         names
                             .insert(
-                                *versions.get(&None).unwrap(),
+                                versions.get(&None).unwrap().0,
                                 (*interface_names.get(*name).unwrap_or(name)).to_owned()
                             )
                             .is_none()
