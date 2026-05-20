@@ -18,7 +18,7 @@ use {
         path::{Path, PathBuf},
         str,
     },
-    summary::{Locations, Summary},
+    summary::{Locations, Naming, Summary},
     tar::Archive,
     wasm_encoder::{CustomSection, Section as _},
     wasmtime::{
@@ -234,13 +234,12 @@ impl BindingsGenerator<'_> {
         let stream_and_future_indexes = &HashMap::new();
         let summary = Summary::try_new(
             &resolve,
-            &iter::once(world).collect(),
+            &iter::once((world, Naming::from_full(self.full_names))).collect(),
             self.import_interface_names,
             self.export_interface_names,
             import_function_indexes,
             export_function_indexes,
             stream_and_future_indexes,
-            self.full_names,
         )?;
         let world_module = self.world_module.unwrap_or(DEFAULT_WORLD_MODULE);
         let world_dir = self.output_dir.join(world_module.replace('.', "/"));
@@ -447,12 +446,23 @@ impl ComponentGenerator<'_> {
         let mut all_worlds = worlds
             .iter()
             .copied()
-            .chain(configs.values().flat_map(|(_, v)| v.iter().copied()))
-            .collect::<IndexSet<_>>();
+            .map(|world| (world, Naming::from_full(self.full_names)))
+            .chain(configs.values().flat_map(|(config, worlds)| {
+                worlds.iter().copied().map(|world| {
+                    (
+                        world,
+                        Naming::from_full(config.config.full_names || self.full_names),
+                    )
+                })
+            }))
+            .collect::<IndexMap<_, _>>();
 
         if all_worlds.is_empty() {
             // No worlds specified; pick the default one, if available:
-            all_worlds.insert(select_world(&resolve, None, &packages)?);
+            all_worlds.insert(
+                select_world(&resolve, None, &packages)?,
+                Naming::from_full(self.full_names),
+            );
         }
 
         // Now that we've parsed all known WIT files and resolved all relevant
@@ -482,7 +492,7 @@ impl ComponentGenerator<'_> {
 
         let world = unioned(
             &mut resolve,
-            &all_worlds.iter().copied().collect::<Vec<_>>(),
+            &all_worlds.keys().copied().collect::<Vec<_>>(),
         )?
         .unwrap();
 
@@ -490,7 +500,7 @@ impl ComponentGenerator<'_> {
         // each module, union the ones covered by the module into a single
         // world.
 
-        let mut worlds_to_generate = all_worlds.clone();
+        let mut worlds_to_generate = all_worlds.keys().copied().collect::<IndexSet<_>>();
 
         let configs = configs
             .iter()
@@ -592,13 +602,6 @@ impl ComponentGenerator<'_> {
             &imported_function_indexes,
             &exported_function_indexes,
             &stream_and_future_indexes,
-            // TODO: We should restrict the `full_names` setting found in a give
-            // config file to only the world(s) covered by that config file, if
-            // feasible.
-            self.full_names
-                || configs
-                    .values()
-                    .any(|(config, ..)| config.config.full_names),
         )?;
 
         let need_async = summary.need_async();
@@ -814,7 +817,11 @@ impl ComponentGenerator<'_> {
                 async move {
                     let component = &Component::new(&engine, instrumented)?;
                     if !added_to_linker {
-                        add_wasi_and_stubs(&resolve, &all_worlds, &mut linker)?;
+                        add_wasi_and_stubs(
+                            &resolve,
+                            &all_worlds.keys().copied().collect::<IndexSet<_>>(),
+                            &mut linker,
+                        )?;
                     }
 
                     let pre = InitPre::new(linker.instantiate_pre(component)?)?;
