@@ -4,7 +4,21 @@ interface foo-interface {
   test: func(s: string) -> string;
 }
 
+interface foo-interface2 {
+  test: func(s: string) -> string;
+}
+
 world foo-world {
   import foo-interface;
   export foo-interface;
+}
+
+world foo-world2 {
+  import foo-interface2;
+  export foo-interface;
+}
+
+world foo-world-union {
+  include foo-world;
+  include foo-world2;
 }

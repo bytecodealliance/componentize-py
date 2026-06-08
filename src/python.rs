@@ -18,7 +18,7 @@ use {
 #[allow(clippy::too_many_arguments)]
 #[pyo3::pyfunction]
 #[pyo3(name = "componentize")]
-#[pyo3(signature = (wit_path, worlds, features, all_features, world_module, python_path, module_worlds, app_name, output_path, stub_wasi, import_interface_names, export_interface_names, full_names))]
+#[pyo3(signature = (wit_path, worlds, features, all_features, world_module, python_path, module_worlds, app_name, output_path, stub_wasi, import_interface_names, export_interface_names, full_names, intersect_world))]
 fn python_componentize(
     wit_path: Vec<PathBuf>,
     worlds: Vec<String>,
@@ -33,6 +33,7 @@ fn python_componentize(
     import_interface_names: Vec<(PyBackedStr, PyBackedStr)>,
     export_interface_names: Vec<(PyBackedStr, PyBackedStr)>,
     full_names: bool,
+    intersect_world: Option<&str>,
 ) -> PyResult<()> {
     (|| {
         Runtime::new()?.block_on(
@@ -63,6 +64,7 @@ fn python_componentize(
                     .map(|(a, b)| (a.as_ref(), b.as_ref()))
                     .collect(),
                 full_names,
+                intersect_world,
             }
             .generate(),
         )
