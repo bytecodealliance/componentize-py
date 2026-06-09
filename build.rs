@@ -36,6 +36,11 @@ const CLANG_EXECUTABLE: &str = "clang.exe";
 #[cfg(not(target_os = "windows"))]
 const CLANG_EXECUTABLE: &str = "clang";
 
+// TODO: switch to upstream release per
+// https://github.com/bytecodealliance/componentize-py/issues/215
+const CPYTHON_TARBALL_URL: &str = "https://github.com/dicej/cpython/tarball/v3.14.0-wasi-sdk-30";
+const CPYTHON_TARBALL_BASE_DIR: &str = "dicej-cpython-0e13686";
+
 fn main() -> Result<()> {
     println!("cargo:rerun-if-changed=build.rs");
 
@@ -290,7 +295,17 @@ fn add(builder: &mut Builder<impl Write>, root: &Path, path: &Path) -> Result<()
 }
 
 fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
-    let cpython_wasi_dir = repo_dir.join("cpython/builddir/wasi");
+    let cpython_dir = repo_dir.join("cpython");
+    if !cpython_dir.exists() {
+        let url = &env::var("CPYTHON_TARBALL_URL").unwrap_or_else(|_| CPYTHON_TARBALL_URL.into());
+        let base_dir = &env::var_os("CPYTHON_TARBALL_BASE_DIR")
+            .unwrap_or_else(|| CPYTHON_TARBALL_BASE_DIR.into());
+        println!("cargo:warning=downloading CPython source code from {url}...");
+        fetch_extract(url, repo_dir)?;
+        fs::rename(repo_dir.join(base_dir), &cpython_dir)?;
+    }
+
+    let cpython_wasi_dir = cpython_dir.join("builddir/wasi");
     if !cpython_wasi_dir.join("libpython3.14.so").exists() {
         fs::create_dir_all(&cpython_wasi_dir)?;
         if !cpython_wasi_dir.join("libpython3.14.a").exists() {
