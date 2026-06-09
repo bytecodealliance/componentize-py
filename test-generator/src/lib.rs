@@ -875,6 +875,7 @@ static TESTER: Lazy<Tester<Host>> = Lazy::new(|| {{
         GUEST_CODE,
         &[],
         &[],
+        None,
         *SEED
     ).unwrap()
 }});

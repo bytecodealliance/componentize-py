@@ -42,7 +42,8 @@ static ENGINE: Lazy<Engine> = Lazy::new(|| {
     Engine::new(&config).unwrap()
 });
 
-#[allow(clippy::type_complexity)]
+#[expect(clippy::type_complexity)]
+#[expect(clippy::too_many_arguments)]
 async fn make_component(
     wit: &str,
     worlds: &[&str],
@@ -50,6 +51,7 @@ async fn make_component(
     guest_code: &[(&str, &str)],
     python_path: &[&str],
     module_worlds: &[(&str, &[&str])],
+    intersect_world: Option<&str>,
     add_to_linker: Option<&dyn Fn(&mut Linker<Ctx>) -> Result<()>>,
 ) -> Result<Vec<u8>> {
     let tempdir = tempfile::tempdir()?;
@@ -82,6 +84,7 @@ async fn make_component(
         import_interface_names: &HashMap::new(),
         export_interface_names: &HashMap::new(),
         full_names: false,
+        intersect_world,
     }
     .generate()
     .await?;
@@ -122,6 +125,7 @@ struct Tester<H> {
 }
 
 impl<H: Host> Tester<H> {
+    #[expect(clippy::too_many_arguments)]
     fn new(
         wit: &str,
         worlds: &[&str],
@@ -129,6 +133,7 @@ impl<H: Host> Tester<H> {
         guest_code: &[(&str, &str)],
         python_path: &[&str],
         module_worlds: &[(&str, &[&str])],
+        intersect_world: Option<&str>,
         seed: [u8; 32],
     ) -> Result<Self> {
         // TODO: create two versions of the component -- one with and one
@@ -143,6 +148,7 @@ impl<H: Host> Tester<H> {
             guest_code,
             python_path,
             module_worlds,
+            intersect_world,
             Some(&H::add_to_linker),
         ))?;
         let mut linker = Linker::<Ctx>::new(&ENGINE);
@@ -191,9 +197,7 @@ impl<H: Host> Tester<H> {
             )
         });
 
-        let world = runtime
-            .block_on(H1::instantiate_pre(&mut store, self.pre.clone()))
-            .unwrap();
+        let world = runtime.block_on(H1::instantiate_pre(&mut store, self.pre.clone()))?;
 
         test(&world, &mut store, &runtime)
     }

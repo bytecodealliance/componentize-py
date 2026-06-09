@@ -10,7 +10,7 @@ use {
     serde::Deserialize,
     std::{
         borrow::Cow,
-        collections::HashMap,
+        collections::{HashMap, HashSet},
         fs,
         io::Cursor,
         iter,
@@ -280,6 +280,7 @@ pub struct ComponentGenerator<'a> {
     pub import_interface_names: &'a HashMap<&'a str, &'a str>,
     pub export_interface_names: &'a HashMap<&'a str, &'a str>,
     pub full_names: bool,
+    pub intersect_world: Option<&'a str>,
 }
 
 impl ComponentGenerator<'_> {
@@ -443,6 +444,24 @@ impl ComponentGenerator<'_> {
 
         let worlds = select_worlds(&resolve, self.worlds, &packages)?;
 
+        let intersector = if let Some(world) = self.intersect_world {
+            let intersector = select_world(&resolve, Some(world), &packages)?;
+
+            for &world in &worlds {
+                intersect_world(&mut resolve, intersector, world);
+            }
+
+            for (_, worlds) in configs.values() {
+                for &world in worlds {
+                    intersect_world(&mut resolve, intersector, world);
+                }
+            }
+
+            Some(intersector)
+        } else {
+            None
+        };
+
         let mut all_worlds = worlds
             .iter()
             .copied()
@@ -459,10 +478,13 @@ impl ComponentGenerator<'_> {
 
         if all_worlds.is_empty() {
             // No worlds specified; pick the default one, if available:
-            all_worlds.insert(
-                select_world(&resolve, None, &packages)?,
-                Naming::from_full(self.full_names),
-            );
+            let world = select_world(&resolve, None, &packages)?;
+
+            if let Some(intersector) = intersector {
+                intersect_world(&mut resolve, intersector, world);
+            }
+
+            all_worlds.insert(world, Naming::from_full(self.full_names));
         }
 
         // Now that we've parsed all known WIT files and resolved all relevant
@@ -758,7 +780,10 @@ impl ComponentGenerator<'_> {
         for (mounts, world_dir) in world_dir_mounts.iter() {
             for mount in mounts {
                 if DEBUG_PYTHON_BINDINGS {
-                    eprintln!("world dir path: {}", world_dir.path().display());
+                    eprintln!(
+                        "world dir path: {}; mount: {mount}",
+                        world_dir.path().display()
+                    );
                 }
                 wasi.preopened_dir(world_dir.path(), mount, DirPerms::all(), FilePerms::all())?;
             }
@@ -968,6 +993,47 @@ fn union_world(
     }
 
     Ok(union_world)
+}
+
+fn intersect_world(resolve: &mut Resolve, intersector: WorldId, world: WorldId) {
+    let (imports_to_remove, exports_to_remove) = {
+        let intersector = &resolve.worlds[intersector];
+        let world = &resolve.worlds[world];
+
+        // Note that we make no effort to check whether the world items
+        // corresponding to the same keys found in `intersector` and `world`
+        // actually match.  We only care about the keys in `intersector` and ignore
+        // the items they map to.
+
+        (
+            world
+                .imports
+                .keys()
+                .filter_map(|name| {
+                    if intersector.imports.contains_key(name) {
+                        None
+                    } else {
+                        Some(name.clone())
+                    }
+                })
+                .collect::<HashSet<_>>(),
+            world
+                .exports
+                .keys()
+                .filter_map(|name| {
+                    if intersector.exports.contains_key(name) {
+                        None
+                    } else {
+                        Some(name.clone())
+                    }
+                })
+                .collect::<HashSet<_>>(),
+        )
+    };
+
+    let world = &mut resolve.worlds[world];
+    world.imports.retain(|k, _| !imports_to_remove.contains(k));
+    world.exports.retain(|k, _| !exports_to_remove.contains(k));
 }
 
 fn add_wasi_and_stubs(

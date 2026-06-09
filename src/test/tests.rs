@@ -48,7 +48,7 @@ wasmtime::component::bindgen!({
 mod foo_sdk {
     wasmtime::component::bindgen!({
         path: "src/test/foo_sdk/wit",
-        world: "foo-world",
+        world: "foo-world-union",
         imports: { default: trappable },
         exports: { default: async },
     });
@@ -120,7 +120,7 @@ impl super::Host for Host {
     fn add_to_linker(linker: &mut Linker<Ctx>) -> Result<()> {
         wasmtime_wasi::p2::add_to_linker_async(linker)?;
         Tests::add_to_linker::<_, HasSelf<_>>(linker, |ctx| ctx)?;
-        foo_sdk::FooWorld::add_to_linker::<_, HasSelf<_>>(linker, |ctx| ctx)?;
+        foo_sdk::FooWorldUnion::add_to_linker::<_, HasSelf<_>>(linker, |ctx| ctx)?;
         Ok(())
     }
 
@@ -132,14 +132,14 @@ impl super::Host for Host {
 struct FooHost;
 
 impl super::Host for FooHost {
-    type World = foo_sdk::FooWorld;
+    type World = foo_sdk::FooWorldUnion;
 
     fn add_to_linker(_linker: &mut Linker<Ctx>) -> Result<()> {
         unreachable!()
     }
 
     async fn instantiate_pre(store: &mut Store<Ctx>, pre: InstancePre<Ctx>) -> Result<Self::World> {
-        Ok(foo_sdk::FooWorldPre::new(pre)?
+        Ok(foo_sdk::FooWorldUnionPre::new(pre)?
             .instantiate_async(store)
             .await?)
     }
@@ -172,6 +172,7 @@ static TESTER: Lazy<Tester<Host>> = Lazy::new(|| {
             ("foo_sdk", &["foo:sdk/foo-world"]),
             ("bar_sdk", &["bar:sdk/bar-world"]),
         ],
+        None,
         *SEED,
     )
     .unwrap()
@@ -878,6 +879,87 @@ fn multiworld() -> Result<()> {
             Ok(())
         })
     })
+}
+
+#[test]
+fn multiworld_intersect() -> Result<()> {
+    impl foo_sdk::foo::sdk::foo_interface2::Host for Ctx {
+        fn test(&mut self, s: String) -> wasmtime::Result<String> {
+            Ok(format!("{s} HostFoo2::test"))
+        }
+    }
+
+    let tester = Tester::<Host>::new(
+        "package dummy:dummy;",
+        &[],
+        None,
+        &[(
+            "app.py",
+            r#"
+from foo_sdk.wit import exports as foo_exports
+from foo_sdk.wit.imports.foo_interface2 import test as foo_test2
+try:
+  from foo_sdk.wit.imports.foo_interface import test as foo_test
+  raise AssertionError
+except ModuleNotFoundError:
+  pass
+try:
+  from bar_sdk.wit.imports.bar_interface import test as bar_test
+  raise AssertionError
+except ModuleNotFoundError:
+  pass
+
+class FooInterface(foo_exports.FooInterface):
+    def test(self, s: str) -> str:
+        return foo_test2(f"{s} FooInterface.test")
+
+class BarSdkBarInterface:
+    def test(self, s: str) -> str:
+        raise AssertionError
+"#,
+        )],
+        &["src/test"],
+        &[
+            ("foo_sdk", &["foo:sdk/foo-world-union"]),
+            ("bar_sdk", &["bar:sdk/bar-world"]),
+        ],
+        Some("foo:sdk/foo-world2"),
+        *SEED,
+    )?;
+
+    // This should work since `export foo:sdk/foo-interface` is included in the intersection.
+    tester.test_with::<FooHost>(|world, store, runtime| {
+        runtime.block_on(async {
+            let result = world
+                .foo_sdk_foo_interface()
+                .call_test(store, "Howdy")
+                .await?;
+
+            assert_eq!("Howdy FooInterface.test HostFoo2::test", result);
+
+            Ok(())
+        })
+    })?;
+
+    // This should _not_ work since `export bar:sdk/bar-interface` is excluded from the intersection.
+    let result = tester.test_with::<BarHost>(|world, store, runtime| {
+        runtime.block_on(async {
+            let result = world
+                .bar_sdk_bar_interface()
+                .call_test(store, "Howdy")
+                .await?;
+
+            assert_eq!("Howdy BarInterface.test HostFoo::test", result);
+
+            Ok(())
+        })
+    });
+
+    assert!(matches!(result, Err(error) if format!("{error}").contains(
+        "no exported instance named `bar:sdk/bar-interface`"
+    )));
+
+    Ok(())
 }
 
 #[test]

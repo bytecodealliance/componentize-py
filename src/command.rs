@@ -151,6 +151,29 @@ pub struct Componentize {
     #[arg(short = 'm', long, value_parser = parse_key_value)]
     pub module_worlds: Vec<(String, String)>,
 
+    /// Specify a world to *intersect* with the world(s) specified elsewhere.
+    ///
+    /// The `--world` option, `--module-worlds` option, and
+    /// `componentize-py.toml` files may be used to specify any number of worlds
+    /// for the component to target.  If more than one are specified, they are
+    /// unioned together to compute the target world.  This option extends that
+    /// computation to calculate the *intersection* (i.e. shared subset) of that
+    /// union and the specified world.
+    ///
+    /// This can be useful in cases where an application is using an SDK lbirary
+    /// containing a `componentize-py.toml` and pre-generated bindings, but the
+    /// target environment for the app only supports a subset of the features
+    /// covered by the SDK.  By default, using that SDK would pull in all the
+    /// imports of the world(s) for which it was intended, but with this option,
+    /// we can exclude imports that are unsupported by the target environment
+    /// and still use the subset of the SDK which does not require those
+    /// excluded imports.
+    ///
+    /// Note that this may lead to pre-init or runtime errors if the application
+    /// does in fact end up using any imports which were excluded.
+    #[arg(short = 'i', long)]
+    pub intersect_world: Option<String>,
+
     /// Output file to which to write the resulting component
     #[arg(short = 'o', long, default_value = "index.wasm")]
     pub output: PathBuf,
@@ -271,6 +294,7 @@ fn componentize(common: Common, componentize: Componentize) -> Result<()> {
                 .map(|(a, b)| (a.as_str(), b.as_str()))
                 .collect(),
             full_names: common.full_names,
+            intersect_world: componentize.intersect_world.as_deref(),
         }
         .generate(),
     )?;
@@ -526,6 +550,7 @@ class Bindings(bindings.Bindings):
             module_worlds: vec![],
             output: out_dir.path().join("app.wasm"),
             stub_wasi: false,
+            intersect_world: None,
         };
         componentize(common, componentize_opts)
     }
@@ -639,6 +664,7 @@ world lib-world {
                 module_worlds: vec![],
                 output: dir.path().join("app.wasm"),
                 stub_wasi: false,
+                intersect_world: None,
             },
         )
     }
