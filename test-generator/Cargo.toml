@@ -1,7 +1,10 @@
 [package]
-name = "test-generator"
-version = "0.1.0"
-edition = "2024"
+name = "componentize-py-test-generator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "`componentize-py` test generator"
 
 [dependencies]
 anyhow = "1.0.91"

@@ -12,10 +12,10 @@ versions have a different API for working with components, and this example has
 not yet been updated to use it.
 
 * `wasmtime-py` 38.0.0
-* `componentize-py` 0.23.0
+* `componentize-py` 0.24.0
 
 ```
-pip install componentize-py==0.23.0 wasmtime==38.0.0
+pip install componentize-py==0.24.0 wasmtime==38.0.0
 ```
 
 ## Running the demo

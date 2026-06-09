@@ -12,7 +12,7 @@ subgroup](https://github.com/bytecodealliance/meetings/tree/main/SIG-Guest-Langu
 meetings and the Guest Languages [Zulip
 channel](https://bytecodealliance.zulipchat.com/#narrow/stream/394175-SIG-Guest-Languages).
 
-## Building from source
+## Building from Source
 
 ### Prerequisites
 
@@ -52,3 +52,53 @@ Finally, build and run `componentize-py`.
 ```shell
 cargo run --release -- --help
 ```
+
+## Publishing Releases
+
+The release process currently requires several manual steps, unfortunately.
+Automating this as part of CI would be great!
+
+In the following, we'll pretend we're bumping the version from 0.22.1 to 0.23.0.
+Remember to replace those numbers with the ones applicable to your release.
+
+The first step is to update the version number in Cargo.toml, pyproject.toml,
+and the examples.  We can use this bash one-liner:
+
+```shell
+for x in $(find examples/ -name README.md) Cargo.toml pyproject.toml; do sed -i 's/0\.22\.1/0.23.0/' $x; done
+```
+
+Note that that's a bit sketchy since it will match any `0.22.1` string, meaning
+if we have a dependency with the same version number, it will get bumped also.
+Be sure to run `git diff` and verify everything looks right before proceeding,
+and make manual edits if necessary.
+
+Next, commit your changes and open a PR.  Once that PR is merged, tag and sign
+the commit using `git tag -s v0.23.0` and push it using e.g. `git push v0.23.0`.
+
+Merging the PR to main will also kick off a release build, updating the `canary`
+release.  When that finishes, go to the [canary release
+page](https://github.com/bytecodealliance/componentize-py/releases/tag/canary)
+and download the `componentize_py-0.23.0-*.whl` and
+`componentize_py-0.23.0.tar.gz` file, move them into a newly-created `dist`
+directory, and run the following:
+
+```shell
+python3 -m venv venv
+source venv/bin/activate
+pip install twine --upgrade
+twine upload dist/*
+```
+
+You'll be prompted for an auth token.  If you don't have one and think you
+should, please open an issue on this repository.
+
+The above will publish Python wheels to pypi.org.  To publish to crates.io,
+you'll need to do the following:
+
+```shell
+cargo login
+bash stage.sh && (cd target/staged && cargo publish)
+```
+
+Again, you'll need an auth token; open an issue if you need one.

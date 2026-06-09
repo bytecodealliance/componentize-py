@@ -57,7 +57,7 @@ fn main() -> Result<()> {
 
     // TODO: how can we detect `cargo test` and only run this in that case (or more specifically, run it so it
     // generates an empty file)?
-    test_generator::generate()
+    componentize_py_test_generator::generate()
 }
 
 fn stubs_for_clippy(out_dir: &Path) -> Result<()> {
@@ -554,7 +554,9 @@ fn make_runtime(
     .env("CARGO_TARGET_DIR", out_dir.join(target))
     .env("PYO3_CONFIG_FILE", out_dir.join("pyo3-config.txt"));
 
-    let status = cmd.status()?;
+    let status = cmd
+        .status()
+        .with_context(|| format!("failed to build runtime using {cmd:?}"))?;
     assert!(status.success());
     println!("cargo:rerun-if-changed=runtime");
 
