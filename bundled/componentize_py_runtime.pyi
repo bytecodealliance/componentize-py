@@ -1,3 +1,9 @@
+"""Internal functions used by generated code to interact with the
+`componentize-py` runtime.
+
+These are not meant to be called directly by application code.
+
+"""
 from typing import Any
 from componentize_py_types import Result
 
