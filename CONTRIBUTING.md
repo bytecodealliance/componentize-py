@@ -38,16 +38,16 @@ First, make sure you've got all the submodules cloned.
 git submodule update --init --recursive
 ```
 
-Next, install WASI-SDK 30 to `/opt/wasi-sdk` (alternatively, you can specify a
+Next, install WASI-SDK 33 to `/opt/wasi-sdk` (alternatively, you can specify a
 different location and reference it later using the `WASI_SDK_PATH` environment
 variable).  Replace `arm64-linux` with `x86_64-linux`, `arm64-macos`,
 `x86_64-macos`, `arm64-windows`, or `x86_64-windows` below depending on your
 architecure and OS, if necessary.
 
 ```shell
-curl -LO https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-30/wasi-sdk-30.0-arm64-linux.tar.gz
-tar xf wasi-sdk-30.0-arm64-linux.tar.gz
-sudo mv wasi-sdk-30.0-arm64-linux /opt/wasi-sdk
+curl -LO https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-33/wasi-sdk-33.0-arm64-linux.tar.gz
+tar xf wasi-sdk-33.0-arm64-linux.tar.gz
+sudo mv wasi-sdk-33.0-arm64-linux /opt/wasi-sdk
 export WASI_SDK_PATH=/opt/wasi-sdk
 ```
 

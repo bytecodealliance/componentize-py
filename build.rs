@@ -20,7 +20,7 @@ use {
 const DEBUG_RUNTIME: bool = false;
 const STRIP_RUNTIME: bool = !DEBUG_RUNTIME;
 const ZSTD_COMPRESSION_LEVEL: i32 = if DEBUG_RUNTIME { 0 } else { 19 };
-const DEFAULT_SDK_VERSION: &str = "30";
+const DEFAULT_SDK_VERSION: &str = "33";
 
 // SQLite version to build - 3.51.2 (latest as of Jan 2026)
 const SQLITE_VERSION: &str = "3510200";
@@ -191,13 +191,22 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
         "libwasi-emulated-process-clocks.so",
         "libwasi-emulated-getpid.so",
         "libwasi-emulated-signal.so",
-        "libc++.so",
-        "libc++abi.so",
     ];
 
     for library in libraries {
         compress(
             &wasi_sdk.join("share/wasi-sysroot/lib/wasm32-wasip2"),
+            library,
+            out_dir,
+            true,
+        )?;
+    }
+
+    let libraries = ["libc++.so", "libc++abi.so"];
+
+    for library in libraries {
+        compress(
+            &wasi_sdk.join("share/wasi-sysroot/lib/wasm32-wasip2/noeh"),
             library,
             out_dir,
             true,
@@ -300,7 +309,7 @@ fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
         let url = &env::var("CPYTHON_TARBALL_URL").unwrap_or_else(|_| CPYTHON_TARBALL_URL.into());
         let base_dir = &env::var_os("CPYTHON_TARBALL_BASE_DIR")
             .unwrap_or_else(|| CPYTHON_TARBALL_BASE_DIR.into());
-        println!("cargo:warning=downloading CPython source code from {url}...");
+        println!("cargo:warning=downloading CPython source code from {url}");
         fetch_extract(url, repo_dir)?;
         fs::rename(repo_dir.join(base_dir), &cpython_dir)?;
     }
