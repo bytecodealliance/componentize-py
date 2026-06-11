@@ -1087,11 +1087,7 @@ fn do_init(app_name: String, symbols: Symbols, stub_wasi: bool) -> Result<(), St
         OK_CONSTRUCTOR.set(types.getattr("Ok")?.into()).unwrap();
         ERR_CONSTRUCTOR.set(types.getattr("Err")?.into()).unwrap();
 
-        let environ = py
-            .import("os")?
-            .getattr("environ")?
-            .downcast_into::<PyMapping>()
-            .unwrap();
+        let environ = Bound::cast_into::<PyMapping>(py.import("os")?.getattr("environ")?).unwrap();
 
         let keys = environ.keys()?;
 
@@ -1149,11 +1145,7 @@ fn do_init(app_name: String, symbols: Symbols, stub_wasi: bool) -> Result<(), St
                 .unwrap();
         }
 
-        let argv = py
-            .import("sys")?
-            .getattr("argv")?
-            .downcast_into::<PyList>()
-            .unwrap();
+        let argv = Bound::cast_into::<PyList>(py.import("sys")?.getattr("argv")?).unwrap();
 
         for i in 0..argv.len() {
             argv.del_item(i)?;
@@ -1905,7 +1897,7 @@ impl Call for MyCall<'_> {
         Python::attach(|py| {
             self.stack.push(if ty.rep().is_some() {
                 // exported resource type
-                unsafe { Py::<PyAny>::from_borrowed_ptr(py, handle as usize as _) }
+                unsafe { Bound::<PyAny>::from_borrowed_ptr(py, handle as usize as _) }.unbind()
             } else {
                 // imported resource type
                 let value = imported_resource_from_canon(py, ty, handle);
@@ -1926,7 +1918,7 @@ impl Call for MyCall<'_> {
             self.stack.push(if let Some(rep) = ty.rep() {
                 // exported resource type
                 let rep = unsafe { rep(handle) };
-                let value = unsafe { Py::<PyAny>::from_borrowed_ptr(py, rep as _) }.into_bound(py);
+                let value = unsafe { Bound::<PyAny>::from_borrowed_ptr(py, rep as _) };
 
                 value
                     .delattr(intern!(py, "__componentize_py_handle"))
@@ -2136,7 +2128,7 @@ fn exported_resource_to_canon(
     } else {
         let rep = value.into_ptr();
         let handle = unsafe { new(rep as usize) };
-        let instance = unsafe { Py::<PyAny>::from_borrowed_ptr(py, rep) };
+        let instance = unsafe { Bound::<PyAny>::from_borrowed_ptr(py, rep) }.unbind();
 
         instance
             .setattr(py, name, handle.into_pyobject(py).unwrap())
