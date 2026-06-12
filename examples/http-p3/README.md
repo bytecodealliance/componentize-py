@@ -1,25 +1,25 @@
 # Example: `http-p3`
 
 This is an example of how to use [componentize-py] and [Wasmtime] to build and
-run a Python-based component targetting version `0.3.0-rc-2026-03-15` of the
-[wasi-http] `service` world.
+run a Python-based component targetting version `0.3.0` of the [wasi-http]
+`service` world.
 
 [componentize-py]: https://github.com/bytecodealliance/componentize-py
 [Wasmtime]: https://github.com/bytecodealliance/wasmtime
-[wasi-http]: https://github.com/WebAssembly/wasi-http
+[wasi-http]: https://github.com/WebAssembly/WASI/tree/v0.3.0/proposals/http/wit
 
 ## Prerequisites
 
-* `Wasmtime` 43.0.0
-* `componentize-py` 0.24.0
+* `Wasmtime` 46.0.0
+* `componentize-py` 0.25.0
 
 Below, we use [Rust](https://rustup.rs/)'s `cargo` to install `Wasmtime`.  If
 you don't have `cargo`, you can download and install from
-https://github.com/bytecodealliance/wasmtime/releases/tag/v43.0.0.
+https://github.com/bytecodealliance/wasmtime/releases/tag/v46.0.0.
 
 ```
-cargo install --version 43.0.0 wasmtime-cli
-pip install componentize-py==0.24.0
+cargo install --version 46.0.0 wasmtime-cli
+pip install componentize-py==0.25.0
 ```
 
 ## Running the demo
@@ -27,8 +27,8 @@ pip install componentize-py==0.24.0
 First, build the app and run it:
 
 ```
-componentize-py -d ../../wit -w wasi:http/service@0.3.0-rc-2026-03-15 componentize app -o http.wasm
-wasmtime serve -Sp3,common -Wcomponent-model-async http.wasm
+componentize-py -d ../../wit -w wasi:http/service@0.3.0 componentize app -o http.wasm
+wasmtime serve -Scommon http.wasm
 ```
 
 Then, in another terminal, use cURL to send a request to the app:

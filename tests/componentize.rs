@@ -20,7 +20,7 @@ fn cli_example() -> anyhow::Result<()> {
 
 #[test]
 fn cli_p3_example() -> anyhow::Result<()> {
-    test_cli_example("cli-p3", "wasi:cli/command@0.3.0-rc-2026-03-15")
+    test_cli_example("cli-p3", "wasi:cli/command@0.3.0")
 }
 
 fn test_cli_example(name: &str, world: &str) -> anyhow::Result<()> {
@@ -65,7 +65,7 @@ fn http_example() -> anyhow::Result<()> {
 
 #[test]
 fn http_p3_example() -> anyhow::Result<()> {
-    test_http_example("http-p3", "wasi:http/service@0.3.0-rc-2026-03-15", 8081)
+    test_http_example("http-p3", "wasi:http/service@0.3.0", 8081)
 }
 
 fn test_http_example(name: &str, world: &str, port: u16) -> anyhow::Result<()> {
@@ -247,7 +247,7 @@ fn tcp_example() -> anyhow::Result<()> {
 
 #[test]
 fn tcp_p3_example() -> anyhow::Result<()> {
-    test_tcp_example("tcp-p3", "wasi:cli/command@0.3.0-rc-2026-03-15")
+    test_tcp_example("tcp-p3", "wasi:cli/command@0.3.0")
 }
 
 fn test_tcp_example(name: &str, world: &str) -> anyhow::Result<()> {

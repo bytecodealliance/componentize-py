@@ -592,7 +592,7 @@ fn add_compile_envs(wasi_sdk: &Path, command: &mut Command) {
         .env("RANLIB", wasi_sdk.join("bin/ranlib"))
         .env(
             "CFLAGS",
-            format!("--target=wasm32-wasi --sysroot={sysroot} -I{sysroot}/include/wasm32-wasip1 -D_WASI_EMULATED_SIGNAL -fPIC"),
+            format!("--target=wasm32-wasip2 --sysroot={sysroot} -I{sysroot}/include/wasm32-wasip2 -D_WASI_EMULATED_SIGNAL -fPIC"),
         )
         .env(
             "LDFLAGS",
@@ -687,9 +687,9 @@ fn build_sqlite(wasi_sdk: &Path, install_dir: &Path) -> Result<()> {
     // Note: Don't set SQLITE_THREADSAFE here - let --disable-threadsafe handle it
     // to avoid macro redefinition warnings
     let sqlite_cflags = format!(
-        "--target=wasm32-wasi \
+        "--target=wasm32-wasip2 \
          --sysroot={sysroot_str} \
-         -I{sysroot_str}/include/wasm32-wasip1 \
+         -I{sysroot_str}/include/wasm32-wasip2 \
          -D_WASI_EMULATED_SIGNAL \
          -D_WASI_EMULATED_PROCESS_CLOCKS \
          -fPIC \
@@ -713,7 +713,7 @@ fn build_sqlite(wasi_sdk: &Path, install_dir: &Path) -> Result<()> {
             "LDFLAGS",
             format!("--target=wasm32-wasip2 --sysroot={sysroot_str} -L{sysroot_str}/lib",),
         )
-        .arg("--host=wasm32-wasi")
+        .arg("--host=wasm32-wasip2")
         .arg(format!("--prefix={install_dir_str}"))
         .arg("--disable-shared")
         .arg("--enable-static")

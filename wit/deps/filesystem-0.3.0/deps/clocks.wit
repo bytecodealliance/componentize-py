@@ -1,0 +1,19 @@
+package wasi:clocks@0.3.0;
+
+interface types {
+  type duration = u64;
+}
+
+interface system-clock {
+  use types.{duration};
+
+  record instant {
+    seconds: s64,
+    nanoseconds: u32,
+  }
+
+  now: func() -> instant;
+
+  get-resolution: func() -> duration;
+}
+

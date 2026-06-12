@@ -1,0 +1,6 @@
+package wasi:clocks@0.3.0;
+
+interface types {
+  type duration = u64;
+}
+
