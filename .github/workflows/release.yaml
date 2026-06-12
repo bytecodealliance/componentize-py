@@ -132,7 +132,7 @@ jobs:
       - name: Install latest Rust stable toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.config.target }}
+          targets: wasm32-wasip2 ${{ matrix.config.target }}
 
       - uses: Swatinem/rust-cache@v2
         if: matrix.config.os == 'ubuntu-latest' && matrix.config.arch == 'amd64'
