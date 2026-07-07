@@ -83,8 +83,8 @@ impl TestsImports for Ctx {
     }
 }
 
-impl TestsImportsWithStore for HasSelf<Ctx> {
-    async fn sleep<T>(_: &Accessor<T, Self>, delay_millis: u32) -> wasmtime::Result<()> {
+impl<T> TestsImportsWithStore<T> for HasSelf<Ctx> {
+    async fn sleep(_: &Accessor<T, Self>, delay_millis: u32) -> wasmtime::Result<()> {
         tokio::time::sleep(Duration::from_millis(delay_millis as _)).await;
         Ok(())
     }
@@ -241,8 +241,8 @@ fn simple_import_and_export() -> Result<()> {
 fn simple_async_import_and_export() -> Result<()> {
     impl componentize_py::test::simple_async_import_and_export::Host for Ctx {}
 
-    impl componentize_py::test::simple_async_import_and_export::HostWithStore for HasSelf<Ctx> {
-        async fn foo<T>(_: &Accessor<T, Self>, v: u32) -> wasmtime::Result<u32> {
+    impl<T> componentize_py::test::simple_async_import_and_export::HostWithStore<T> for HasSelf<Ctx> {
+        async fn foo(_: &Accessor<T, Self>, v: u32) -> wasmtime::Result<u32> {
             tokio::time::sleep(DELAY).await;
             Ok(v + 2)
         }
@@ -1395,8 +1395,8 @@ fn test_short_reads_host(delay: bool) -> Result<()> {
         Host, HostHostThing, HostHostThingWithStore,
     };
 
-    impl HostHostThingWithStore for HasSelf<Ctx> {
-        async fn get<T>(
+    impl<T> HostHostThingWithStore<T> for HasSelf<Ctx> {
+        async fn get(
             accessor: &Accessor<T, Self>,
             this: Resource<ThingString>,
         ) -> wasmtime::Result<String> {

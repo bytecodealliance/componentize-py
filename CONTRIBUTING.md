@@ -74,13 +74,13 @@ Be sure to run `git diff` and verify everything looks right before proceeding,
 and make manual edits if necessary.
 
 Next, commit your changes and open a PR.  Once that PR is merged, tag and sign
-the commit using `git tag -s v0.23.0` and push it using e.g. `git push v0.23.0`.
+the commit using `git tag -s v0.23.0` and push it using `git push v0.23.0`.
 
 Merging the PR to main will also kick off a release build, updating the `canary`
 release.  When that finishes, go to the [canary release
 page](https://github.com/bytecodealliance/componentize-py/releases/tag/canary)
 and download the `componentize_py-0.23.0-*.whl` and
-`componentize_py-0.23.0.tar.gz` file, move them into a newly-created `dist`
+`componentize_py-0.23.0.tar.gz` files, move them into a newly-created `dist`
 directory, and run the following:
 
 ```shell
