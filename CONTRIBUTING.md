@@ -71,10 +71,11 @@ for x in $(find examples/ -name README.md) Cargo.toml pyproject.toml; do sed -i 
 Note that that's a bit sketchy since it will match any `0.22.1` string, meaning
 if we have a dependency with the same version number, it will get bumped also.
 Be sure to run `git diff` and verify everything looks right before proceeding,
-and make manual edits if necessary.
+making manual edits if necessary.
 
 Next, commit your changes and open a PR.  Once that PR is merged, tag and sign
-the commit using `git tag -s v0.23.0` and push it using `git push v0.23.0`.
+the commit using `git tag -s v0.23.0 -m v0.23.0` and push it using `git push
+origin v0.23.0`.
 
 Merging the PR to main will also kick off a release build, updating the `canary`
 release.  When that finishes, go to the [canary release
@@ -98,7 +99,7 @@ you'll need to do the following:
 
 ```shell
 cargo login
-bash stage.sh && (cd target/staged && cargo publish)
+bash stage.sh && (cd target/staged && cargo publish -p componentize-py-test-generator && cargo publish)
 ```
 
 Again, you'll need an auth token; open an issue if you need one.
