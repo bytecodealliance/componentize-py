@@ -9,6 +9,7 @@ pub fn link_libraries(libraries: &[Library]) -> Result<Vec<u8>> {
     linker.use_built_in_libdl(true).encoder().validate(true);
 
     for Library {
+        target: _,
         name,
         module,
         dl_openable,

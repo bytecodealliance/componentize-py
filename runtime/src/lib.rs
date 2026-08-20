@@ -22,7 +22,7 @@ use {
     pyo3::{
         Bound, IntoPyObject, Py, PyAny, PyErr, PyResult, Python,
         exceptions::PyAssertionError,
-        intern,
+        ffi, intern,
         types::{
             PyAnyMethods, PyBool, PyBytes, PyBytesMethods, PyDict, PyDictMethods, PyList,
             PyListMethods, PyMapping, PyMappingMethods, PyModule, PyModuleMethods, PyString,
@@ -31,9 +31,10 @@ use {
     },
     std::{
         alloc::{self, Layout},
+        cell::Cell,
         iter,
         marker::PhantomData,
-        mem, slice, str,
+        mem, ptr, slice, str,
         sync::Once,
     },
     wit_dylib_ffi::{
@@ -52,6 +53,8 @@ mod bindings {
 
     export!(MyExports);
 }
+
+const CALLBACK_CODE_EXIT: u32 = 0;
 
 static WIT: OnceCell<Wit> = OnceCell::new();
 static STUB_WASI: OnceCell<bool> = OnceCell::new();
@@ -1184,7 +1187,7 @@ fn do_init(app_name: String, symbols: Symbols, stub_wasi: bool) -> Result<(), St
 struct MyExports;
 
 impl Guest for MyExports {
-    fn init(app_name: String, symbols: Symbols, stub_wasi: bool) -> Result<(), String> {
+    async fn init(app_name: String, symbols: Symbols, stub_wasi: bool) -> Result<(), String> {
         let result = do_init(app_name, symbols, stub_wasi);
 
         // This tells the WASI Preview 1 component adapter to reset its state.
@@ -1218,7 +1221,9 @@ struct MyInterpreter;
 
 impl MyInterpreter {
     fn export_call_(func: ExportFunction, cx: &mut MyCall<'_>, async_: bool) -> u32 {
-        Python::attach(|py| {
+        let gil_state = unsafe { ffi::PyGILState_Ensure() };
+
+        let result = Python::attach(|py| {
             if !*STUB_WASI.get().unwrap() {
                 static ONCE: Once = Once::new();
                 ONCE.call_once(|| {
@@ -1316,11 +1321,23 @@ impl MyInterpreter {
 
                 release_borrows(py, mem::take(&mut cx.borrows));
 
-                0
+                CALLBACK_CODE_EXIT
             }
-        })
+        });
+
+        if result == CALLBACK_CODE_EXIT {
+            unsafe { ffi::PyGILState_Release(gil_state) };
+        } else {
+            THREAD_STATE.with(|v| {
+                v.set((Some(gil_state), unsafe { ffi::PyEval_SaveThread() }));
+            });
+        }
+
+        result
     }
 }
+
+std::thread_local!(static THREAD_STATE: Cell<(Option<ffi::PyGILState_STATE>, *mut ffi::PyThreadState)> = const { Cell::new((None, ptr::null_mut())) } );
 
 impl Interpreter for MyInterpreter {
     type CallCx<'a> = MyCall<'a>;
@@ -1352,7 +1369,13 @@ impl Interpreter for MyInterpreter {
     fn export_async_callback(event0: u32, event1: u32, event2: u32) -> u32 {
         #[cfg(feature = "async")]
         {
-            Python::attach(|py| {
+            let gil_state = THREAD_STATE.with(|v| {
+                let (gil_state, thread_state) = v.get();
+                unsafe { ffi::PyEval_RestoreThread(thread_state) };
+                gil_state
+            });
+
+            let result = Python::attach(|py| {
                 async_::CALLBACK
                     .get()
                     .unwrap()
@@ -1360,7 +1383,17 @@ impl Interpreter for MyInterpreter {
                     .unwrap()
                     .extract(py)
                     .unwrap()
-            })
+            });
+
+            if result == CALLBACK_CODE_EXIT {
+                unsafe { ffi::PyGILState_Release(gil_state.unwrap()) };
+            } else {
+                THREAD_STATE.with(|v| {
+                    v.set((gil_state, unsafe { ffi::PyEval_SaveThread() }));
+                });
+            }
+
+            result
         }
         #[cfg(not(feature = "async"))]
         {
@@ -1444,7 +1477,9 @@ impl Drop for MyCall<'_> {
     fn drop(&mut self) {
         for &(ptr, layout) in &self.deferred_deallocations {
             unsafe {
-                alloc::dealloc(ptr, layout);
+                if layout.size() > 0 {
+                    alloc::dealloc(ptr, layout);
+                }
             }
         }
     }
@@ -2098,7 +2133,9 @@ impl Call for MyCall<'_> {
                     .to_owned()
                     .into_any()
                     .unbind();
-                alloc::dealloc(src, Layout::from_size_align(len, 1).unwrap());
+                if len > 0 {
+                    alloc::dealloc(src, Layout::from_size_align(len, 1).unwrap());
+                }
                 value
             }));
             true
@@ -2226,34 +2263,3 @@ fn exported_resource_to_canon(
 }
 
 wit_dylib_ffi::export!(MyInterpreter);
-
-// As of this writing, recent Rust `nightly` builds include a version of the
-// `libc` crate that expects `wasi-libc` to define the following global
-// variables, but `wasi-libc` defines them as preprocessor constants which
-// aren't visible at link time, so we need to define them somewhere.  Ideally,
-// we should fix this upstream, but for now we work around it:
-
-#[unsafe(no_mangle)]
-static _CLOCK_PROCESS_CPUTIME_ID: u8 = 2;
-#[unsafe(no_mangle)]
-static _CLOCK_THREAD_CPUTIME_ID: u8 = 3;
-
-// Traditionally, `wit-bindgen` would provide a `cabi_realloc` implementation,
-// but recent versions use a weak symbol trick to avoid conflicts when more than
-// one `wit-bindgen` version is used, and that trick does not currently play
-// nice with how we build this library.  So for now, we just define it ourselves
-// here:
-/// # Safety
-/// TODO
-#[unsafe(export_name = "cabi_realloc")]
-pub unsafe extern "C" fn cabi_realloc(
-    old_ptr: *mut u8,
-    old_len: usize,
-    align: usize,
-    new_size: usize,
-) -> *mut u8 {
-    assert!(old_ptr.is_null());
-    assert!(old_len == 0);
-
-    unsafe { alloc::alloc(Layout::from_size_align(new_size, align).unwrap()) }
-}

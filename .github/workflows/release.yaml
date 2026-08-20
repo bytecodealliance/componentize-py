@@ -19,48 +19,6 @@ permissions:
   pull-requests: write
 
 jobs:
-  linux:
-    name: Populate cache
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: "recursive"
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.14.0"
-
-      - name: Install latest Rust stable toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-wasip2
-          components: clippy, rustfmt
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "rust-cache-${{ hashFiles('./Cargo.lock') }}"
-          cache-on-failure: false
-
-      - name: Install WASI-SDK
-        shell: bash
-        run: |
-          cd /tmp
-          curl -LO https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz
-          tar xf wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz
-          mv wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux /opt/wasi-sdk
-
-      - name: Build
-        shell: bash
-        run: cargo build --release
-
-      - name: Upload CPython builddir
-        uses: actions/upload-artifact@v4
-        with:
-          name: cpython-wasi
-          path: cpython/builddir/wasi
-
   release:
     name: Build and release
     needs: linux
@@ -173,12 +131,6 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: echo "WASI_SDK_PATH=$(cygpath -m /tmp/wasi-sdk-${WASI_SDK_VERSION}.0-${{ matrix.config.wasiSDK }})" >> ${GITHUB_ENV}
-
-      - name: Restore CPython
-        uses: actions/download-artifact@v5
-        with:
-          name: cpython-wasi
-          path: cpython/builddir/wasi
 
       - name: Build wheels
         uses: PyO3/maturin-action@v1
