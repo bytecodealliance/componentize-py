@@ -39,6 +39,7 @@ static ENGINE: Lazy<Engine> = Lazy::new(|| {
     config.wasm_component_model(true);
     config.wasm_component_model_async(true);
     config.wasm_component_model_map(true);
+    config.wasm_component_model_threading(true);
 
     Engine::new(&config).unwrap()
 });
@@ -87,6 +88,7 @@ async fn make_component(
         intersect_world,
         registry_config: None,
         default_registries: true,
+        target: None,
     }
     .generate()
     .await?;
