@@ -817,10 +817,7 @@ mod async_ {
 
                 ty.write()(handle, buffer.cast())
             };
-            let resources = call
-                .resources
-                .take()
-                .and_then(|v| if v.is_empty() { None } else { Some(v) });
+            let resources = call.resources.take().filter(|v| !v.is_empty());
 
             Ok(if code == RETURN_CODE_BLOCKED {
                 ERR_CONSTRUCTOR
