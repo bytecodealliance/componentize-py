@@ -1422,7 +1422,7 @@ impl<'a> Summary<'a> {
         let mut future_payloads = HashSet::new();
         let mut types = Types::default();
         types.analyze(self.resolve);
-        types.collect_equal_types(self.resolve, &|_| true);
+        types.collect_equal_types(self.resolve, world, &|_| true);
 
         for (index, id) in self.types.iter().copied().enumerate() {
             if !self

@@ -24,7 +24,7 @@ use {
             StreamProducer, StreamReader, StreamResult, VecBuffer,
         },
     },
-    wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder, WasiView},
+    wasmtime_wasi::{FsPerms, WasiCtxBuilder, WasiView},
 };
 
 wasmtime::component::bindgen!({
@@ -972,7 +972,7 @@ fn filesystem() -> Result<()> {
     let wasi = WasiCtxBuilder::new()
         .inherit_stdout()
         .inherit_stderr()
-        .preopened_dir(dir.path(), "/", DirPerms::all(), FilePerms::all())?
+        .preopened_dir(dir.path(), "/", FsPerms::ReadWrite)?
         .build();
 
     TESTER.test_with_wasi::<Host>(wasi, |world, store, runtime| {

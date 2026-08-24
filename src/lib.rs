@@ -26,7 +26,7 @@ use {
         component::{Component, Instance, Linker, ResourceTable, ResourceType},
     },
     wasmtime_wasi::{
-        DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView,
+        FsPerms, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView,
         p2::pipe::{MemoryInputPipe, MemoryOutputPipe},
     },
     wit_component::metadata,
@@ -559,6 +559,7 @@ impl ComponentGenerator<'_> {
             &resolve,
             world,
             Some(&mut DylibOpts {
+                stack_pointer: wit_dylib::StackPointer::Global,
                 interpreter: Some("libcomponentize_py_runtime.so".into()),
                 async_: Default::default(),
             }),
@@ -680,19 +681,13 @@ impl ComponentGenerator<'_> {
             .preopened_dir(
                 embedded_python_standard_lib.path(),
                 "python",
-                DirPerms::all(),
-                FilePerms::all(),
+                FsPerms::ReadWrite,
             )?
-            .preopened_dir(
-                embedded_helper_utils.path(),
-                "bundled",
-                DirPerms::all(),
-                FilePerms::all(),
-            )?;
+            .preopened_dir(embedded_helper_utils.path(), "bundled", FsPerms::ReadWrite)?;
 
         // Generate guest mounts for each host directory in `python_path`.
         for (index, path) in python_path.iter().enumerate() {
-            wasi.preopened_dir(path, index.to_string(), DirPerms::all(), FilePerms::all())?;
+            wasi.preopened_dir(path, index.to_string(), FsPerms::ReadWrite)?;
         }
 
         // For each Python module with a `componentize-py.toml` file that
@@ -785,7 +780,7 @@ impl ComponentGenerator<'_> {
                         world_dir.path().display()
                     );
                 }
-                wasi.preopened_dir(world_dir.path(), mount, DirPerms::all(), FilePerms::all())?;
+                wasi.preopened_dir(world_dir.path(), mount, FsPerms::ReadWrite)?;
             }
         }
 

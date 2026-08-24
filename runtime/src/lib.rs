@@ -24,8 +24,9 @@ use {
         exceptions::PyAssertionError,
         intern,
         types::{
-            PyAnyMethods, PyBool, PyBytes, PyBytesMethods, PyDict, PyList, PyListMethods,
-            PyMapping, PyMappingMethods, PyModule, PyModuleMethods, PyString, PyTuple,
+            PyAnyMethods, PyBool, PyBytes, PyBytesMethods, PyDict, PyDictMethods, PyList,
+            PyListMethods, PyMapping, PyMappingMethods, PyModule, PyModuleMethods, PyString,
+            PyTuple,
         },
     },
     std::{
@@ -36,7 +37,7 @@ use {
         sync::Once,
     },
     wit_dylib_ffi::{
-        self as wit, Call, ExportFunction, Interpreter, List, Type, Wit, WitOption, WitResult,
+        self as wit, Call, ExportFunction, Interpreter, List, Map, Type, Wit, WitOption, WitResult,
     },
 };
 
@@ -816,10 +817,7 @@ mod async_ {
 
                 ty.write()(handle, buffer.cast())
             };
-            let resources = call
-                .resources
-                .take()
-                .and_then(|v| if v.is_empty() { None } else { Some(v) });
+            let resources = call.resources.take().filter(|v| !v.is_empty());
 
             Ok(if code == RETURN_CODE_BLOCKED {
                 ERR_CONSTRUCTOR
@@ -1638,6 +1636,7 @@ impl Call for MyCall<'_> {
                 .bind(py)
                 .get_item(value.get_type())
                 .unwrap()
+                .unwrap()
                 .extract::<usize>()
                 .unwrap();
 
@@ -1705,7 +1704,7 @@ impl Call for MyCall<'_> {
         })
     }
 
-    fn pop_iter_next(&mut self, _ty: List) {
+    fn pop_list_iter_next(&mut self, _ty: List) {
         Python::attach(|py| {
             let index = *self.iter_stack.last().unwrap();
             let element = self
@@ -1721,7 +1720,40 @@ impl Call for MyCall<'_> {
         })
     }
 
-    fn pop_iter(&mut self, _ty: List) {
+    fn pop_list_iter(&mut self, _ty: List) {
+        self.iter_stack.pop().unwrap();
+        Python::attach(|py| {
+            self.stack.pop().unwrap().drop_ref(py);
+        })
+    }
+
+    fn pop_map(&mut self, _ty: Map) -> usize {
+        Python::attach(|py| {
+            self.iter_stack.push(0);
+            let value = self.stack.pop().unwrap();
+            let value = value.cast_bound::<PyDict>(py).unwrap();
+            let length = value.len();
+            self.stack.push(value.items().into_any().unbind());
+            length
+        })
+    }
+
+    fn pop_map_iter_next(&mut self, _ty: Map) {
+        Python::attach(|py| {
+            let index = *self.iter_stack.last().unwrap();
+            let items = self.stack.last().unwrap();
+            let items = items.cast_bound::<PyList>(py).unwrap();
+            let element = items.get_item(index).unwrap();
+            let element = element.cast::<PyTuple>().unwrap();
+            *self.iter_stack.last_mut().unwrap() = index + 1;
+            self.stack
+                .push(element.get_item(1).unwrap().into_any().unbind());
+            self.stack
+                .push(element.get_item(0).unwrap().into_any().unbind());
+        })
+    }
+
+    fn pop_map_iter(&mut self, _ty: Map) {
         self.iter_stack.pop().unwrap();
         Python::attach(|py| {
             self.stack.pop().unwrap().drop_ref(py);
@@ -2073,6 +2105,26 @@ impl Call for MyCall<'_> {
                 .cast_bound::<PyList>(py)
                 .unwrap()
                 .append(element)
+                .unwrap()
+        });
+    }
+
+    fn push_map(&mut self, _ty: Map, _capacity: usize) {
+        self.stack.push(Python::attach(|py| {
+            PyDict::new(py).to_owned().into_any().unbind()
+        }));
+    }
+
+    fn map_append(&mut self, _ty: Map) {
+        Python::attach(|py| {
+            let value = self.stack.pop().unwrap();
+            let key = self.stack.pop().unwrap();
+            self.stack
+                .last()
+                .unwrap()
+                .cast_bound::<PyDict>(py)
+                .unwrap()
+                .set_item(key, value)
                 .unwrap()
         });
     }
