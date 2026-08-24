@@ -6,12 +6,12 @@ use {
         },
         util::Types as _,
     },
-    anyhow::{bail, Result},
+    anyhow::{Result, bail},
     heck::{ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase},
     indexmap::{IndexMap, IndexSet},
     semver::Version,
     std::{
-        collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap, HashSet},
+        collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::Entry},
         fmt::Write as _,
         fs::{self, File},
         io::Write as _,
@@ -39,11 +39,7 @@ pub enum Naming {
 
 impl Naming {
     pub fn from_full(full: bool) -> Self {
-        if full {
-            Self::Full
-        } else {
-            Self::Short
-        }
+        if full { Self::Full } else { Self::Short }
     }
 }
 
@@ -1205,13 +1201,14 @@ impl<'a> Summary<'a> {
                 unreachable!()
             };
 
-            assert!(tree
-                .entry(info.name)
-                .or_default()
-                .entry(info.package.map(|p| (p.namespace, p.name)))
-                .or_default()
-                .insert(info.package.and_then(|p| p.version), (id, info.naming))
-                .is_none());
+            assert!(
+                tree.entry(info.name)
+                    .or_default()
+                    .entry(info.package.map(|p| (p.namespace, p.name)))
+                    .or_default()
+                    .insert(info.package.and_then(|p| p.version), (id, info.naming))
+                    .is_none()
+            );
         }
 
         let mut names = HashMap::new();
@@ -1219,49 +1216,54 @@ impl<'a> Summary<'a> {
             for (package, versions) in packages {
                 if let Some((package_namespace, package_name)) = package {
                     for (version, &(id, naming)) in versions {
-                        assert!(names
-                            .insert(
-                                id,
-                                if let Some(version) = version {
-                                    if let Some(name) = interface_names.get(
-                                        format!(
-                                            "{package_namespace}:{package_name}\
+                        assert!(
+                            names
+                                .insert(
+                                    id,
+                                    if let Some(version) = version {
+                                        if let Some(name) = interface_names.get(
+                                            format!(
+                                                "{package_namespace}:{package_name}\
                                                  /{name}@{version}"
-                                        )
-                                        .as_str(),
+                                            )
+                                            .as_str(),
+                                        ) {
+                                            (*name).to_owned()
+                                        } else if versions.len() == 1 && naming == Naming::Short {
+                                            if packages.len() == 1 {
+                                                (*name).to_owned()
+                                            } else {
+                                                format!("{package_namespace}-{package_name}-{name}")
+                                            }
+                                        } else {
+                                            format!(
+                                                "{package_namespace}-{package_name}-{name}-{}",
+                                                version.to_string().replace('.', "-")
+                                            )
+                                        }
+                                    } else if let Some(name) = interface_names.get(
+                                        format!("{package_namespace}:{package_name}/{name}")
+                                            .as_str()
                                     ) {
                                         (*name).to_owned()
-                                    } else if versions.len() == 1 && naming == Naming::Short {
-                                        if packages.len() == 1 {
-                                            (*name).to_owned()
-                                        } else {
-                                            format!("{package_namespace}-{package_name}-{name}")
-                                        }
+                                    } else if packages.len() == 1 && naming == Naming::Short {
+                                        (*name).to_owned()
                                     } else {
-                                        format!(
-                                            "{package_namespace}-{package_name}-{name}-{}",
-                                            version.to_string().replace('.', "-")
-                                        )
+                                        format!("{package_namespace}-{package_name}-{name}",)
                                     }
-                                } else if let Some(name) = interface_names.get(
-                                    format!("{package_namespace}:{package_name}/{name}").as_str()
-                                ) {
-                                    (*name).to_owned()
-                                } else if packages.len() == 1 && naming == Naming::Short {
-                                    (*name).to_owned()
-                                } else {
-                                    format!("{package_namespace}-{package_name}-{name}",)
-                                }
-                            )
-                            .is_none());
+                                )
+                                .is_none()
+                        );
                     }
                 } else {
-                    assert!(names
-                        .insert(
-                            versions.get(&None).unwrap().0,
-                            (*interface_names.get(*name).unwrap_or(name)).to_owned()
-                        )
-                        .is_none());
+                    assert!(
+                        names
+                            .insert(
+                                versions.get(&None).unwrap().0,
+                                (*interface_names.get(*name).unwrap_or(name)).to_owned()
+                            )
+                            .is_none()
+                    );
                 }
             }
         }

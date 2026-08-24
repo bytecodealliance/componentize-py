@@ -1,10 +1,10 @@
 #![allow(non_local_definitions)]
 
 use {
-    super::{Ctx, Tester, SEED},
-    anyhow::{anyhow, Result},
+    super::{Ctx, SEED, Tester},
+    anyhow::{Result, anyhow},
     exports::componentize_py::test::streams_and_futures,
-    futures::{channel::oneshot, stream::FuturesUnordered, FutureExt, TryStreamExt},
+    futures::{FutureExt, TryStreamExt, channel::oneshot, stream::FuturesUnordered},
     once_cell::sync::Lazy,
     std::{
         collections::BTreeMap,
@@ -17,12 +17,12 @@ use {
         time::Duration,
     },
     wasmtime::{
+        Store, StoreContextMut,
         component::{
             Accessor, Destination, FutureConsumer, FutureProducer, FutureReader, HasSelf,
             InstancePre, Lift, Linker, Resource, ResourceAny, Source, StreamConsumer,
             StreamProducer, StreamReader, StreamResult, VecBuffer,
         },
-        Store, StoreContextMut,
     },
     wasmtime_wasi::{FsPerms, WasiCtxBuilder, WasiView},
 };

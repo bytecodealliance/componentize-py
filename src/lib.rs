@@ -683,11 +683,7 @@ impl ComponentGenerator<'_> {
                 "python",
                 FsPerms::ReadWrite,
             )?
-            .preopened_dir(
-                embedded_helper_utils.path(),
-                "bundled",
-                FsPerms::ReadWrite,
-            )?;
+            .preopened_dir(embedded_helper_utils.path(), "bundled", FsPerms::ReadWrite)?;
 
         // Generate guest mounts for each host directory in `python_path`.
         for (index, path) in python_path.iter().enumerate() {

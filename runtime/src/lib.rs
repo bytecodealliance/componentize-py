@@ -20,6 +20,7 @@ use {
     num_bigint::BigUint,
     once_cell::sync::OnceCell,
     pyo3::{
+        Bound, IntoPyObject, Py, PyAny, PyErr, PyResult, Python,
         exceptions::PyAssertionError,
         intern,
         types::{
@@ -27,7 +28,6 @@ use {
             PyListMethods, PyMapping, PyMappingMethods, PyModule, PyModuleMethods, PyString,
             PyTuple,
         },
-        Bound, IntoPyObject, Py, PyAny, PyErr, PyResult, Python,
     },
     std::{
         alloc::{self, Layout},
@@ -817,10 +817,10 @@ mod async_ {
 
                 ty.write()(handle, buffer.cast())
             };
-            let resources =
-                call.resources
-                    .take()
-                    .and_then(|v| if v.is_empty() { None } else { Some(v) });
+            let resources = call
+                .resources
+                .take()
+                .and_then(|v| if v.is_empty() { None } else { Some(v) });
 
             Ok(if code == RETURN_CODE_BLOCKED {
                 ERR_CONSTRUCTOR

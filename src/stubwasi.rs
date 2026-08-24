@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::{bail, Error};
+use anyhow::{Error, bail};
 use wasm_encoder::{
     CodeSection, ExportKind, ExportSection, Function, FunctionSection, Instruction as Ins, Module,
     TypeSection,
