@@ -808,9 +808,11 @@ fn strip(input: &[u8]) -> anyhow::Result<Vec<u8>> {
         }
 
         if let Some((id, range)) = payload.as_section() {
+            let start = usize::try_from(range.start).unwrap();
+            let end = usize::try_from(range.end).unwrap();
             RawSection {
                 id,
-                data: &input[range.start as usize..range.end as usize],
+                data: &input[start..end],
             }
             .append_to(&mut output);
         }
