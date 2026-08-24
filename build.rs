@@ -1,7 +1,7 @@
 #![deny(warnings)]
 
 use {
-    anyhow::{Context, Result, anyhow, bail},
+    anyhow::{anyhow, bail, Context, Result},
     std::{
         env,
         fmt::Write as _,
@@ -810,7 +810,7 @@ fn strip(input: &[u8]) -> anyhow::Result<Vec<u8>> {
         if let Some((id, range)) = payload.as_section() {
             RawSection {
                 id,
-                data: &input[range],
+                data: &input[range.start as usize..range.end as usize],
             }
             .append_to(&mut output);
         }

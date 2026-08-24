@@ -1,10 +1,10 @@
 #![allow(non_local_definitions)]
 
 use {
-    super::{Ctx, SEED, Tester},
-    anyhow::{Result, anyhow},
+    super::{Ctx, Tester, SEED},
+    anyhow::{anyhow, Result},
     exports::componentize_py::test::streams_and_futures,
-    futures::{FutureExt, TryStreamExt, channel::oneshot, stream::FuturesUnordered},
+    futures::{channel::oneshot, stream::FuturesUnordered, FutureExt, TryStreamExt},
     once_cell::sync::Lazy,
     std::{
         collections::BTreeMap,
@@ -17,14 +17,14 @@ use {
         time::Duration,
     },
     wasmtime::{
-        Store, StoreContextMut,
         component::{
             Accessor, Destination, FutureConsumer, FutureProducer, FutureReader, HasSelf,
             InstancePre, Lift, Linker, Resource, ResourceAny, Source, StreamConsumer,
             StreamProducer, StreamReader, StreamResult, VecBuffer,
         },
+        Store, StoreContextMut,
     },
-    wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder, WasiView},
+    wasmtime_wasi::{FsPerms, WasiCtxBuilder, WasiView},
 };
 
 wasmtime::component::bindgen!({
@@ -972,7 +972,7 @@ fn filesystem() -> Result<()> {
     let wasi = WasiCtxBuilder::new()
         .inherit_stdout()
         .inherit_stderr()
-        .preopened_dir(dir.path(), "/", DirPerms::all(), FilePerms::all())?
+        .preopened_dir(dir.path(), "/", FsPerms::ReadWrite)?
         .build();
 
     TESTER.test_with_wasi::<Host>(wasi, |world, store, runtime| {

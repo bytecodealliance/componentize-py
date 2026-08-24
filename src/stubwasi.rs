@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::{Error, bail};
+use anyhow::{bail, Error};
 use wasm_encoder::{
     CodeSection, ExportKind, ExportSection, Function, FunctionSection, Instruction as Ins, Module,
     TypeSection,
@@ -13,9 +13,8 @@ type LinkedStubModules = Option<(Vec<u8>, Box<dyn Fn(u32) -> u32>)>;
 
 pub fn link_stub_modules(libraries: Vec<Library>) -> Result<LinkedStubModules, Error> {
     let mut wasi_imports = HashMap::new();
-    let mut linker = wit_component::Linker::default()
-        .validate(true)
-        .use_built_in_libdl(true);
+    let mut linker = wit_component::Linker::default();
+    linker.use_built_in_libdl(true).encoder().validate(true);
 
     for Library {
         name,
@@ -24,11 +23,13 @@ pub fn link_stub_modules(libraries: Vec<Library>) -> Result<LinkedStubModules, E
     } in &libraries
     {
         add_wasi_imports(module, &mut wasi_imports)?;
-        linker = linker.library(name, module, *dl_openable)?;
+        linker.library(name, module, *dl_openable)?;
     }
 
     for (module, imports) in &wasi_imports {
-        linker = linker.adapter(module, &make_stub_adapter(module, imports))?;
+        linker
+            .encoder()
+            .adapter(module, &make_stub_adapter(module, imports))?;
     }
 
     let component = linker.encode()?;
