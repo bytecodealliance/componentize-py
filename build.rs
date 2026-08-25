@@ -20,7 +20,7 @@ use {
 const DEBUG_RUNTIME: bool = false;
 const STRIP_RUNTIME: bool = !DEBUG_RUNTIME;
 const ZSTD_COMPRESSION_LEVEL: i32 = if DEBUG_RUNTIME { 0 } else { 19 };
-const DEFAULT_SDK_VERSION: &str = "33";
+const DEFAULT_SDK_VERSION: &str = "34";
 
 // SQLite version to build - 3.51.2 (latest as of Jan 2026)
 const SQLITE_VERSION: &str = "3510200";
