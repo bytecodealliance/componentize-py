@@ -203,6 +203,12 @@ world example {
 
   /// docs containing both """ and '''
   export both: func() -> string;
+
+  /// docs containing both """" and '''
+  export four: func() -> string;
+
+  /// docs containing both \""" and '''
+  export backslash: func() -> string;
 }
 "#,
     )?;
@@ -241,6 +247,16 @@ if not any('"""' in doc for doc in hello_docs):
 both_docs = docs_by_name.get("both", [])
 if not any(("'''" in doc and '"""' in doc) for doc in both_docs):
     sys.stderr.write("both docstring lost quote sequences: %r\n" % both_docs)
+    sys.exit(1)
+
+four_docs = docs_by_name.get("four", [])
+if not any(("'''" in doc and '""""' in doc) for doc in four_docs):
+    sys.stderr.write("four docstring lost quote sequences: %r\n" % four_docs)
+    sys.exit(1)
+
+backslash_docs = docs_by_name.get("backslash", [])
+if not any(("'''" in doc and '\\"""' in doc) for doc in backslash_docs):
+    sys.stderr.write("backslash docstring lost quote sequences: %r\n" % backslash_docs)
     sys.exit(1)
 "#,
         ])

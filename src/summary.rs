@@ -2662,10 +2662,10 @@ fn docstring(docs: Option<&str>, indent_level: usize, error: Option<&str>) -> St
             .collect::<Vec<_>>()
             .concat();
         // WIT docs may contain `"""` and/or `'''`.  Use a delimiter that does
-        // not appear in the text; if both do, escape `"""` so a `"""` wrapper
-        // remains valid Python.
+        // not appear in the text; if both do, escape `\` then every `"` so a
+        // `"""` wrapper remains valid Python.
         let (quote, docs) = match (docs.contains(r#"""""#), docs.contains("'''")) {
-            (true, true) => (r#"""""#, docs.replace(r#"""""#, r#"\""""#)),
+            (true, true) => (r#"""""#, docs.replace('\\', "\\\\").replace('"', "\\\"")),
             (true, false) => ("'''", docs),
             _ => (r#"""""#, docs),
         };
