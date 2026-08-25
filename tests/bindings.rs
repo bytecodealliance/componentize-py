@@ -190,6 +190,66 @@ fn lint_tcp_p3_bindings() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn docstring_triple_quotes_are_valid_python() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    fs::write(
+        dir.path().join("example.wit"),
+        r#"package demo:poc;
+
+world example {
+  /// """
+  export hello: func(name: string) -> string;
+
+  /// docs containing both """ and '''
+  export both: func() -> string;
+}
+"#,
+    )?;
+
+    cargo::cargo_bin_cmd!("componentize-py")
+        .current_dir(dir.path())
+        .args(["-d", "example.wit", "-w", "example", "bindings", "."])
+        .assert()
+        .success();
+
+    assert!(predicate::path::is_dir().eval(&dir.path().join("wit_world")));
+
+    Command::new("python3")
+        .current_dir(dir.path())
+        .args([
+            "-c",
+            r#"
+import ast
+import sys
+from pathlib import Path
+
+docs_by_name = {}
+for path in Path(".").rglob("*.py"):
+    tree = ast.parse(path.read_text(), filename=str(path))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            doc = ast.get_docstring(node)
+            if doc:
+                docs_by_name.setdefault(node.name, []).append(doc)
+
+hello_docs = docs_by_name.get("hello", [])
+if not any('"""' in doc for doc in hello_docs):
+    sys.stderr.write("hello docstring lost triple double quotes: %r\n" % hello_docs)
+    sys.exit(1)
+
+both_docs = docs_by_name.get("both", [])
+if not any(("'''" in doc and '"""' in doc) for doc in both_docs):
+    sys.stderr.write("both docstring lost quote sequences: %r\n" % both_docs)
+    sys.exit(1)
+"#,
+        ])
+        .assert()
+        .success();
+
+    Ok(())
+}
+
 fn generate_bindings(path: &Path, world: &str) -> Result<Assert, anyhow::Error> {
     Ok(cargo::cargo_bin_cmd!("componentize-py")
         .current_dir(path)

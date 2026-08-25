@@ -2661,12 +2661,20 @@ fn docstring(docs: Option<&str>, indent_level: usize, error: Option<&str>) -> St
             .map(|_| "    ")
             .collect::<Vec<_>>()
             .concat();
+        // WIT docs may contain `"""` and/or `'''`.  Use a delimiter that does
+        // not appear in the text; if both do, escape `"""` so a `"""` wrapper
+        // remains valid Python.
+        let (quote, docs) = match (docs.contains(r#"""""#), docs.contains("'''")) {
+            (true, true) => (r#"""""#, docs.replace(r#"""""#, r#"\""""#)),
+            (true, false) => ("'''", docs),
+            _ => (r#"""""#, docs),
+        };
         let docs = docs
             .lines()
             .map(|line| format!("{indent}{line}\n"))
             .collect::<Vec<_>>()
             .concat();
-        format!(r#""""{newline}{docs}{indent}"""{newline}{indent}"#)
+        format!("{quote}{newline}{docs}{indent}{quote}{newline}{indent}")
     } else {
         String::new()
     }
