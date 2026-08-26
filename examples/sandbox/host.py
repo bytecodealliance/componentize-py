@@ -1,6 +1,5 @@
-from sandbox import Root
-from sandbox.types import Ok, Err
 from wasmtime import Config, Engine, Store
+from wasmtime.component import Component, Linker
 import json
 import sys
 from threading import Timer
@@ -31,19 +30,24 @@ try:
     store.set_epoch_deadline(1)
     store.set_limits(memory_size=MEMORY_LIMIT_BYTES)
 
-    sandbox = Root(store)
+    component = Component.from_file(engine, "sandbox.wasm")
+    linker = Linker(engine)
+    instance = linker.instantiate(store, component)
+    sandbox_exec = instance.get_func(store, "exec")
+    sandbox_eval = instance.get_func(store, "eval")
+
     for arg in args[:-1]:
-        result = sandbox.exec(store, arg)
-        if isinstance(result, Err):
-            print(f"exec error: {result.value}")
+        result = sandbox_exec(store, arg)
+        if isinstance(result, str):
+            print(f"exec error: {result}")
             exit(-1)
 
-    result = sandbox.eval(store, args[-1])
-    if isinstance(result, Ok):
-        result = json.loads(result.value)
+    result = sandbox_eval(store, args[-1])
+    if result.tag == "ok":
+        result = json.loads(result.payload)
         print(f"result: {result}")
     else:
-        print(f"eval error: {result.value}")
+        print(f"eval error: {result.payload}")
 
 finally:
     timer.cancel()

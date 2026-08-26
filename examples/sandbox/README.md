@@ -7,22 +7,17 @@ sandboxed Python code snippets from within a Python app.
 
 ## Prerequisites
 
-Note that we must use `wasmtime-py` version 38.0.0 specifically because later
-versions have a different API for working with components, and this example has
-not yet been updated to use it.
-
-* `wasmtime-py` 38.0.0
+* `wasmtime-py` 48.0.0
 * `componentize-py` 0.25.0
 
 ```
-pip install componentize-py==0.25.0 wasmtime==38.0.0
+pip install componentize-py==0.25.0 wasmtime==48.0.0
 ```
 
 ## Running the demo
 
 ```
 componentize-py -d sandbox.wit componentize --stub-wasi guest -o sandbox.wasm
-python3 -m wasmtime.bindgen sandbox.wasm --out-dir sandbox
 python3 host.py "2 + 2"
 ```
 
@@ -51,8 +46,8 @@ timeout is reached, `wasmtime` will raise a `Trap` error.
  $ python3 host.py 'while True: pass' '1'
 timeout!
 Traceback (most recent call last):
-  File "/Users/dicej/p/componentize-py/examples/sandbox/host.py", line 36, in <module>
-    result = sandbox.exec(store, arg)
+  File "/home/dicej/p/componentize-py/examples/sandbox/host.py", line 40, in <module>
+    result = sandbox_exec(store, arg)
              ^^^^^^^^^^^^^^^^^^^^^^^^
 ...
 ```

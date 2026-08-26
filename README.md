@@ -59,34 +59,28 @@ And finally generate the component:
 componentize-py -d hello.wit -w hello componentize --stub-wasi app -o app.wasm
 ```
 
-To test it, you can install `wasmtime-py` and use it to generate host-side
-bindings for the component:
-
-> [!NOTE]
-> Due to compatibility issues with `wasmtime-py` versions beyond 38.x, **this example** requires version 38.0.0 or earlier: `pip install "wasmtime==38.0.0"`
+To test it, you can install `wasmtime-py` and write a simple host app which uses
+it to load and run our component:
 
 ```shell
-pip install wasmtime==38.0.0
-python3 -m wasmtime.bindgen app.wasm --out-dir hello_host
-```
-
-Now we can write a simple host app using those bindings:
-
-```shell
+pip install wasmtime==48.0.0
 cat >host.py <<EOF
-from hello_host import Root
 from wasmtime import Config, Engine, Store
+from wasmtime.component import Component, Linker
 
 config = Config()
 config.cache = True
 engine = Engine(config)
 store = Store(engine)
-hello = Root(store)
-print(f"component says: {hello.hello(store)}")
+component = Component.from_file(engine, "app.wasm")
+linker = Linker(engine)
+instance = linker.instantiate(store, component)
+hello = instance.get_func(store, "hello")
+print(f"component says: {hello(store)}")
 EOF
 ```
 
-And finally run it:
+And then run it:
 
 ```shell
  $ python3 host.py
