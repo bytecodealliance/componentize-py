@@ -308,6 +308,10 @@ impl<'a> Summary<'a> {
                     TypeDefKind::List(ty) => {
                         self.visit_type(*ty, world);
                     }
+                    TypeDefKind::Map(k, v) => {
+                        self.visit_type(*k, world);
+                        self.visit_type(*v, world);
+                    }
                     TypeDefKind::Type(ty) => {
                         // When visiting a type alias, we must use the state
                         // already stored for any `use`d resources rather than
@@ -1127,6 +1131,10 @@ impl<'a> Summary<'a> {
                     TypeDefKind::List(ty) => {
                         self.sort(*ty, sorted, visited);
                     }
+                    TypeDefKind::Map(k, v) => {
+                        self.sort(*k, sorted, visited);
+                        self.sort(*v, sorted, visited);
+                    }
                     TypeDefKind::Type(ty) => {
                         self.sort(*ty, sorted, visited);
                     }
@@ -1759,6 +1767,7 @@ class {camel}(Protocol):
                     }
                     TypeDefKind::Tuple(_)
                     | TypeDefKind::List(_)
+                    | TypeDefKind::Map(_, _)
                     | TypeDefKind::Option(_)
                     | TypeDefKind::Result(_)
                     | TypeDefKind::Handle(_) => (None, Vec::new()),
@@ -2089,7 +2098,7 @@ def {snake}_future(default: Callable[[], {camel}]) -> tuple[FutureWriter[{camel}
         }
 
         let python_imports =
-            "from typing import TypeVar, Generic, Union, Optional, Protocol, Tuple, List, Any, Self, Callable
+            "from typing import TypeVar, Generic, Union, Optional, Protocol, Tuple, List, Mapping, Any, Self, Callable
 from types import TracebackType
 from enum import Flag, Enum, auto
 from dataclasses import dataclass
@@ -2356,6 +2365,10 @@ from componentize_py_types import Result, Ok, Err, Some
                 TypeDefKind::Option(ty) | TypeDefKind::List(ty) | TypeDefKind::Type(ty) => {
                     self.has_imported_and_exported_resource(*ty)
                 }
+                TypeDefKind::Map(k, v) => {
+                    self.has_imported_and_exported_resource(*k)
+                        || self.has_imported_and_exported_resource(*v)
+                }
                 TypeDefKind::Resource => {
                     let empty = &ResourceInfo::default();
                     let info = self.resource_info.get(&id).unwrap_or(empty);
@@ -2465,6 +2478,13 @@ impl<'a> TypeNames<'a> {
                             format!("List[{}]", self.type_name(*ty, seen, resource))
                         }
                     }
+                    TypeDefKind::Map(k, v) => {
+                        format!(
+                            "Mapping[{}, {}]",
+                            self.type_name(*k, seen, resource),
+                            self.type_name(*v, seen, resource)
+                        )
+                    }
                     TypeDefKind::Tuple(tuple) => {
                         let types = tuple
                             .types
@@ -2564,6 +2584,9 @@ impl<'a> TypeNames<'a> {
                     ),
                     TypeDefKind::List(ty) => {
                         format!("list_{}", self.mangle_name(*ty))
+                    }
+                    TypeDefKind::Map(k, v) => {
+                        format!("map_{}_{}", self.mangle_name(*k), self.mangle_name(*v))
                     }
                     TypeDefKind::Tuple(tuple) => {
                         let types = tuple

@@ -3,6 +3,7 @@ use {
     anyhow::Result,
     once_cell::sync::Lazy,
     proptest::strategy::{Just, Strategy},
+    std::collections::HashMap,
     wasmtime::{
         Store,
         component::{HasSelf, InstancePre, Linker},
@@ -133,6 +134,13 @@ impl componentize_py::test::echoes::Host for Ctx {
         &mut self,
         v: Vec<Vec<Vec<u8>>>,
     ) -> wasmtime::Result<Vec<Vec<Vec<u8>>>> {
+        Ok(v)
+    }
+
+    async fn echo_map_u32_string(
+        &mut self,
+        v: HashMap<u32, String>,
+    ) -> wasmtime::Result<HashMap<u32, String>> {
         Ok(v)
     }
 
@@ -306,6 +314,9 @@ class Echoes(exports.Echoes):
 
     def echo_list_list_list_u8(self, v):
         return echoes.echo_list_list_list_u8(v)
+
+    def echo_map_u32_string(self, v):
+        return echoes.echo_map_u32_string(v)
 
     def echo_option_u8(self, v):
         return echoes.echo_option_u8(v)
@@ -738,6 +749,27 @@ fn list_f64s() -> Result<()> {
                 .into_iter()
                 .map(MyF64)
                 .collect())
+        },
+    )
+}
+
+#[test]
+fn map_u32_strings() -> Result<()> {
+    TESTER.all_eq(
+        &proptest::collection::hash_map(
+            proptest::num::u32::ANY,
+            &proptest::string::string_regex(".*")?,
+            0..MAX_SIZE,
+        ),
+        |v, instance, store, runtime| {
+            Ok(runtime.block_on(
+                instance
+                    .componentize_py_test_echoes()
+                    .call_echo_map_u32_string(
+                        store,
+                        v.iter().map(|(k, v)| (*k, v.as_str())).collect(),
+                    ),
+            )?)
         },
     )
 }
