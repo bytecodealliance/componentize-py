@@ -214,19 +214,7 @@ fn sandbox_example() -> anyhow::Result<()> {
 
     Command::new(venv_path(&path).join("pip"))
         .current_dir(&path)
-        .args(["install", "wasmtime==38.0.0"])
-        .assert()
-        .success();
-
-    Command::new(venv_path(&path).join("python"))
-        .current_dir(&path)
-        .args([
-            "-m",
-            "wasmtime.bindgen",
-            "sandbox.wasm",
-            "--out-dir",
-            "sandbox",
-        ])
+        .args(["install", "wasmtime==48.0.0"])
         .assert()
         .success();
 
