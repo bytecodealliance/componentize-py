@@ -552,9 +552,8 @@ mod tests {
             r#"
 import bindings
 from bindings import x
-from bindings.export import world_exports
 
-@world_exports
+@bindings.guest
 class Bindings(bindings.WorldExports):
     def y(self) -> None:
         x()
@@ -600,18 +599,17 @@ world cli-world {
             &app_file,
             br#"
 import cli_world
-from cli_world.export import world_exports
-from cli_world.export.test import cli as export
 from cli_world.exports.test import cli as exports
+from cli_world.exports.test.cli import cli_interface as cli_iface
 from cli_world.imports.test.cli import cli_interface
 from lib.wit.imports.test.lib import lib_interface
 
-@world_exports
+@cli_world.guest
 class CliWorld(cli_world.WorldExports):
     def foo(self) -> None:
         pass
 
-@export.cli_interface
+@cli_iface.guest
 class CliInterface(exports.CliInterface):
     def foo(self) -> None:
         lib_interface.foo()

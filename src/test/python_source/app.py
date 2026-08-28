@@ -1,6 +1,9 @@
 import traceback
 import tests
 import resource_borrow_export
+import resource_import_and_export
+import resource_with_lists
+import resource_floats_exports
 import resource_aggregates
 import resource_alias1
 import resource_borrow_in_record
@@ -8,46 +11,61 @@ import componentize_py_async_support
 import streams_and_futures as my_streams_and_futures
 
 from componentize_py_types import Result, Ok, Err
-from tests import exports, imports
-from tests.imports import resource_borrow_import
-from tests.imports import simple_import_and_export
-from tests.imports import simple_async_import_and_export
-from tests.imports import host_thing_interface
-from tests.exports import resource_alias2
-from tests.exports import streams_and_futures
+from tests.exports.componentize_py import test as exports
+from tests.imports.componentize_py import test as imports
+from tests.imports.componentize_py.test import resource_borrow_import
+from tests.imports.componentize_py.test import simple_import_and_export
+from tests.imports.componentize_py.test import simple_async_import_and_export
+from tests.imports.componentize_py.test import host_thing_interface
+from tests.exports.componentize_py.test import resource_alias2
+from tests.exports.componentize_py.test import streams_and_futures
 from typing import Tuple, List, Optional
-from foo_sdk.wit import exports as foo_exports
-from foo_sdk.wit.imports.foo_interface import test as foo_test
-from bar_sdk.wit import exports as bar_exports
-from bar_sdk.wit.imports.foo_interface import test as bar_test
+from foo_sdk.wit.exports.foo import sdk as foo_exports
+from foo_sdk.wit.exports.foo.sdk import foo_interface as foo_iface
+from foo_sdk.wit.imports.foo.sdk.foo_interface import test as foo_test
+from bar_sdk.wit.exports.bar import sdk as bar_exports
+from bar_sdk.wit.exports.bar.sdk import bar_interface as bar_iface
+from bar_sdk.wit.imports.foo.sdk.foo_interface import test as bar_test
 
+@exports.simple_export.guest
 class SimpleExport(exports.SimpleExport):
     def foo(self, v: int) -> int:
         return v + 3
 
+@exports.simple_import_and_export.guest
 class SimpleImportAndExport(exports.SimpleImportAndExport):
     def foo(self, v: int) -> int:
         return simple_import_and_export.foo(v) + 3
 
+@exports.simple_async_export.guest
 class SimpleAsyncExport(exports.SimpleAsyncExport):
     async def foo(self, v: int) -> int:
         return v + 3
 
+@exports.simple_async_import_and_export.guest
 class SimpleAsyncImportAndExport(exports.SimpleAsyncImportAndExport):
     async def foo(self, v: int) -> int:
         return (await simple_async_import_and_export.foo(v)) + 3
 
+@exports.resource_import_and_export.guest
 class ResourceImportAndExport(exports.ResourceImportAndExport):
-    pass
+    thing = resource_import_and_export.Thing
 
+@exports.resource_borrow_export.guest
 class ResourceBorrowExport(exports.ResourceBorrowExport):
+    thing = resource_borrow_export.Thing
+
     def foo(self, v: resource_borrow_export.Thing) -> int:
         return v.value + 2
 
+@exports.resource_with_lists.guest
 class ResourceWithLists(exports.ResourceWithLists):
-    pass
+    thing = resource_with_lists.Thing
 
+@exports.resource_aggregates.guest
 class ResourceAggregates(exports.ResourceAggregates):
+    thing = resource_aggregates.Thing
+
     def foo(
         self,
         r1: exports.resource_aggregates.R1,
@@ -100,7 +118,10 @@ class ResourceAggregates(exports.ResourceAggregates):
             host_result2
         ) + 4
 
+@exports.resource_alias1.guest
 class ResourceAlias1(exports.ResourceAlias1):
+    thing = resource_alias1.Thing
+
     def a(self, f: exports.resource_alias1.Foo) -> List[resource_alias1.Thing]:
         return list(
             map(
@@ -109,6 +130,7 @@ class ResourceAlias1(exports.ResourceAlias1):
             )
         )
 
+@exports.resource_alias2.guest
 class ResourceAlias2(exports.ResourceAlias2):
     def b(self, f: exports.resource_alias2.Foo, g: exports.resource_alias1.Foo) -> List[resource_alias1.Thing]:
         return list(
@@ -121,7 +143,10 @@ class ResourceAlias2(exports.ResourceAlias2):
             )
         )
 
+@exports.resource_borrow_in_record.guest
 class ResourceBorrowInRecord(exports.ResourceBorrowInRecord):
+    thing = resource_borrow_in_record.Thing
+
     def test(self, a: List[exports.resource_borrow_in_record.Foo]) -> List[resource_borrow_in_record.Thing]:
         return list(
             map(
@@ -186,7 +211,10 @@ async def write_host_thing(thing: host_thing_interface.HostThing,
 def unreachable() -> str:
     raise AssertionError
         
+@exports.streams_and_futures.guest
 class StreamsAndFutures(exports.StreamsAndFutures):
+    thing = my_streams_and_futures.Thing
+
     async def echo_stream_u8(self, stream: ByteStreamReader) -> ByteStreamReader:
         tx, rx = tests.byte_stream()
         componentize_py_async_support.spawn(pipe_bytes(stream, tx))
@@ -198,28 +226,29 @@ class StreamsAndFutures(exports.StreamsAndFutures):
         return rx
 
     async def short_reads(self, stream: StreamReader[streams_and_futures.Thing]) -> StreamReader[streams_and_futures.Thing]:
-        tx, rx = tests.streams_and_futures_thing_stream()
+        tx, rx = tests.componentize_py_test_streams_and_futures_thing_stream()
         componentize_py_async_support.spawn(pipe_things(stream, tx))
         return rx
 
     async def short_reads_host(self, stream: StreamReader[host_thing_interface.HostThing]) -> StreamReader[host_thing_interface.HostThing]:
-        tx, rx = tests.host_thing_interface_host_thing_stream()
+        tx, rx = tests.componentize_py_test_host_thing_interface_host_thing_stream()
         componentize_py_async_support.spawn(pipe_host_things(stream, tx))
         return rx
 
     async def dropped_future_reader(self, value: str) -> tuple[FutureReader[streams_and_futures.Thing], FutureReader[streams_and_futures.Thing]]:
-        tx1, rx1 = tests.streams_and_futures_thing_future(unreachable)
-        tx2, rx2 = tests.streams_and_futures_thing_future(unreachable)
+        tx1, rx1 = tests.componentize_py_test_streams_and_futures_thing_future(unreachable)
+        tx2, rx2 = tests.componentize_py_test_streams_and_futures_thing_future(unreachable)
         componentize_py_async_support.spawn(write_thing(my_streams_and_futures.Thing(value), tx1, tx2))
         return (rx1, rx2)
 
     async def dropped_future_reader_host(self, value: str) -> tuple[FutureReader[host_thing_interface.HostThing], FutureReader[host_thing_interface.HostThing]]:
-        tx1, rx1 = tests.host_thing_interface_host_thing_future(unreachable)
-        tx2, rx2 = tests.host_thing_interface_host_thing_future(unreachable)
+        tx1, rx1 = tests.componentize_py_test_host_thing_interface_host_thing_future(unreachable)
+        tx2, rx2 = tests.componentize_py_test_host_thing_interface_host_thing_future(unreachable)
         componentize_py_async_support.spawn(write_host_thing(host_thing_interface.HostThing(value), tx1, tx2))
         return (rx1, rx2)
 
-class Tests(tests.Tests):
+@tests.guest
+class Tests(tests.WorldExports):
     def test_resource_borrow_import(self, v: int) -> int:
         return resource_borrow_import.foo(resource_borrow_import.Thing(v + 1)) + 4
 
@@ -242,10 +271,12 @@ class Tests(tests.Tests):
         for _ in range(5 * 1024):
             chunk = tests.get_bytes(1024 * 1024)
    
+@foo_iface.guest
 class FooInterface(foo_exports.FooInterface):
     def test(self, s: str) -> str:
         return foo_test(f"{s} FooInterface.test")
 
-class BarSdkBarInterface(bar_exports.BarSdkBarInterface):
+@bar_iface.guest
+class BarInterface(bar_exports.BarInterface):
     def test(self, s: str) -> str:
         return bar_test(f"{s} BarInterface.test")

@@ -1,5 +1,5 @@
-from tests.exports import resource_alias1
-from tests.imports.resource_alias1 import Thing as HostThing
+from tests.exports.componentize_py.test import resource_alias1
+from tests.imports.componentize_py.test.resource_alias1 import Thing as HostThing
 
 class Thing(resource_alias1.Thing):
     def __init__(self, v: str):

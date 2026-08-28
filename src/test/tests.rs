@@ -896,19 +896,21 @@ fn multiworld_intersect() -> Result<()> {
         &[(
             "app.py",
             r#"
-from foo_sdk.wit import exports as foo_exports
-from foo_sdk.wit.imports.foo_interface2 import test as foo_test2
+from foo_sdk.wit.exports.foo import sdk as foo_exports
+from foo_sdk.wit.exports.foo.sdk import foo_interface as foo_iface
+from foo_sdk.wit.imports.foo.sdk.foo_interface2 import test as foo_test2
 try:
-  from foo_sdk.wit.imports.foo_interface import test as foo_test
+  from foo_sdk.wit.imports.foo.sdk.foo_interface import test as foo_test
   raise AssertionError
 except ModuleNotFoundError:
   pass
 try:
-  from bar_sdk.wit.imports.bar_interface import test as bar_test
+  from bar_sdk.wit.imports.bar.sdk.bar_interface import test as bar_test
   raise AssertionError
 except ModuleNotFoundError:
   pass
 
+@foo_iface.guest
 class FooInterface(foo_exports.FooInterface):
     def test(self, s: str) -> str:
         return foo_test2(f"{s} FooInterface.test")

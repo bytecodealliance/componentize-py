@@ -1,5 +1,5 @@
-from tests.exports import resource_with_lists
-from tests.imports.resource_with_lists import Thing as HostThing
+from tests.exports.componentize_py.test import resource_with_lists
+from tests.imports.componentize_py.test.resource_with_lists import Thing as HostThing
 from typing import List
 
 class Thing(resource_with_lists.Thing):

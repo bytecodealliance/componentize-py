@@ -1,4 +1,4 @@
-from tests.exports import resource_borrow_export
+from tests.exports.componentize_py.test import resource_borrow_export
 
 class Thing(resource_borrow_export.Thing):
     def __init__(self, v: int):

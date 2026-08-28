@@ -2,9 +2,9 @@ import sys
 import asyncio
 import ipaddress
 from ipaddress import IPv4Address, IPv6Address
-import wit_world
-from wit_world import exports
-from wit_world.imports.wasi_sockets_types import (
+import wit
+from wit.exports.wasi.cli_v0_3 import run, Run
+from wit.imports.wasi.sockets_v0_3.types import (
     TcpSocket,
     IpSocketAddress_Ipv4,
     IpSocketAddress_Ipv6,
@@ -17,7 +17,8 @@ from typing import Tuple
 
 IPAddress = IPv4Address | IPv6Address
 
-class Run(exports.Run):
+@run.guest
+class Tcp(Run):
     async def run(self) -> None:
         args = sys.argv[1:]
         if len(args) != 1:
@@ -67,7 +68,7 @@ async def send_and_receive(address: IPAddress, port: int) -> None:
 
     await sock.connect(make_socket_address(address, port))
 
-    send_tx, send_rx = wit_world.byte_stream()
+    send_tx, send_rx = wit.byte_stream()
     async def write() -> None:
         await send_tx.write_all(b"hello, world!")
 

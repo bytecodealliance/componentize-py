@@ -1,6 +1,6 @@
 import tests
 
-from tests.exports import streams_and_futures
+from tests.exports.componentize_py.test import streams_and_futures
 
 class Thing(streams_and_futures.Thing):
     def __init__(self, v: str):

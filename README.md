@@ -42,12 +42,15 @@ world, you can generate them using the `bindings` subcommand:
 componentize-py -d hello.wit -w hello bindings hello_guest
 ```
 
-Then, use the `hello` module produced by the command above to write your app:
+Then, use the bindings produced by the command above (a `wit` package inside
+`hello_guest`) to write your app:
 
 ```shell
 cat >app.py <<EOF
-import wit_world
-class WitWorld(wit_world.WitWorld):
+import wit
+
+@wit.guest
+class Hello(wit.WorldExports):
     def hello(self) -> str:
         return "Hello, World!"
 EOF

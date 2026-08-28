@@ -216,9 +216,11 @@ impl super::Host for Host {
 const GUEST_CODE: &[(&str, &str)] = &[(
     "app.py",
     r#"
-from echoes_test import exports
-from echoes_test.imports import echoes
+from echoes_test.exports.componentize_py import test as exports
+from echoes_test.exports.componentize_py.test import echoes as echoes_exports
+from echoes_test.imports.componentize_py.test import echoes
 
+@echoes_exports.guest
 class Echoes(exports.Echoes):
     def echo_nothing(self):
         echoes.echo_nothing()

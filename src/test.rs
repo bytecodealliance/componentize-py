@@ -48,7 +48,7 @@ static ENGINE: Lazy<Engine> = Lazy::new(|| {
 async fn make_component(
     wit: &str,
     worlds: &[&str],
-    world_module: Option<&str>,
+    bindings_module: Option<&str>,
     guest_code: &[(&str, &str)],
     python_path: &[&str],
     module_worlds: &[(&str, &[&str])],
@@ -69,7 +69,7 @@ async fn make_component(
         worlds,
         features: &[],
         all_features: false,
-        world_module,
+        bindings_module,
         python_path: &python_path
             .iter()
             .copied()
@@ -84,7 +84,6 @@ async fn make_component(
         stub_wasi: false,
         import_interface_names: &HashMap::new(),
         export_interface_names: &HashMap::new(),
-        full_names: false,
         intersect_world,
     }
     .generate()
@@ -130,7 +129,7 @@ impl<H: Host> Tester<H> {
     fn new(
         wit: &str,
         worlds: &[&str],
-        world_module: Option<&str>,
+        bindings_module: Option<&str>,
         guest_code: &[(&str, &str)],
         python_path: &[&str],
         module_worlds: &[(&str, &[&str])],
@@ -145,7 +144,7 @@ impl<H: Host> Tester<H> {
         let component = &Runtime::new()?.block_on(make_component(
             wit,
             worlds,
-            world_module,
+            bindings_module,
             guest_code,
             python_path,
             module_worlds,
