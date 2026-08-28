@@ -5,7 +5,7 @@ on:
     tags:
       - "v*"
     paths-ignore:
-      - "examples/**"
+      - "examples/**/README.md"
       - "README.md"
       - "CONTRIBUTING.md"
   workflow_dispatch:

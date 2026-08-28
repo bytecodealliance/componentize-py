@@ -3,7 +3,7 @@ on:
   pull_request:
     branches: [main]
     paths-ignore:
-      - "examples/**"
+      - "examples/**/README.md"
       - "README.md"
       - "CONTRIBUTING.md"
   workflow_dispatch:
