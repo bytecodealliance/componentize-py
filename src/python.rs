@@ -18,13 +18,13 @@ use {
 #[allow(clippy::too_many_arguments)]
 #[pyo3::pyfunction]
 #[pyo3(name = "componentize")]
-#[pyo3(signature = (wit_path, worlds, features, all_features, world_module, python_path, module_worlds, app_name, output_path, stub_wasi, import_interface_names, export_interface_names, full_names, intersect_world))]
+#[pyo3(signature = (wit_path, worlds, features, all_features, bindings_module, python_path, module_worlds, app_name, output_path, stub_wasi, import_interface_names, export_interface_names, full_names = None, intersect_world = None, world_module = None))]
 fn python_componentize(
     wit_path: Vec<PathBuf>,
     worlds: Vec<String>,
     features: Vec<String>,
     all_features: bool,
-    world_module: Option<&str>,
+    bindings_module: Option<&str>,
     python_path: Vec<PyBackedStr>,
     module_worlds: Vec<(PyBackedStr, Vec<PyBackedStr>)>,
     app_name: &str,
@@ -32,9 +32,17 @@ fn python_componentize(
     stub_wasi: bool,
     import_interface_names: Vec<(PyBackedStr, PyBackedStr)>,
     export_interface_names: Vec<(PyBackedStr, PyBackedStr)>,
-    full_names: bool,
+    full_names: Option<bool>,
     intersect_world: Option<&str>,
+    world_module: Option<&str>,
 ) -> PyResult<()> {
+    let bindings_module = crate::resolve_deprecated(
+        bindings_module.map(str::to_owned),
+        world_module.map(str::to_owned),
+        full_names,
+        false,
+    )
+    .map_err(|e| PyAssertionError::new_err(format!("{e:?}")))?;
     (|| {
         Runtime::new()?.block_on(
             ComponentGenerator {
@@ -42,7 +50,7 @@ fn python_componentize(
                 worlds: &worlds.iter().map(|v| v.as_str()).collect::<Vec<_>>(),
                 features: &features.iter().map(|v| v.as_str()).collect::<Vec<_>>(),
                 all_features,
-                world_module,
+                bindings_module: bindings_module.as_deref(),
                 python_path: &python_path.iter().map(|s| s.as_ref()).collect::<Vec<_>>(),
                 module_worlds: &module_worlds
                     .iter()
@@ -63,7 +71,6 @@ fn python_componentize(
                     .iter()
                     .map(|(a, b)| (a.as_ref(), b.as_ref()))
                     .collect(),
-                full_names,
                 intersect_world,
             }
             .generate(),
@@ -75,24 +82,32 @@ fn python_componentize(
 #[allow(clippy::too_many_arguments)]
 #[pyo3::pyfunction]
 #[pyo3(name = "generate_bindings")]
-#[pyo3(signature = (wit_path, worlds, features, all_features, world_module, output_dir, import_interface_names, export_interface_names, full_names))]
+#[pyo3(signature = (wit_path, worlds, features, all_features, bindings_module, output_dir, import_interface_names, export_interface_names, full_names = None, world_module = None))]
 fn python_generate_bindings(
     wit_path: Vec<PathBuf>,
     worlds: Vec<String>,
     features: Vec<String>,
     all_features: bool,
-    world_module: Option<&str>,
+    bindings_module: Option<&str>,
     output_dir: PathBuf,
     import_interface_names: Vec<(PyBackedStr, PyBackedStr)>,
     export_interface_names: Vec<(PyBackedStr, PyBackedStr)>,
-    full_names: bool,
+    full_names: Option<bool>,
+    world_module: Option<&str>,
 ) -> PyResult<()> {
+    let bindings_module = crate::resolve_deprecated(
+        bindings_module.map(str::to_owned),
+        world_module.map(str::to_owned),
+        full_names,
+        false,
+    )
+    .map_err(|e| PyAssertionError::new_err(format!("{e:?}")))?;
     BindingsGenerator {
         wit_paths: &wit_path.iter().map(|v| v.as_path()).collect::<Vec<_>>(),
         worlds: &worlds.iter().map(|v| v.as_str()).collect::<Vec<_>>(),
         features: &features.iter().map(|v| v.as_str()).collect::<Vec<_>>(),
         all_features,
-        world_module,
+        bindings_module: bindings_module.as_deref(),
         output_dir: &output_dir,
         import_interface_names: &import_interface_names
             .iter()
@@ -102,7 +117,6 @@ fn python_generate_bindings(
             .iter()
             .map(|(a, b)| (a.as_ref(), b.as_ref()))
             .collect(),
-        full_names,
     }
     .generate()
     .map_err(|e| PyAssertionError::new_err(format!("{e:?}")))

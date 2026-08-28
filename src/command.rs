@@ -19,8 +19,23 @@ pub struct Options {
     #[command(flatten)]
     pub common: Common,
 
+    #[command(flatten)]
+    pub deprecated: Deprecated,
+
     #[command(subcommand)]
     pub command: Command,
+}
+
+/// Options kept only for back-compat; `run` folds them into `Common`.
+#[derive(clap::Args, Clone, Debug)]
+pub struct Deprecated {
+    /// Deprecated: renamed to `--bindings-module`.
+    #[arg(long, hide = true)]
+    pub world_module: Option<String>,
+
+    /// Deprecated and ignored: fully-qualified module names are always used.
+    #[arg(long, hide = true, action = clap::ArgAction::SetTrue)]
+    pub full_names: Option<bool>,
 }
 
 #[derive(clap::Args, Clone, Debug)]
@@ -59,40 +74,36 @@ pub struct Common {
     /// Specify names to use for imported interfaces.  May be specified more
     /// than once.
     ///
-    /// By default, the python module name generated for a given interface will
-    /// be the snake-case form of the WIT interface name, possibly qualified
-    /// with the package name and namespace and/or version if that name would
-    /// otherwise clash with another interface.  With this option, you may
-    /// override that name with your own, unique name.
+    /// By default, the Python module generated for a given interface is nested
+    /// according to the fully-qualified WIT interface name, i.e. the package
+    /// namespace, then the package name plus its (semver-canonical) version,
+    /// then the interface name (e.g. `wit.imports.wasi.http_v0_2.types` for
+    /// `wasi:http/types@0.2.0`).  With this option, you may override that with
+    /// your own, unique name, which may itself be a dotted path (e.g.
+    /// `my_package.my_module`) and is used verbatim. Each component must be a
+    /// valid Python identifier.
     #[arg(long, value_parser = parse_key_value)]
     pub import_interface_name: Vec<(String, String)>,
 
     /// Specify names to use for exported interfaces.  May be specified more
     /// than once.
     ///
-    /// By default, the python module name generated for a given interface will
-    /// be the snake-case form of the WIT interface name, possibly qualified
-    /// with the package name and namespace and/or version if that name would
-    /// otherwise clash with another interface.  With this option, you may
-    /// override that name with your own, unique name.
+    /// By default, the Python module generated for a given interface is nested
+    /// according to the fully-qualified WIT interface name, i.e. the package
+    /// namespace, then the package name plus its (semver-canonical) version,
+    /// then the interface name (e.g. `wit.exports.wasi.http_v0_2.types` for
+    /// `wasi:http/types@0.2.0`).  With this option, you may override that with
+    /// your own, unique name, which may itself be a dotted path (e.g.
+    /// `my_package.my_module`) and is used verbatim. Each component must be a
+    /// valid Python identifier.
     #[arg(long, value_parser = parse_key_value)]
     pub export_interface_name: Vec<(String, String)>,
 
     /// Optional name of top-level module to use for bindings.
     ///
-    /// If this is not specified, the module name will default to "wit_world".
+    /// If this is not specified, the module name will default to "wit".
     #[arg(long)]
-    pub world_module: Option<String>,
-
-    /// When generating Python module names, include the WIT package name and
-    /// version even if only one version of that package is referenced by the
-    /// specified world or only one package uses that name.
-    ///
-    /// By default, the package name and version will only be included in the
-    /// name if the world references more than one version of the WIT package or
-    /// the name is used by more than one package.
-    #[arg(long)]
-    pub full_names: bool,
+    pub bindings_module: Option<String>,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -117,10 +128,9 @@ pub enum Command {
 pub struct Componentize {
     /// The name of a Python module containing the app to wrap.
     ///
-    /// Note that this should not match (any of) the world name(s) you are
-    /// targeting since `componentize-py` will generate code using those
-    /// name(s), and Python doesn't know how to load two top-level modules with
-    /// the same name.
+    /// Note that this should not match the bindings module name (`wit` by
+    /// default, see `--bindings-module`), since Python can't load two
+    /// top-level modules with the same name.
     pub app_name: String,
 
     /// Specify a directory containing the app and/or its dependencies.  May be
@@ -205,10 +215,22 @@ fn parse_key_value(s: &str) -> Result<(String, String), String> {
 }
 
 pub fn run<T: Into<OsString> + Clone, I: IntoIterator<Item = T>>(args: I) -> Result<()> {
-    let options = Options::parse_from(args);
-    match options.command {
-        Command::Componentize(opts) => componentize(options.common, opts),
-        Command::Bindings(opts) => generate_bindings(options.common, opts),
+    let Options {
+        mut common,
+        deprecated,
+        command,
+    } = Options::parse_from(args);
+
+    common.bindings_module = crate::resolve_deprecated(
+        common.bindings_module,
+        deprecated.world_module,
+        deprecated.full_names,
+        common.quiet,
+    )?;
+
+    match command {
+        Command::Componentize(opts) => componentize(common, opts),
+        Command::Bindings(opts) => generate_bindings(common, opts),
     }
 }
 
@@ -226,7 +248,7 @@ fn generate_bindings(common: Common, bindings: Bindings) -> Result<()> {
             .map(|v| v.as_str())
             .collect::<Vec<_>>(),
         all_features: common.all_features,
-        world_module: common.world_module.as_deref(),
+        bindings_module: common.bindings_module.as_deref(),
         output_dir: &bindings.output_dir,
         import_interface_names: &common
             .import_interface_name
@@ -238,7 +260,6 @@ fn generate_bindings(common: Common, bindings: Bindings) -> Result<()> {
             .iter()
             .map(|(a, b)| (a.as_str(), b.as_str()))
             .collect(),
-        full_names: common.full_names,
     }
     .generate()
 }
@@ -269,7 +290,7 @@ fn componentize(common: Common, componentize: Componentize) -> Result<()> {
                 .map(|v| v.as_str())
                 .collect::<Vec<_>>(),
             all_features: common.all_features,
-            world_module: common.world_module.as_deref(),
+            bindings_module: common.bindings_module.as_deref(),
             python_path: &python_path.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
             module_worlds: &componentize
                 .module_worlds
@@ -293,7 +314,6 @@ fn componentize(common: Common, componentize: Componentize) -> Result<()> {
                 .iter()
                 .map(|(a, b)| (a.as_str(), b.as_str()))
                 .collect(),
-            full_names: common.full_names,
             intersect_world: componentize.intersect_world.as_deref(),
         }
         .generate(),
@@ -427,13 +447,12 @@ mod tests {
         let common = Common {
             wit_path: vec![wit.path().into()],
             world: Vec::new(),
-            world_module: Some("bindings".into()),
+            bindings_module: Some("bindings".into()),
             quiet: false,
             features: vec![],
             all_features: false,
             import_interface_name: Vec::new(),
             export_interface_name: Vec::new(),
-            full_names: false,
         };
         let bindings = Bindings {
             output_dir: out_dir.path().into(),
@@ -458,13 +477,12 @@ mod tests {
         let common = Common {
             wit_path: vec![wit.path().into()],
             world: Vec::new(),
-            world_module: Some("bindings".into()),
+            bindings_module: Some("bindings".into()),
             quiet: false,
             features: vec!["x".to_owned()],
             all_features: false,
             import_interface_name: Vec::new(),
             export_interface_name: Vec::new(),
-            full_names: false,
         };
         let bindings = Bindings {
             output_dir: out_dir.path().into(),
@@ -489,13 +507,12 @@ mod tests {
         let common = Common {
             wit_path: vec![wit.path().into()],
             world: Vec::new(),
-            world_module: Some("bindings".into()),
+            bindings_module: Some("bindings".into()),
             quiet: false,
             features: vec![],
             all_features: true,
             import_interface_name: Vec::new(),
             export_interface_name: Vec::new(),
-            full_names: false,
         };
         let bindings = Bindings {
             output_dir: out_dir.path().into(),
@@ -519,13 +536,12 @@ mod tests {
         let common = Common {
             wit_path: vec![wit.path().into()],
             world: Vec::new(),
-            world_module: Some("bindings".into()),
+            bindings_module: Some("bindings".into()),
             quiet: false,
             features: vec!["x".to_owned()],
             all_features: false,
             import_interface_name: Vec::new(),
             export_interface_name: Vec::new(),
-            full_names: false,
         };
         let bindings = Bindings {
             output_dir: out_dir.path().into(),
@@ -536,8 +552,10 @@ mod tests {
             r#"
 import bindings
 from bindings import x
+from bindings.export import world_exports
 
-class Bindings(bindings.Bindings):
+@world_exports
+class Bindings(bindings.WorldExports):
     def y(self) -> None:
         x()
 "#,
@@ -582,14 +600,18 @@ world cli-world {
             &app_file,
             br#"
 import cli_world
-from cli_world import exports
-from cli_world.imports import cli_interface
-from lib.wit.imports import lib_interface
+from cli_world.export import world_exports
+from cli_world.export.test import cli as export
+from cli_world.exports.test import cli as exports
+from cli_world.imports.test.cli import cli_interface
+from lib.wit.imports.test.lib import lib_interface
 
-class CliWorld(cli_world.CliWorld):
+@world_exports
+class CliWorld(cli_world.WorldExports):
     def foo(self) -> None:
         pass
 
+@export.cli_interface
 class CliInterface(exports.CliInterface):
     def foo(self) -> None:
         lib_interface.foo()
@@ -628,13 +650,12 @@ world lib-world {
             Common {
                 wit_path: vec![lib_wit_dir.clone()],
                 world: vec!["test:lib/lib-world".into()],
-                world_module: Some("lib.wit".into()),
+                bindings_module: Some("lib.wit".into()),
                 quiet: false,
                 features: Vec::new(),
                 all_features: false,
                 import_interface_name: Vec::new(),
                 export_interface_name: Vec::new(),
-                full_names: false,
             },
             Bindings {
                 output_dir: lib_wit_dir,
@@ -645,13 +666,12 @@ world lib-world {
             Common {
                 wit_path: vec![cli_wit_file],
                 world: vec!["test:cli/cli-world".into(), "test:lib/lib-world".into()],
-                world_module: Some("cli_world".into()),
+                bindings_module: Some("cli_world".into()),
                 quiet: false,
                 features: Vec::new(),
                 all_features: false,
                 import_interface_name: Vec::new(),
                 export_interface_name: Vec::new(),
-                full_names: false,
             },
             Componentize {
                 app_name: "app".into(),

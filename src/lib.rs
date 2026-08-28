@@ -1,7 +1,7 @@
 #![deny(warnings)]
 
 use {
-    anyhow::{Context, Error, Result, anyhow, ensure},
+    anyhow::{Context, Error, Result, anyhow, bail, ensure},
     async_trait::async_trait,
     bytes::Bytes,
     component_init_transform::Invoker,
@@ -18,7 +18,7 @@ use {
         path::{Path, PathBuf},
         str,
     },
-    summary::{Locations, Naming, Summary},
+    summary::{Locations, Summary},
     tar::Archive,
     wasm_encoder::{CustomSection, Section as _},
     wasmtime::{
@@ -51,10 +51,8 @@ mod util;
 
 const DEBUG_PYTHON_BINDINGS: bool = false;
 
-/// The default name of the Python module containing code generated from the
-/// specified WIT world.  This may be overriden programatically or via the CLI
-/// using the `--world-module` option.
-static DEFAULT_WORLD_MODULE: &str = "wit_world";
+/// Default bindings module name, overridable via `--bindings-module`.
+static DEFAULT_BINDINGS_MODULE: &str = "wit";
 
 wasmtime::component::bindgen!({
     path: "wit",
@@ -90,8 +88,7 @@ struct RawComponentizePyConfig {
     import_interface_names: HashMap<String, String>,
     #[serde(default)]
     export_interface_names: HashMap<String, String>,
-    #[serde(default)]
-    full_names: bool,
+    full_names: Option<bool>,
 }
 
 #[derive(Debug)]
@@ -100,13 +97,14 @@ struct ComponentizePyConfig {
     wit_directory: Option<PathBuf>,
     import_interface_names: HashMap<String, String>,
     export_interface_names: HashMap<String, String>,
-    full_names: bool,
 }
 
 impl TryFrom<(&Path, RawComponentizePyConfig)> for ComponentizePyConfig {
     type Error = Error;
 
     fn try_from((path, raw): (&Path, RawComponentizePyConfig)) -> Result<Self> {
+        warn_full_names_deprecated(raw.full_names, Some(path));
+
         let base = path.canonicalize()?;
         let convert = |p| {
             // Ensure this is a relative path under `base`:
@@ -121,7 +119,6 @@ impl TryFrom<(&Path, RawComponentizePyConfig)> for ComponentizePyConfig {
             wit_directory: raw.wit_directory.map(convert).transpose()?,
             import_interface_names: raw.import_interface_names,
             export_interface_names: raw.export_interface_names,
-            full_names: raw.full_names,
         })
     }
 }
@@ -182,11 +179,10 @@ pub struct BindingsGenerator<'a> {
     pub worlds: &'a [&'a str],
     pub features: &'a [&'a str],
     pub all_features: bool,
-    pub world_module: Option<&'a str>,
+    pub bindings_module: Option<&'a str>,
     pub output_dir: &'a Path,
     pub import_interface_names: &'a HashMap<&'a str, &'a str>,
     pub export_interface_names: &'a HashMap<&'a str, &'a str>,
-    pub full_names: bool,
 }
 
 impl BindingsGenerator<'_> {
@@ -234,33 +230,168 @@ impl BindingsGenerator<'_> {
         let stream_and_future_indexes = &HashMap::new();
         let summary = Summary::try_new(
             &resolve,
-            &iter::once((world, Naming::from_full(self.full_names))).collect(),
+            &iter::once(world).collect(),
             self.import_interface_names,
             self.export_interface_names,
             import_function_indexes,
             export_function_indexes,
             stream_and_future_indexes,
         )?;
-        let world_module = self.world_module.unwrap_or(DEFAULT_WORLD_MODULE);
-        let world_dir = self.output_dir.join(world_module.replace('.', "/"));
+        let bindings_module = self.bindings_module.unwrap_or(DEFAULT_BINDINGS_MODULE);
+        validate_bindings_module(bindings_module)?;
+        let world_dir = self.output_dir.join(bindings_module.replace('.', "/"));
+        // A `wit/` WIT-source directory clashes with the default module name.
+        if world_dir.is_dir() {
+            if contains_wit_files(&world_dir)? {
+                bail!(
+                    "refusing to write bindings into {}, which contains WIT source files; \
+                     specify a different output directory or `--bindings-module`",
+                    world_dir.display()
+                );
+            }
+            fs::remove_dir_all(&world_dir)?;
+        }
         fs::create_dir_all(&world_dir)?;
-        summary.generate_code(
-            &world_dir,
-            world,
-            world_module,
-            &mut Locations::default(),
-            true,
-        )?;
+        create_module_ancestors(self.output_dir, bindings_module)?;
+        let mut locations = Locations::default();
+        summary.generate_code(&world_dir, world, bindings_module, &mut locations, true)?;
+        let helper_module_paths = summary.helper_module_paths(&locations);
 
-        Archive::new(Decoder::new(Cursor::new(include_bytes!(concat!(
+        let mut archive = Archive::new(Decoder::new(Cursor::new(include_bytes!(concat!(
             env!("OUT_DIR"),
             "/bundled.tar.zst"
-        ))))?)
-        .unpack(self.output_dir)
-        .unwrap();
+        ))))?);
+
+        // Leave anything else in the output dir alone (e.g. the app itself)
+        for entry in archive.entries()? {
+            let mut entry = entry?;
+            let relative = entry.path()?.into_owned();
+            ensure!(
+                relative
+                    .components()
+                    .all(|c| matches!(c, std::path::Component::Normal(_))),
+                "invalid path in bundled archive: {}",
+                relative.display()
+            );
+            let path = self.output_dir.join(relative);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            entry.unpack(&path)?;
+            if path.is_file() {
+                resolve_helper_placeholders(&path, &helper_module_paths)?;
+            }
+        }
 
         Ok(())
     }
+}
+
+/// Warn about the deprecated `full_names` option (CLI, TOML, or Python API).
+pub(crate) fn warn_full_names_deprecated(full_names: Option<bool>, source: Option<&Path>) {
+    if full_names == Some(true) {
+        let source = source
+            .map(|path| format!(" in {}", path.display()))
+            .unwrap_or_default();
+        eprintln!(
+            "warning: `full_names`{source} is deprecated and has no effect; fully-qualified \
+             module names are always used"
+        );
+    }
+}
+
+/// Resolve the deprecated `world_module` spelling of `bindings_module`, warning
+/// about it and about `full_names`.
+pub(crate) fn resolve_deprecated(
+    bindings_module: Option<String>,
+    world_module: Option<String>,
+    full_names: Option<bool>,
+    quiet: bool,
+) -> Result<Option<String>> {
+    if !quiet {
+        warn_full_names_deprecated(full_names, None);
+        if world_module.is_some() {
+            eprintln!("warning: `world_module` is deprecated; use `bindings_module`");
+        }
+    }
+    ensure!(
+        !(bindings_module.is_some() && world_module.is_some()),
+        "`bindings_module` and its deprecated spelling `world_module` are mutually exclusive"
+    );
+
+    Ok(bindings_module.or(world_module))
+}
+
+fn contains_wit_files(dir: &Path) -> Result<bool> {
+    for entry in fs::read_dir(dir)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            if contains_wit_files(&path)? {
+                return Ok(true);
+            }
+        } else if path.extension().is_some_and(|ext| ext == "wit") {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+/// Reject `--bindings-module` values which are not importable Python paths.
+fn validate_bindings_module(module: &str) -> Result<()> {
+    if module
+        .split('.')
+        .all(|c| summary::is_python_identifier(c) && !summary::is_python_keyword(c))
+    {
+        Ok(())
+    } else {
+        bail!("`{module}` is not a valid Python module path")
+    }
+}
+
+/// Make each ancestor of a dotted bindings module a regular package.
+fn create_module_ancestors(root: &Path, module: &str) -> Result<()> {
+    let components = module.split('.').collect::<Vec<_>>();
+    let mut dir = root.to_owned();
+    for component in &components[..components.len() - 1] {
+        dir = dir.join(component);
+        fs::create_dir_all(&dir)?;
+        let init = dir.join("__init__.py");
+        if !init.exists() {
+            fs::write(init, "")?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Replace each helper placeholder with the module path generated for it; an
+/// unimported interface has no entry and keeps its placeholder.
+fn resolve_helper_placeholders(path: &Path, replacements: &[(&str, String)]) -> Result<()> {
+    if path.is_dir() {
+        for entry in fs::read_dir(path)? {
+            resolve_helper_placeholders(&entry?.path(), replacements)?;
+        }
+    } else {
+        // Skip binary files, and leave files without a placeholder untouched.
+        let bytes = fs::read(path)?;
+        if let Ok(text) = str::from_utf8(&bytes)
+            && let Some(replaced) = replacements
+                .iter()
+                .filter(|(placeholder, _)| text.contains(placeholder))
+                .fold(None, |replaced: Option<String>, (placeholder, module)| {
+                    Some(
+                        replaced
+                            .unwrap_or_else(|| text.to_owned())
+                            .replace(placeholder, module),
+                    )
+                })
+        {
+            fs::write(path, replaced)?;
+        }
+    }
+
+    Ok(())
 }
 
 pub type AddToLinker<'a> = Option<&'a dyn Fn(&mut Linker<Ctx>) -> Result<()>>;
@@ -270,7 +401,7 @@ pub struct ComponentGenerator<'a> {
     pub worlds: &'a [&'a str],
     pub features: &'a [&'a str],
     pub all_features: bool,
-    pub world_module: Option<&'a str>,
+    pub bindings_module: Option<&'a str>,
     pub python_path: &'a [&'a str],
     pub module_worlds: &'a [(&'a str, &'a [&'a str])],
     pub app_name: &'a str,
@@ -279,7 +410,6 @@ pub struct ComponentGenerator<'a> {
     pub stub_wasi: bool,
     pub import_interface_names: &'a HashMap<&'a str, &'a str>,
     pub export_interface_names: &'a HashMap<&'a str, &'a str>,
-    pub full_names: bool,
     pub intersect_world: Option<&'a str>,
 }
 
@@ -465,16 +595,12 @@ impl ComponentGenerator<'_> {
         let mut all_worlds = worlds
             .iter()
             .copied()
-            .map(|world| (world, Naming::from_full(self.full_names)))
-            .chain(configs.values().flat_map(|(config, worlds)| {
-                worlds.iter().copied().map(|world| {
-                    (
-                        world,
-                        Naming::from_full(config.config.full_names || self.full_names),
-                    )
-                })
-            }))
-            .collect::<IndexMap<_, _>>();
+            .chain(
+                configs
+                    .values()
+                    .flat_map(|(_, worlds)| worlds.iter().copied()),
+            )
+            .collect::<IndexSet<_>>();
 
         if all_worlds.is_empty() {
             // No worlds specified; pick the default one, if available:
@@ -484,7 +610,7 @@ impl ComponentGenerator<'_> {
                 intersect_world(&mut resolve, intersector, world);
             }
 
-            all_worlds.insert(world, Naming::from_full(self.full_names));
+            all_worlds.insert(world);
         }
 
         // Now that we've parsed all known WIT files and resolved all relevant
@@ -514,7 +640,7 @@ impl ComponentGenerator<'_> {
 
         let world = unioned(
             &mut resolve,
-            &all_worlds.keys().copied().collect::<Vec<_>>(),
+            &all_worlds.iter().copied().collect::<Vec<_>>(),
         )?
         .unwrap();
 
@@ -522,7 +648,7 @@ impl ComponentGenerator<'_> {
         // each module, union the ones covered by the module into a single
         // world.
 
-        let mut worlds_to_generate = all_worlds.keys().copied().collect::<IndexSet<_>>();
+        let mut worlds_to_generate = all_worlds.clone();
 
         let configs = configs
             .iter()
@@ -720,6 +846,8 @@ impl ComponentGenerator<'_> {
                 .collect::<Result<Vec<_>>>()?;
 
             let binding_module = paths.first().unwrap().1.replace('/', ".");
+            validate_bindings_module(&binding_module)
+                .with_context(|| format!("in `bindings` for {}", config.path.display()))?;
 
             let world_dir = tempfile::tempdir()?;
 
@@ -742,35 +870,22 @@ impl ComponentGenerator<'_> {
 
         // Here we generate code for any worlds not covered by any of the Python
         // modules we visited above.
+        let module = self.bindings_module.unwrap_or(DEFAULT_BINDINGS_MODULE);
+        validate_bindings_module(module)?;
         if let Some(world) = world_to_generate {
-            let module = self.world_module.unwrap_or(DEFAULT_WORLD_MODULE);
             let world_dir = tempfile::tempdir()?;
-            let module_path = world_dir.path().join(module);
+            let module_path = world_dir.path().join(module.replace('.', "/"));
             fs::create_dir_all(&module_path)?;
+            create_module_ancestors(world_dir.path(), module)?;
             summary.generate_code(&module_path, world, module, &mut locations, false)?;
             world_dir_mounts.push((vec!["world".to_owned()], world_dir));
-
-            // The helper utilities are hard-coded to assume the world module is
-            // named `wit_world`.  Here we replace that with the actual world module
-            // name.
-            fn replace(path: &Path, pattern: &str, replacement: &str) -> Result<()> {
-                if path.is_dir() {
-                    for entry in fs::read_dir(path)? {
-                        replace(&entry?.path(), pattern, replacement)?;
-                    }
-                } else {
-                    fs::write(
-                        path,
-                        fs::read_to_string(path)?
-                            .replace(pattern, replacement)
-                            .as_bytes(),
-                    )?;
-                }
-
-                Ok(())
-            }
-            replace(embedded_helper_utils.path(), "wit_world", module)?;
         };
+
+        // One shared mount, but each interface has exactly one owning module.
+        resolve_helper_placeholders(
+            embedded_helper_utils.path(),
+            &summary.helper_module_paths(&locations),
+        )?;
 
         for (mounts, world_dir) in world_dir_mounts.iter() {
             for mount in mounts {
@@ -838,11 +953,7 @@ impl ComponentGenerator<'_> {
                 async move {
                     let component = &Component::new(&engine, instrumented)?;
                     if !added_to_linker {
-                        add_wasi_and_stubs(
-                            &resolve,
-                            &all_worlds.keys().copied().collect::<IndexSet<_>>(),
-                            &mut linker,
-                        )?;
+                        add_wasi_and_stubs(&resolve, &all_worlds, &mut linker)?;
                     }
 
                     let pre = InitPre::new(linker.instantiate_pre(component)?)?;
