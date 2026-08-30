@@ -1006,7 +1006,9 @@ fn write_sdk(root: &std::path::Path, name: &str, wit: Option<&str>) -> Result<()
     std::fs::write(dir.join("__init__.py"), "")?;
     std::fs::write(
         dir.join("componentize-py.toml"),
-        "wit_directory = \"wit\"\nbindings = \"wit\"\n",
+        r#"wit_directory = "wit"
+bindings = "wit"
+"#,
     )?;
 
     if let Some(wit) = wit {
@@ -1840,7 +1842,13 @@ fn patched_tester(edit: impl Fn(&str) -> String) -> Result<Tester<Host>> {
 
 #[test]
 fn missing_guest_registration() {
-    let result = patched_tester(|code| code.replace("@exports.simple_export.guest\n", ""));
+    let result = patched_tester(|code| {
+        code.replace(
+            r#"@exports.simple_export.guest
+"#,
+            "",
+        )
+    });
 
     assert!(matches!(result, Err(error) if format!("{error}").contains(
         "no implementation registered for `componentize-py:test/simple-export`"
@@ -1869,8 +1877,11 @@ class AnotherSimpleExport:
 fn missing_resource_attribute() {
     let result = patched_tester(|code| {
         code.replace(
-            "class ResourceAggregates(exports.ResourceAggregates):\n    thing = resource_aggregates.Thing\n",
-            "class ResourceAggregates(exports.ResourceAggregates):\n",
+            r#"class ResourceAggregates(exports.ResourceAggregates):
+    thing = resource_aggregates.Thing
+"#,
+            r#"class ResourceAggregates(exports.ResourceAggregates):
+"#,
         )
     });
 
@@ -1910,16 +1921,26 @@ fn guest_instance_shared_across_functions() -> Result<()> {
     // of the registered class.
     let tester = patched_tester(|code| {
         code.replace(
-            "    def test_resource_borrow_import(self, v: int) -> int:\n",
-            "    def __init__(self) -> None:\n        self.stash = b\"unset\"\n\n    \
-             def test_resource_borrow_import(self, v: int) -> int:\n        \
-             self.stash = str(v).encode()\n",
+            r#"    def test_resource_borrow_import(self, v: int) -> int:
+"#,
+            r#"    def __init__(self) -> None:
+        self.stash = b"unset"
+
+    def test_resource_borrow_import(self, v: int) -> int:
+        self.stash = str(v).encode()
+"#,
         )
         .replace(
-            "    def read_file(self, path: str) -> bytes:\n        try:\n            \
-             with open(file=path, mode=\"rb\") as f:\n                return f.read()\n        \
-             except:\n            raise Err(traceback.format_exc())\n",
-            "    def read_file(self, path: str) -> bytes:\n        return self.stash\n",
+            r#"    def read_file(self, path: str) -> bytes:
+        try:
+            with open(file=path, mode="rb") as f:
+                return f.read()
+        except:
+            raise Err(traceback.format_exc())
+"#,
+            r#"    def read_file(self, path: str) -> bytes:
+        return self.stash
+"#,
         )
     })?;
 
@@ -1946,8 +1967,16 @@ fn guest_resource_attribute_inherited() -> Result<()> {
     // Resource declarations may come from a base class.
     patched_tester(|code| {
         code.replace(
-            "@exports.resource_aggregates.guest\nclass ResourceAggregates(exports.ResourceAggregates):\n    thing = resource_aggregates.Thing\n",
-            "class _AggregatesBase:\n    thing = resource_aggregates.Thing\n\n@exports.resource_aggregates.guest\nclass ResourceAggregates(_AggregatesBase, exports.ResourceAggregates):\n",
+            r#"@exports.resource_aggregates.guest
+class ResourceAggregates(exports.ResourceAggregates):
+    thing = resource_aggregates.Thing
+"#,
+            r#"class _AggregatesBase:
+    thing = resource_aggregates.Thing
+
+@exports.resource_aggregates.guest
+class ResourceAggregates(_AggregatesBase, exports.ResourceAggregates):
+"#,
         )
     })?;
 

@@ -183,6 +183,8 @@ pub struct BindingsGenerator<'a> {
     pub output_dir: &'a Path,
     pub import_interface_names: &'a HashMap<&'a str, &'a str>,
     pub export_interface_names: &'a HashMap<&'a str, &'a str>,
+    /// Write into `output_dir` even if the bindings module directory exists.
+    pub allow_existing: bool,
 }
 
 impl BindingsGenerator<'_> {
@@ -240,17 +242,14 @@ impl BindingsGenerator<'_> {
         let bindings_module = self.bindings_module.unwrap_or(DEFAULT_BINDINGS_MODULE);
         validate_bindings_module(bindings_module)?;
         let world_dir = self.output_dir.join(bindings_module.replace('.', "/"));
-        // A `wit/` WIT-source directory clashes with the default module name.
-        if world_dir.is_dir() {
-            if contains_wit_files(&world_dir)? {
-                bail!(
-                    "refusing to write bindings into {}, which contains WIT source files; \
-                     specify a different output directory or `--bindings-module`",
-                    world_dir.display()
-                );
-            }
-            fs::remove_dir_all(&world_dir)?;
-        }
+        // Writing into an existing directory can leave bindings from a previous
+        // run behind, so make the caller opt in rather than deleting anything.
+        ensure!(
+            self.allow_existing || !world_dir.exists(),
+            "{} already exists; remove it, or pass `--allow-existing` to write into it \
+             (bindings from a previous run are not removed)",
+            world_dir.display()
+        );
         fs::create_dir_all(&world_dir)?;
         create_module_ancestors(self.output_dir, bindings_module)?;
         let mut locations = Locations::default();
@@ -320,21 +319,6 @@ pub(crate) fn resolve_deprecated(
     );
 
     Ok(bindings_module.or(world_module))
-}
-
-fn contains_wit_files(dir: &Path) -> Result<bool> {
-    for entry in fs::read_dir(dir)? {
-        let path = entry?.path();
-        if path.is_dir() {
-            if contains_wit_files(&path)? {
-                return Ok(true);
-            }
-        } else if path.extension().is_some_and(|ext| ext == "wit") {
-            return Ok(true);
-        }
-    }
-
-    Ok(false)
 }
 
 /// Reject `--bindings-module` values which are not importable Python paths.

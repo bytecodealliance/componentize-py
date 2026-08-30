@@ -82,7 +82,7 @@ fn python_componentize(
 #[allow(clippy::too_many_arguments)]
 #[pyo3::pyfunction]
 #[pyo3(name = "generate_bindings")]
-#[pyo3(signature = (wit_path, worlds, features, all_features, bindings_module, output_dir, import_interface_names, export_interface_names, full_names = None, world_module = None))]
+#[pyo3(signature = (wit_path, worlds, features, all_features, bindings_module, output_dir, import_interface_names, export_interface_names, allow_existing = false, full_names = None, world_module = None))]
 fn python_generate_bindings(
     wit_path: Vec<PathBuf>,
     worlds: Vec<String>,
@@ -92,6 +92,7 @@ fn python_generate_bindings(
     output_dir: PathBuf,
     import_interface_names: Vec<(PyBackedStr, PyBackedStr)>,
     export_interface_names: Vec<(PyBackedStr, PyBackedStr)>,
+    allow_existing: bool,
     full_names: Option<bool>,
     world_module: Option<&str>,
 ) -> PyResult<()> {
@@ -109,6 +110,7 @@ fn python_generate_bindings(
         all_features,
         bindings_module: bindings_module.as_deref(),
         output_dir: &output_dir,
+        allow_existing,
         import_interface_names: &import_interface_names
             .iter()
             .map(|(a, b)| (a.as_ref(), b.as_ref()))

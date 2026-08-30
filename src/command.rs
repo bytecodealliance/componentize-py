@@ -205,6 +205,13 @@ pub struct Bindings {
     ///
     /// This will be created if it does not already exist.
     pub output_dir: PathBuf,
+
+    /// Generate into the bindings module directory even if it already exists.
+    ///
+    /// Nothing is deleted, so bindings from a previous run may be left behind
+    /// alongside the new ones.
+    #[arg(long)]
+    pub allow_existing: bool,
 }
 
 fn parse_key_value(s: &str) -> Result<(String, String), String> {
@@ -250,6 +257,7 @@ fn generate_bindings(common: Common, bindings: Bindings) -> Result<()> {
         all_features: common.all_features,
         bindings_module: common.bindings_module.as_deref(),
         output_dir: &bindings.output_dir,
+        allow_existing: bindings.allow_existing,
         import_interface_names: &common
             .import_interface_name
             .iter()
@@ -454,9 +462,7 @@ mod tests {
             import_interface_name: Vec::new(),
             export_interface_name: Vec::new(),
         };
-        let bindings = Bindings {
-            output_dir: out_dir.path().into(),
-        };
+        let bindings = bindings(out_dir.path());
         generate_bindings(common, bindings)?;
 
         // Then the gated feature doesn't appear
@@ -484,9 +490,7 @@ mod tests {
             import_interface_name: Vec::new(),
             export_interface_name: Vec::new(),
         };
-        let bindings = Bindings {
-            output_dir: out_dir.path().into(),
-        };
+        let bindings = bindings(out_dir.path());
         generate_bindings(common, bindings)?;
 
         // Then the gated feature doesn't appear
@@ -514,9 +518,7 @@ mod tests {
             import_interface_name: Vec::new(),
             export_interface_name: Vec::new(),
         };
-        let bindings = Bindings {
-            output_dir: out_dir.path().into(),
-        };
+        let bindings = bindings(out_dir.path());
         generate_bindings(common, bindings)?;
 
         // Then the gated feature doesn't appear
@@ -543,9 +545,7 @@ mod tests {
             import_interface_name: Vec::new(),
             export_interface_name: Vec::new(),
         };
-        let bindings = Bindings {
-            output_dir: out_dir.path().into(),
-        };
+        let bindings = bindings(out_dir.path());
         generate_bindings(common.clone(), bindings)?;
         fs::write(
             out_dir.path().join("app.py"),
@@ -655,9 +655,7 @@ world lib-world {
                 import_interface_name: Vec::new(),
                 export_interface_name: Vec::new(),
             },
-            Bindings {
-                output_dir: lib_wit_dir,
-            },
+            bindings(lib_wit_dir),
         )?;
 
         componentize(
@@ -687,6 +685,13 @@ world lib-world {
         )
     }
 
+    fn bindings(output_dir: impl Into<PathBuf>) -> Bindings {
+        Bindings {
+            output_dir: output_dir.into(),
+            allow_existing: false,
+        }
+    }
+
     fn common(wit_path: PathBuf, world: &str) -> Common {
         Common {
             wit_path: vec![wit_path],
@@ -708,13 +713,8 @@ world lib-world {
 
         format!(
             "{:?}",
-            generate_bindings(
-                common(wit_file, world),
-                Bindings {
-                    output_dir: out_dir,
-                },
-            )
-            .expect_err("bindings generation should fail")
+            generate_bindings(common(wit_file, world), bindings(out_dir),)
+                .expect_err("bindings generation should fail")
         )
     }
 
@@ -737,12 +737,7 @@ world w {
         let out_dir = dir.path().join("out");
         fs::create_dir(&out_dir)?;
 
-        generate_bindings(
-            common(wit_file, "w"),
-            Bindings {
-                output_dir: out_dir,
-            },
-        )
+        generate_bindings(common(wit_file, "w"), bindings(out_dir))
     }
 
     #[test]
@@ -792,13 +787,8 @@ world w {
 
         let error = format!(
             "{:?}",
-            generate_bindings(
-                common,
-                Bindings {
-                    output_dir: out_dir,
-                },
-            )
-            .expect_err("bindings generation should fail")
+            generate_bindings(common, bindings(out_dir),)
+                .expect_err("bindings generation should fail")
         );
 
         assert!(error.contains("map to the module alias `dup`"), "{error}");
@@ -833,13 +823,8 @@ interface baz { g: func(); }
 
         let error = format!(
             "{:?}",
-            generate_bindings(
-                common(dir.path().join("wit"), "w"),
-                Bindings {
-                    output_dir: out_dir,
-                },
-            )
-            .expect_err("bindings generation should fail")
+            generate_bindings(common(dir.path().join("wit"), "w"), bindings(out_dir),)
+                .expect_err("bindings generation should fail")
         );
 
         assert!(
@@ -879,9 +864,7 @@ world w {
 
         generate_bindings(
             common(dir.path().join("wit"), "w"),
-            Bindings {
-                output_dir: out_dir.clone(),
-            },
+            bindings(out_dir.clone()),
         )?;
 
         assert!(out_dir.join("wit/imports/foo/bar_v0_1_1/baz.py").is_file());
@@ -911,12 +894,7 @@ world w {
         common.import_interface_name =
             vec![("my:root/a".to_owned(), "my_pkg.my_module".to_owned())];
 
-        generate_bindings(
-            common,
-            Bindings {
-                output_dir: out_dir.clone(),
-            },
-        )?;
+        generate_bindings(common, bindings(out_dir.clone()))?;
 
         assert!(out_dir.join("wit/imports/my_pkg/my_module.py").is_file());
 
@@ -942,12 +920,7 @@ world w {
         let mut common = common(wit_file, "w");
         common.bindings_module = Some("my.pkg".into());
 
-        generate_bindings(
-            common,
-            Bindings {
-                output_dir: out_dir.clone(),
-            },
-        )?;
+        generate_bindings(common, bindings(out_dir.clone()))?;
 
         assert!(out_dir.join("my/__init__.py").is_file());
         assert!(out_dir.join("my/pkg/__init__.py").is_file());
@@ -967,12 +940,7 @@ world w {
         let mut common = common("wit".into(), "wasi:http/proxy@0.2.0");
         common.bindings_module = Some("my.pkg".into());
 
-        generate_bindings(
-            common,
-            Bindings {
-                output_dir: out_dir.clone(),
-            },
-        )?;
+        generate_bindings(common, bindings(out_dir.clone()))?;
 
         let generated = fs::read_to_string(out_dir.join("poll_loop.py"))?;
         for expected in [
@@ -1004,12 +972,7 @@ world w {
         let out_dir = dir.path().join("out");
         fs::create_dir(&out_dir)?;
 
-        generate_bindings(
-            common(wit_file, "w"),
-            Bindings {
-                output_dir: out_dir.clone(),
-            },
-        )?;
+        generate_bindings(common(wit_file, "w"), bindings(out_dir.clone()))?;
 
         let generated = fs::read_to_string(out_dir.join("poll_loop.py"))?;
         assert!(
@@ -1044,12 +1007,7 @@ world w {
         let out_dir = dir.path().join("out");
         fs::create_dir(&out_dir)?;
 
-        generate_bindings(
-            common(wit_file, "w"),
-            Bindings {
-                output_dir: out_dir.clone(),
-            },
-        )?;
+        generate_bindings(common(wit_file, "w"), bindings(out_dir.clone()))?;
 
         let generated = fs::read_to_string(out_dir.join("wit/exports/my/root/__init__.py"))?;
         assert!(
@@ -1142,9 +1100,7 @@ world w {
 
         generate_bindings(
             common(dir.path().join("wit"), "w"),
-            Bindings {
-                output_dir: out_dir.clone(),
-            },
+            bindings(out_dir.clone()),
         )?;
 
         assert!(out_dir.join("wit/imports/foo/bar_v0_1_1/baz.py").is_file());
@@ -1196,13 +1152,8 @@ world w {
 
         let error = format!(
             "{:?}",
-            generate_bindings(
-                common,
-                Bindings {
-                    output_dir: out_dir,
-                },
-            )
-            .expect_err("bindings generation should fail")
+            generate_bindings(common, bindings(out_dir),)
+                .expect_err("bindings generation should fail")
         );
 
         assert!(error.contains("not a valid Python identifier"), "{error}");
@@ -1231,13 +1182,8 @@ world w {
 
         let error = format!(
             "{:?}",
-            generate_bindings(
-                common,
-                Bindings {
-                    output_dir: out_dir,
-                },
-            )
-            .expect_err("bindings generation should fail")
+            generate_bindings(common, bindings(out_dir),)
+                .expect_err("bindings generation should fail")
         );
 
         assert!(error.contains("not a valid Python module path"), "{error}");
@@ -1286,12 +1232,7 @@ world w {
         let out_dir = dir.path().join("out");
         fs::create_dir(&out_dir)?;
 
-        generate_bindings(
-            common(wit_file, "w"),
-            Bindings {
-                output_dir: out_dir,
-            },
-        )
+        generate_bindings(common(wit_file, "w"), bindings(out_dir))
     }
 
     #[test]
@@ -1307,13 +1248,8 @@ world w {
 
         let error = format!(
             "{:?}",
-            generate_bindings(
-                common,
-                Bindings {
-                    output_dir: out_dir,
-                },
-            )
-            .expect_err("bindings generation should fail")
+            generate_bindings(common, bindings(out_dir),)
+                .expect_err("bindings generation should fail")
         );
 
         assert!(error.contains("not a valid Python module path"), "{error}");
@@ -1322,8 +1258,7 @@ world w {
     }
 
     #[test]
-    fn refuses_to_overwrite_wit_sources() -> Result<()> {
-        // The default module (`wit`) must not clobber a `wit/` source dir.
+    fn refuses_to_write_into_existing_directory() -> Result<()> {
         let dir = tempfile::tempdir()?;
         fs::create_dir(dir.path().join("wit"))?;
         fs::write(
@@ -1333,16 +1268,13 @@ world w {
 
         let error = format!(
             "{:?}",
-            generate_bindings(
-                common(dir.path().join("wit"), "w"),
-                Bindings {
-                    output_dir: dir.path().into(),
-                },
-            )
-            .expect_err("bindings generation should fail")
+            generate_bindings(common(dir.path().join("wit"), "w"), bindings(dir.path()))
+                .expect_err("bindings generation should fail")
         );
 
-        assert!(error.contains("contains WIT source files"), "{error}");
+        assert!(error.contains("already exists"), "{error}");
+        // Nothing was touched.
+        assert!(dir.path().join("wit/app.wit").is_file());
 
         Ok(())
     }
@@ -1361,12 +1293,7 @@ world w {
         let mut common = common(wit_file, "w");
         common.import_interface_name = vec![("my:root/a".to_owned(), "myPkg.myModule".to_owned())];
 
-        generate_bindings(
-            common,
-            Bindings {
-                output_dir: out_dir.clone(),
-            },
-        )?;
+        generate_bindings(common, bindings(out_dir.clone()))?;
 
         assert!(out_dir.join("wit/imports/myPkg/myModule.py").is_file());
 
@@ -1384,12 +1311,7 @@ world w {
         let out_dir = dir.path().join("out");
         fs::create_dir(&out_dir)?;
 
-        generate_bindings(
-            common(wit_file.clone(), "w"),
-            Bindings {
-                output_dir: out_dir.clone(),
-            },
-        )?;
+        generate_bindings(common(wit_file.clone(), "w"), bindings(out_dir.clone()))?;
 
         // Rename the interface and regenerate into the same directory.
         fs::write(
@@ -1400,25 +1322,27 @@ world w {
             common(wit_file, "w"),
             Bindings {
                 output_dir: out_dir.clone(),
+                allow_existing: true,
             },
         )?;
 
-        // No duplicate submodule imports, and no stale modules.
+        // No duplicate submodule imports.  The renamed module is left behind,
+        // which is why `--allow-existing` has to be asked for.
         let generated = fs::read_to_string(out_dir.join("wit/imports/my/__init__.py"))?;
         assert_eq!(
             1,
             generated.matches("from . import root").count(),
             "{generated}"
         );
-        assert!(!out_dir.join("wit/imports/my/root/a.py").exists());
+        assert!(out_dir.join("wit/imports/my/root/a.py").is_file());
         assert!(out_dir.join("wit/imports/my/root/b.py").is_file());
 
         Ok(())
     }
 
     #[test]
-    fn refuses_to_overwrite_nested_wit_sources() -> Result<()> {
-        // WIT sources under `wit/deps/...` must be detected too.
+    fn allow_existing_writes_alongside_wit_sources() -> Result<()> {
+        // A WIT directory may legitimately hold generated Python too.
         let dir = tempfile::tempdir()?;
         let wit_file = dir.path().join("test.wit");
         fs::write(&wit_file, "package my:root;\nworld w { export f: func(); }")?;
@@ -1429,18 +1353,16 @@ world w {
             "package other:dep;\ninterface x { f: func(); }",
         )?;
 
-        let error = format!(
-            "{:?}",
-            generate_bindings(
-                common(wit_file, "w"),
-                Bindings {
-                    output_dir: out_dir,
-                },
-            )
-            .expect_err("bindings generation should fail")
-        );
+        generate_bindings(
+            common(wit_file, "w"),
+            Bindings {
+                output_dir: out_dir.clone(),
+                allow_existing: true,
+            },
+        )?;
 
-        assert!(error.contains("contains WIT source files"), "{error}");
+        assert!(out_dir.join("wit/__init__.py").is_file());
+        assert!(out_dir.join("wit/deps/dep/dep.wit").is_file());
 
         Ok(())
     }
@@ -1457,12 +1379,7 @@ world w {
         let out_dir = dir.path().join("out");
         fs::create_dir(&out_dir)?;
 
-        generate_bindings(
-            common(wit_file, "w"),
-            Bindings {
-                output_dir: out_dir.clone(),
-            },
-        )?;
+        generate_bindings(common(wit_file, "w"), bindings(out_dir.clone()))?;
 
         let generated = fs::read_to_string(out_dir.join("wit/__init__.py"))?;
         let bind = generated.find("from . import exports").unwrap();
@@ -1488,13 +1405,8 @@ world w {
 
         let error = format!(
             "{:?}",
-            generate_bindings(
-                common,
-                Bindings {
-                    output_dir: out_dir,
-                },
-            )
-            .expect_err("bindings generation should fail")
+            generate_bindings(common, bindings(out_dir),)
+                .expect_err("bindings generation should fail")
         );
 
         assert!(error.contains("abstract base class"), "{error}");
