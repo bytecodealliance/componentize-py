@@ -162,7 +162,7 @@ fn release_borrows(py: Python, borrows: Vec<Borrow>) {
     {
         let value = value.bind(py);
 
-        value.delattr(intern!(py, "handle")).unwrap();
+        value.setattr(intern!(py, "handle"), 0u32).unwrap();
 
         value
             .getattr(intern!(py, "finalizer"))
@@ -1411,7 +1411,7 @@ impl MyCall<'_> {
             .unwrap();
 
         if owned {
-            value.bind(py).delattr(intern!(py, "handle")).unwrap();
+            value.bind(py).setattr(intern!(py, "handle"), 0u32).unwrap();
 
             let finalizer_args = value
                 .bind(py)

@@ -81,6 +81,20 @@ impl TestsImports for Ctx {
     async fn get_bytes(&mut self, count: u32) -> wasmtime::Result<Vec<u8>> {
         Ok(vec![42u8; usize::try_from(count).unwrap()])
     }
+
+    async fn take_thing(&mut self, thing: Resource<ThingString>) -> wasmtime::Result<()> {
+        Ok(self.ctx().table.delete(thing).map(|_| ())?)
+    }
+
+    async fn take_future(&mut self, future: FutureReader<()>) -> wasmtime::Result<()> {
+        _ = future;
+        Ok(())
+    }
+
+    async fn take_stream(&mut self, stream: StreamReader<()>) -> wasmtime::Result<()> {
+        _ = stream;
+        Ok(())
+    }
 }
 
 impl<T> TestsImportsWithStore<T> for HasSelf<Ctx> {
@@ -1198,6 +1212,66 @@ fn filesystem() -> Result<()> {
                 .map_err(|s| anyhow!("{s}"))?;
 
             assert_eq!(&value, message);
+
+            Ok(())
+        })
+    })
+}
+
+#[test]
+fn trap_on_empty_resource() -> Result<()> {
+    TESTER.test(|world, store, runtime| {
+        runtime.block_on(async {
+            let thing = store
+                .data_mut()
+                .ctx()
+                .table
+                .push(ThingString("Ni Hao".to_string()))?;
+
+            let error = world
+                .call_trap_on_empty_resource(store, thing)
+                .await
+                .unwrap_err();
+
+            let expected = "unknown handle index 0";
+            assert!(
+                format!("{error:?}").contains(expected),
+                "expected error message to contain `{expected}`; got {error:?}"
+            );
+
+            Ok(())
+        })
+    })
+}
+
+#[test]
+fn trap_on_empty_future() -> Result<()> {
+    TESTER.test(|world, store, runtime| {
+        runtime.block_on(async {
+            let error = world.call_trap_on_empty_future(store).await.unwrap_err();
+
+            let expected = "unknown handle index 0";
+            assert!(
+                format!("{error:?}").contains(expected),
+                "expected error message to contain `{expected}`; got {error:?}"
+            );
+
+            Ok(())
+        })
+    })
+}
+
+#[test]
+fn trap_on_empty_stream() -> Result<()> {
+    TESTER.test(|world, store, runtime| {
+        runtime.block_on(async {
+            let error = world.call_trap_on_empty_stream(store).await.unwrap_err();
+
+            let expected = "unknown handle index 0";
+            assert!(
+                format!("{error:?}").contains(expected),
+                "expected error message to contain `{expected}`; got {error:?}"
+            );
 
             Ok(())
         })

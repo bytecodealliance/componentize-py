@@ -270,6 +270,23 @@ class Tests(tests.WorldExports):
         # `MemoryError` if we're handling refcounts correctly in the runtime.
         for _ in range(5 * 1024):
             chunk = tests.get_bytes(1024 * 1024)
+
+    def trap_on_empty_resource(self, thing: imports.resource_alias1.Thing):
+        tests.take_thing(thing)
+        tests.take_thing(thing) # should trap since we already gave away `thing`
+        unreachable()
+        
+    def trap_on_empty_future(self):
+        tx, rx = tests.unit_future(lambda: None)
+        tests.take_future(rx)
+        tests.take_future(rx) # should trap since we already gave away `rx`
+        unreachable()
+        
+    def trap_on_empty_stream(self):
+        tx, rx = tests.unit_stream()
+        tests.take_stream(rx)
+        tests.take_stream(rx) # should trap since we already gave away `rx`
+        unreachable()
    
 @foo_iface.guest
 class FooInterface(foo_exports.FooInterface):
