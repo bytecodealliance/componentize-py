@@ -2,11 +2,12 @@ import sys
 import asyncio
 import ipaddress
 from ipaddress import IPv4Address, IPv6Address
-from wit_world import exports
+from wit.exports.wasi.cli_v0_2 import run, Run
 from typing import Tuple
 
 
-class Run(exports.Run):
+@run.guest
+class Tcp(Run):
     def run(self) -> None:
         args = sys.argv[1:]
         if len(args) != 1:

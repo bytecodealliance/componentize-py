@@ -896,19 +896,21 @@ fn multiworld_intersect() -> Result<()> {
         &[(
             "app.py",
             r#"
-from foo_sdk.wit import exports as foo_exports
-from foo_sdk.wit.imports.foo_interface2 import test as foo_test2
+from foo_sdk.wit.exports.foo import sdk as foo_exports
+from foo_sdk.wit.exports.foo.sdk import foo_interface as foo_iface
+from foo_sdk.wit.imports.foo.sdk.foo_interface2 import test as foo_test2
 try:
-  from foo_sdk.wit.imports.foo_interface import test as foo_test
+  from foo_sdk.wit.imports.foo.sdk.foo_interface import test as foo_test
   raise AssertionError
 except ModuleNotFoundError:
   pass
 try:
-  from bar_sdk.wit.imports.bar_interface import test as bar_test
+  from bar_sdk.wit.imports.bar.sdk.bar_interface import test as bar_test
   raise AssertionError
 except ModuleNotFoundError:
   pass
 
+@foo_iface.guest
 class FooInterface(foo_exports.FooInterface):
     def test(self, s: str) -> str:
         return foo_test2(f"{s} FooInterface.test")
@@ -960,6 +962,219 @@ class BarSdkBarInterface:
     )));
 
     Ok(())
+}
+
+/// Pins each helper import to the module owning that interface.
+const HELPER_MODULE_ASSERTIONS: &str = r#"
+import poll_loop
+
+for module, expected in (
+    (poll_loop.types, "http_sdk.wit.imports.wasi.http_v0_2.types"),
+    (poll_loop.outgoing_handler, "http_sdk.wit.imports.wasi.http_v0_2.outgoing_handler"),
+    (poll_loop.streams, "http_sdk.wit.imports.wasi.io_v0_2.streams"),
+    (poll_loop.poll, "http_sdk.wit.imports.wasi.io_v0_2.poll"),
+):
+    assert module.__name__ == expected, f"{module.__name__} != {expected}"
+
+from http_sdk.wit.exports.wasi.http_v0_2 import incoming_handler, IncomingHandler
+from http_sdk.wit.imports.wasi.http_v0_2.types import IncomingRequest, ResponseOutparam
+
+@incoming_handler.guest
+class Handler(IncomingHandler):
+    def handle(self, request: IncomingRequest, response_out: ResponseOutparam) -> None:
+        raise NotImplementedError
+"#;
+
+/// Package with a `componentize-py.toml` owning `wit`, or the repo's WIT.
+fn write_sdk(root: &std::path::Path, name: &str, wit: Option<&str>) -> Result<()> {
+    fn copy_dir(from: &std::path::Path, to: &std::path::Path) -> Result<()> {
+        std::fs::create_dir_all(to)?;
+        for entry in std::fs::read_dir(from)? {
+            let entry = entry?;
+            let to = to.join(entry.file_name());
+            if entry.file_type()?.is_dir() {
+                copy_dir(&entry.path(), &to)?;
+            } else {
+                std::fs::copy(entry.path(), to)?;
+            }
+        }
+        Ok(())
+    }
+
+    let dir = root.join(name);
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join("__init__.py"), "")?;
+    std::fs::write(
+        dir.join("componentize-py.toml"),
+        r#"wit_directory = "wit"
+bindings = "wit"
+"#,
+    )?;
+
+    if let Some(wit) = wit {
+        std::fs::create_dir_all(dir.join("wit"))?;
+        std::fs::write(dir.join("wit/world.wit"), wit)?;
+    } else {
+        copy_dir(std::path::Path::new("wit"), &dir.join("wit"))?;
+    }
+
+    Ok(())
+}
+
+fn componentize_app(
+    tempdir: &std::path::Path,
+    app_wit: &str,
+    worlds: &[&str],
+    module_worlds: &[(&str, &[&str])],
+    app: &str,
+) -> Result<()> {
+    std::fs::write(tempdir.join("app.wit"), app_wit)?;
+    std::fs::write(tempdir.join("app.py"), app)?;
+
+    tokio::runtime::Runtime::new()?.block_on(
+        crate::ComponentGenerator {
+            wit_paths: &[&tempdir.join("app.wit")],
+            worlds,
+            features: &[],
+            all_features: false,
+            bindings_module: None,
+            python_path: &[tempdir
+                .to_str()
+                .ok_or_else(|| anyhow!("unable to parse temporary directory path as UTF-8"))?],
+            module_worlds,
+            app_name: "app",
+            output_path: &tempdir.join("app.wasm"),
+            add_to_linker: None,
+            stub_wasi: false,
+            import_interface_names: &std::collections::HashMap::new(),
+            export_interface_names: &std::collections::HashMap::new(),
+            intersect_world: None,
+        }
+        .generate(),
+    )
+}
+
+/// Config-owned worlds only, so there is no synthesized module and no single
+/// name to guess; `multiworld_intersect` never imports a helper.
+#[test]
+fn config_owned_worlds_resolve_bundled_helpers() -> Result<()> {
+    let tempdir = tempfile::tempdir()?;
+    write_sdk(tempdir.path(), "http_sdk", None)?;
+    write_sdk(
+        tempdir.path(),
+        "other_sdk",
+        Some(
+            "package other:sdk;
+world other-world {
+    export g: func() -> string;
+}
+",
+        ),
+    )?;
+
+    componentize_app(
+        tempdir.path(),
+        "package dummy:dummy;",
+        // No top-level world: `module_worlds` supplies both.
+        &[],
+        &[
+            ("http_sdk", &["wasi:http/proxy@0.2.0"]),
+            ("other_sdk", &["other:sdk/other-world"]),
+        ],
+        &format!(
+            r#"
+import other_sdk.wit as other
+
+@other.guest
+class OtherWorld(other.WorldExports):
+    def g(self) -> str:
+        return "g"
+{HELPER_MODULE_ASSERTIONS}"#
+        ),
+    )
+}
+
+/// The synthesized module is the tempting answer and the wrong one: only the
+/// config-owned module holds the interfaces the helpers import.
+#[test]
+fn synthesized_world_alongside_config_owned_helpers() -> Result<()> {
+    let tempdir = tempfile::tempdir()?;
+    write_sdk(tempdir.path(), "http_sdk", None)?;
+
+    componentize_app(
+        tempdir.path(),
+        "package dummy:dummy;
+world dummy-world {
+    export f: func() -> string;
+}
+",
+        &["dummy:dummy/dummy-world"],
+        &[("http_sdk", &["wasi:http/proxy@0.2.0"])],
+        &format!(
+            r#"
+import wit
+
+@wit.guest
+class DummyWorld(wit.WorldExports):
+    def f(self) -> str:
+        return "f"
+{HELPER_MODULE_ASSERTIONS}"#
+        ),
+    )
+}
+
+/// Two shapes `tests.wit` never produces: a shared two-way type with no
+/// resource, and a resource-free exported interface reached via its package.
+#[test]
+fn exports_namespace_without_resources() -> Result<()> {
+    let tempdir = tempfile::tempdir()?;
+
+    componentize_app(
+        tempdir.path(),
+        "package my:root;
+
+interface shared {
+    record point { x: u32, y: u32 }
+    swap: func(p: point) -> point;
+}
+
+interface plain {
+    f: func() -> u32;
+}
+
+world w {
+    import shared;
+    export shared;
+    export plain;
+}
+",
+        &["my:root/w"],
+        &[],
+        r#"
+import typing
+from wit.exports.my import root as root_exports
+from wit.exports.my.root import shared
+from wit.imports.my.root.shared import Point
+
+# `Point` has no two-way resource, so it exists only in the imports tree and
+# both trees must name it there.
+annotation = typing.get_type_hints(root_exports.Shared.swap)["p"]
+assert annotation is Point, annotation
+assert annotation.__module__ == "wit.imports.my.root.shared", annotation.__module__
+
+@shared.guest
+class Shared(root_exports.Shared):
+    def swap(self, p: Point) -> Point:
+        return Point(p.y, p.x)
+
+# `plain` has no resources, so nothing else pulls its submodule into the
+# package; reaching it as an attribute is what the app is told to do.
+@root_exports.plain.guest
+class Plain(root_exports.Plain):
+    def f(self) -> int:
+        return 1
+"#,
+    )
 }
 
 #[test]
@@ -1580,4 +1795,190 @@ fn test_dropped_future_reader_host(delay: bool) -> Result<()> {
 
         Ok(())
     })
+}
+
+/// Return `GUEST_CODE` with `app.py` patched via `edit`.
+fn patched_guest_code(edit: impl Fn(&str) -> String) -> Vec<(&'static str, String)> {
+    GUEST_CODE
+        .iter()
+        .map(|&(name, content)| {
+            (
+                name,
+                if name == "app.py" {
+                    // Each patch matches on `\n`, which a CRLF checkout lacks.
+                    let content = content.replace("\r\n", "\n");
+                    let patched = edit(&content);
+                    assert_ne!(patched, content, "patch had no effect");
+                    patched
+                } else {
+                    content.to_owned()
+                },
+            )
+        })
+        .collect()
+}
+
+fn patched_tester(edit: impl Fn(&str) -> String) -> Result<Tester<Host>> {
+    let code = patched_guest_code(edit);
+    let code = code
+        .iter()
+        .map(|(name, content)| (*name, content.as_str()))
+        .collect::<Vec<_>>();
+
+    Tester::<Host>::new(
+        include_str!("wit/tests.wit"),
+        &["componentize-py:test/tests"],
+        Some("tests"),
+        &code,
+        &["src/test"],
+        &[
+            ("foo_sdk", &["foo:sdk/foo-world"]),
+            ("bar_sdk", &["bar:sdk/bar-world"]),
+        ],
+        None,
+        *SEED,
+    )
+}
+
+#[test]
+fn missing_guest_registration() {
+    let result = patched_tester(|code| {
+        code.replace(
+            r#"@exports.simple_export.guest
+"#,
+            "",
+        )
+    });
+
+    assert!(matches!(result, Err(error) if format!("{error}").contains(
+        "no implementation registered for `componentize-py:test/simple-export`"
+    )));
+}
+
+#[test]
+fn duplicate_guest_registration() {
+    let result = patched_tester(|code| {
+        format!(
+            "{code}
+@exports.simple_export.guest
+class AnotherSimpleExport:
+    def foo(self, v: int) -> int:
+        return v
+"
+        )
+    });
+
+    assert!(matches!(result, Err(error) if format!("{error}").contains(
+        "multiple implementations registered for `componentize-py:test/simple-export`"
+    )));
+}
+
+#[test]
+fn missing_resource_attribute() {
+    let result = patched_tester(|code| {
+        code.replace(
+            r#"class ResourceAggregates(exports.ResourceAggregates):
+    thing = resource_aggregates.Thing
+"#,
+            r#"class ResourceAggregates(exports.ResourceAggregates):
+"#,
+        )
+    });
+
+    assert!(matches!(result, Err(error) if format!("{error}").contains(
+        "must declare a class attribute `thing`"
+    )));
+}
+
+#[test]
+fn guest_without_abc_subclass() -> Result<()> {
+    // Subclassing the generated abstract base class is optional; the `guest`
+    // decorator alone is enough.
+    let tester = patched_tester(|code| {
+        code.replace(
+            "class SimpleExport(exports.SimpleExport):",
+            "class SimpleExport:",
+        )
+    })?;
+
+    tester.test(|world, store, runtime| {
+        assert_eq!(
+            42 + 3,
+            runtime.block_on(
+                world
+                    .componentize_py_test_simple_export()
+                    .call_foo(store, 42)
+            )?
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+fn guest_instance_shared_across_functions() -> Result<()> {
+    // All functions of an interface (or world) dispatch to one shared instance
+    // of the registered class.
+    let tester = patched_tester(|code| {
+        code.replace(
+            r#"    def test_resource_borrow_import(self, v: int) -> int:
+"#,
+            r#"    def __init__(self) -> None:
+        self.stash = b"unset"
+
+    def test_resource_borrow_import(self, v: int) -> int:
+        self.stash = str(v).encode()
+"#,
+        )
+        .replace(
+            r#"    def read_file(self, path: str) -> bytes:
+        try:
+            with open(file=path, mode="rb") as f:
+                return f.read()
+        except:
+            raise Err(traceback.format_exc())
+"#,
+            r#"    def read_file(self, path: str) -> bytes:
+        return self.stash
+"#,
+        )
+    })?;
+
+    tester.test(|world, store, runtime| {
+        runtime.block_on(async {
+            world
+                .call_test_resource_borrow_import(&mut *store, 42)
+                .await?;
+
+            let value = world
+                .call_read_file(&mut *store, "unused")
+                .await?
+                .map_err(|s| anyhow!("{s}"))?;
+
+            assert_eq!(b"42".as_slice(), &value);
+
+            Ok(())
+        })
+    })
+}
+
+#[test]
+fn guest_resource_attribute_inherited() -> Result<()> {
+    // Resource declarations may come from a base class.
+    patched_tester(|code| {
+        code.replace(
+            r#"@exports.resource_aggregates.guest
+class ResourceAggregates(exports.ResourceAggregates):
+    thing = resource_aggregates.Thing
+"#,
+            r#"class _AggregatesBase:
+    thing = resource_aggregates.Thing
+
+@exports.resource_aggregates.guest
+class ResourceAggregates(_AggregatesBase, exports.ResourceAggregates):
+"#,
+        )
+    })?;
+
+    Ok(())
 }

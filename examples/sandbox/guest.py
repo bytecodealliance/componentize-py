@@ -1,4 +1,4 @@
-import wit_world
+import wit
 from componentize_py_types import Err
 import json
 
@@ -11,7 +11,8 @@ def handle(e: Exception) -> Err[str]:
         return Err(f"{type(e).__name__}: {message}")
 
 
-class WitWorld(wit_world.WitWorld):
+@wit.guest
+class Sandbox(wit.WorldExports):
     def eval(self, expression: str) -> str:
         try:
             return json.dumps(eval(expression))

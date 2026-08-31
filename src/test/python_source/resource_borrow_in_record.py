@@ -1,5 +1,5 @@
-from tests.exports import resource_borrow_in_record
-from tests.imports.resource_borrow_in_record import Thing as HostThing
+from tests.exports.componentize_py.test import resource_borrow_in_record
+from tests.imports.componentize_py.test.resource_borrow_in_record import Thing as HostThing
 
 class Thing(resource_borrow_in_record.Thing):
     def __init__(self, v: str):

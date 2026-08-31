@@ -908,9 +908,29 @@ fn do_init(app_name: String, symbols: Symbols, stub_wasi: bool) -> Result<(), St
     Python::initialize();
 
     let init = |py: Python| {
-        let app = py.import(app_name.as_str())?;
+        // Importing the app runs its decorators, filling `componentize_py_exports.EXPORTS`.
+        py.import(app_name.as_str())?;
+
+        let registry = py.import("componentize_py_exports")?.getattr("EXPORTS")?;
+
+        let implementation = |scope: &str| {
+            registry.get_item(scope).map_err(|error| {
+                if error.is_instance_of::<pyo3::exceptions::PyKeyError>(py) {
+                    PyAssertionError::new_err(format!(
+                        "no implementation registered for `{scope}`; please apply the \
+                         corresponding decorator from the generated bindings to the class \
+                         implementing it"
+                    ))
+                } else {
+                    error
+                }
+            })
+        };
 
         STUB_WASI.set(stub_wasi).unwrap();
+
+        // One implementation instance per interface, shared by its functions.
+        let mut instances = std::collections::HashMap::<String, Py<PyAny>>::new();
 
         EXPORTS
             .set(
@@ -920,35 +940,32 @@ fn do_init(app_name: String, symbols: Symbols, stub_wasi: bool) -> Result<(), St
                     .map(|export| {
                         Ok(Export {
                             kind: match &export.kind {
-                                FunctionExportKind::Freestanding(exp::Function {
-                                    protocol,
-                                    name,
-                                }) => ExportKind::Freestanding {
-                                    name: PyString::intern(py, name).into(),
-                                    instance: app.getattr(protocol.as_str())?.call0()?.into(),
-                                },
-                                FunctionExportKind::Constructor(Constructor {
-                                    module,
-                                    protocol,
-                                }) => ExportKind::Constructor(
-                                    py.import(module.as_str())?
-                                        .getattr(protocol.as_str())?
-                                        .into(),
-                                ),
+                                FunctionExportKind::Freestanding(exp::Function { scope, name }) => {
+                                    let instance = if let Some(instance) = instances.get(scope) {
+                                        instance.clone_ref(py)
+                                    } else {
+                                        let instance: Py<PyAny> =
+                                            implementation(scope)?.call0()?.into();
+                                        instances.insert(scope.clone(), instance.clone_ref(py));
+                                        instance
+                                    };
+                                    ExportKind::Freestanding {
+                                        name: PyString::intern(py, name).into(),
+                                        instance,
+                                    }
+                                }
+                                FunctionExportKind::Constructor(Constructor { scope }) => {
+                                    ExportKind::Constructor(implementation(scope)?.into())
+                                }
                                 FunctionExportKind::Method(name) => {
                                     ExportKind::Method(PyString::intern(py, name).into())
                                 }
-                                FunctionExportKind::Static(Static {
-                                    module,
-                                    protocol,
-                                    name,
-                                }) => ExportKind::Static {
-                                    name: PyString::intern(py, name).into(),
-                                    class: py
-                                        .import(module.as_str())?
-                                        .getattr(protocol.as_str())?
-                                        .into(),
-                                },
+                                FunctionExportKind::Static(Static { scope, name }) => {
+                                    ExportKind::Static {
+                                        name: PyString::intern(py, name).into(),
+                                        class: implementation(scope)?.into(),
+                                    }
+                                }
                             },
                             return_style: export.return_style,
                         })

@@ -859,9 +859,11 @@ const GUEST_CODE: &[(&str, &str)] = &[
     (
         "app.py",
         r#"
-from echoes_generated_test import exports
-from echoes_generated_test.imports import echoes_generated
+from echoes_generated_test.exports.componentize_py import test as exports
+from echoes_generated_test.exports.componentize_py.test import echoes_generated as gen_exports
+from echoes_generated_test.imports.componentize_py.test import echoes_generated
 
+@gen_exports.guest
 class EchoesGenerated(exports.EchoesGenerated):
 {guest_functions}
 "#,

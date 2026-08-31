@@ -19,8 +19,23 @@ pub struct Options {
     #[command(flatten)]
     pub common: Common,
 
+    #[command(flatten)]
+    pub deprecated: Deprecated,
+
     #[command(subcommand)]
     pub command: Command,
+}
+
+/// Options kept only for back-compat; `run` folds them into `Common`.
+#[derive(clap::Args, Clone, Debug)]
+pub struct Deprecated {
+    /// Deprecated: renamed to `--bindings-module`.
+    #[arg(long, hide = true)]
+    pub world_module: Option<String>,
+
+    /// Deprecated and ignored: fully-qualified module names are always used.
+    #[arg(long, hide = true, action = clap::ArgAction::SetTrue)]
+    pub full_names: Option<bool>,
 }
 
 #[derive(clap::Args, Clone, Debug)]
@@ -59,40 +74,36 @@ pub struct Common {
     /// Specify names to use for imported interfaces.  May be specified more
     /// than once.
     ///
-    /// By default, the python module name generated for a given interface will
-    /// be the snake-case form of the WIT interface name, possibly qualified
-    /// with the package name and namespace and/or version if that name would
-    /// otherwise clash with another interface.  With this option, you may
-    /// override that name with your own, unique name.
+    /// By default, the Python module generated for a given interface is nested
+    /// according to the fully-qualified WIT interface name, i.e. the package
+    /// namespace, then the package name plus its (semver-canonical) version,
+    /// then the interface name (e.g. `wit.imports.wasi.http_v0_2.types` for
+    /// `wasi:http/types@0.2.0`).  With this option, you may override that with
+    /// your own, unique name, which may itself be a dotted path (e.g.
+    /// `my_package.my_module`) and is used verbatim. Each component must be a
+    /// valid Python identifier.
     #[arg(long, value_parser = parse_key_value)]
     pub import_interface_name: Vec<(String, String)>,
 
     /// Specify names to use for exported interfaces.  May be specified more
     /// than once.
     ///
-    /// By default, the python module name generated for a given interface will
-    /// be the snake-case form of the WIT interface name, possibly qualified
-    /// with the package name and namespace and/or version if that name would
-    /// otherwise clash with another interface.  With this option, you may
-    /// override that name with your own, unique name.
+    /// By default, the Python module generated for a given interface is nested
+    /// according to the fully-qualified WIT interface name, i.e. the package
+    /// namespace, then the package name plus its (semver-canonical) version,
+    /// then the interface name (e.g. `wit.exports.wasi.http_v0_2.types` for
+    /// `wasi:http/types@0.2.0`).  With this option, you may override that with
+    /// your own, unique name, which may itself be a dotted path (e.g.
+    /// `my_package.my_module`) and is used verbatim. Each component must be a
+    /// valid Python identifier.
     #[arg(long, value_parser = parse_key_value)]
     pub export_interface_name: Vec<(String, String)>,
 
     /// Optional name of top-level module to use for bindings.
     ///
-    /// If this is not specified, the module name will default to "wit_world".
+    /// If this is not specified, the module name will default to "wit".
     #[arg(long)]
-    pub world_module: Option<String>,
-
-    /// When generating Python module names, include the WIT package name and
-    /// version even if only one version of that package is referenced by the
-    /// specified world or only one package uses that name.
-    ///
-    /// By default, the package name and version will only be included in the
-    /// name if the world references more than one version of the WIT package or
-    /// the name is used by more than one package.
-    #[arg(long)]
-    pub full_names: bool,
+    pub bindings_module: Option<String>,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -117,10 +128,9 @@ pub enum Command {
 pub struct Componentize {
     /// The name of a Python module containing the app to wrap.
     ///
-    /// Note that this should not match (any of) the world name(s) you are
-    /// targeting since `componentize-py` will generate code using those
-    /// name(s), and Python doesn't know how to load two top-level modules with
-    /// the same name.
+    /// Note that this should not match the bindings module name (`wit` by
+    /// default, see `--bindings-module`), since Python can't load two
+    /// top-level modules with the same name.
     pub app_name: String,
 
     /// Specify a directory containing the app and/or its dependencies.  May be
@@ -195,6 +205,13 @@ pub struct Bindings {
     ///
     /// This will be created if it does not already exist.
     pub output_dir: PathBuf,
+
+    /// Generate into the bindings module directory even if it already exists.
+    ///
+    /// Nothing is deleted, so bindings from a previous run may be left behind
+    /// alongside the new ones.
+    #[arg(long)]
+    pub allow_existing: bool,
 }
 
 fn parse_key_value(s: &str) -> Result<(String, String), String> {
@@ -205,10 +222,22 @@ fn parse_key_value(s: &str) -> Result<(String, String), String> {
 }
 
 pub fn run<T: Into<OsString> + Clone, I: IntoIterator<Item = T>>(args: I) -> Result<()> {
-    let options = Options::parse_from(args);
-    match options.command {
-        Command::Componentize(opts) => componentize(options.common, opts),
-        Command::Bindings(opts) => generate_bindings(options.common, opts),
+    let Options {
+        mut common,
+        deprecated,
+        command,
+    } = Options::parse_from(args);
+
+    common.bindings_module = crate::resolve_deprecated(
+        common.bindings_module,
+        deprecated.world_module,
+        deprecated.full_names,
+        common.quiet,
+    )?;
+
+    match command {
+        Command::Componentize(opts) => componentize(common, opts),
+        Command::Bindings(opts) => generate_bindings(common, opts),
     }
 }
 
@@ -226,8 +255,9 @@ fn generate_bindings(common: Common, bindings: Bindings) -> Result<()> {
             .map(|v| v.as_str())
             .collect::<Vec<_>>(),
         all_features: common.all_features,
-        world_module: common.world_module.as_deref(),
+        bindings_module: common.bindings_module.as_deref(),
         output_dir: &bindings.output_dir,
+        allow_existing: bindings.allow_existing,
         import_interface_names: &common
             .import_interface_name
             .iter()
@@ -238,7 +268,6 @@ fn generate_bindings(common: Common, bindings: Bindings) -> Result<()> {
             .iter()
             .map(|(a, b)| (a.as_str(), b.as_str()))
             .collect(),
-        full_names: common.full_names,
     }
     .generate()
 }
@@ -269,7 +298,7 @@ fn componentize(common: Common, componentize: Componentize) -> Result<()> {
                 .map(|v| v.as_str())
                 .collect::<Vec<_>>(),
             all_features: common.all_features,
-            world_module: common.world_module.as_deref(),
+            bindings_module: common.bindings_module.as_deref(),
             python_path: &python_path.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
             module_worlds: &componentize
                 .module_worlds
@@ -293,7 +322,6 @@ fn componentize(common: Common, componentize: Componentize) -> Result<()> {
                 .iter()
                 .map(|(a, b)| (a.as_str(), b.as_str()))
                 .collect(),
-            full_names: common.full_names,
             intersect_world: componentize.intersect_world.as_deref(),
         }
         .generate(),
@@ -427,17 +455,14 @@ mod tests {
         let common = Common {
             wit_path: vec![wit.path().into()],
             world: Vec::new(),
-            world_module: Some("bindings".into()),
+            bindings_module: Some("bindings".into()),
             quiet: false,
             features: vec![],
             all_features: false,
             import_interface_name: Vec::new(),
             export_interface_name: Vec::new(),
-            full_names: false,
         };
-        let bindings = Bindings {
-            output_dir: out_dir.path().into(),
-        };
+        let bindings = bindings(out_dir.path());
         generate_bindings(common, bindings)?;
 
         // Then the gated feature doesn't appear
@@ -458,17 +483,14 @@ mod tests {
         let common = Common {
             wit_path: vec![wit.path().into()],
             world: Vec::new(),
-            world_module: Some("bindings".into()),
+            bindings_module: Some("bindings".into()),
             quiet: false,
             features: vec!["x".to_owned()],
             all_features: false,
             import_interface_name: Vec::new(),
             export_interface_name: Vec::new(),
-            full_names: false,
         };
-        let bindings = Bindings {
-            output_dir: out_dir.path().into(),
-        };
+        let bindings = bindings(out_dir.path());
         generate_bindings(common, bindings)?;
 
         // Then the gated feature doesn't appear
@@ -489,17 +511,14 @@ mod tests {
         let common = Common {
             wit_path: vec![wit.path().into()],
             world: Vec::new(),
-            world_module: Some("bindings".into()),
+            bindings_module: Some("bindings".into()),
             quiet: false,
             features: vec![],
             all_features: true,
             import_interface_name: Vec::new(),
             export_interface_name: Vec::new(),
-            full_names: false,
         };
-        let bindings = Bindings {
-            output_dir: out_dir.path().into(),
-        };
+        let bindings = bindings(out_dir.path());
         generate_bindings(common, bindings)?;
 
         // Then the gated feature doesn't appear
@@ -519,17 +538,14 @@ mod tests {
         let common = Common {
             wit_path: vec![wit.path().into()],
             world: Vec::new(),
-            world_module: Some("bindings".into()),
+            bindings_module: Some("bindings".into()),
             quiet: false,
             features: vec!["x".to_owned()],
             all_features: false,
             import_interface_name: Vec::new(),
             export_interface_name: Vec::new(),
-            full_names: false,
         };
-        let bindings = Bindings {
-            output_dir: out_dir.path().into(),
-        };
+        let bindings = bindings(out_dir.path());
         generate_bindings(common.clone(), bindings)?;
         fs::write(
             out_dir.path().join("app.py"),
@@ -537,7 +553,8 @@ mod tests {
 import bindings
 from bindings import x
 
-class Bindings(bindings.Bindings):
+@bindings.guest
+class Bindings(bindings.WorldExports):
     def y(self) -> None:
         x()
 "#,
@@ -582,14 +599,17 @@ world cli-world {
             &app_file,
             br#"
 import cli_world
-from cli_world import exports
-from cli_world.imports import cli_interface
-from lib.wit.imports import lib_interface
+from cli_world.exports.test import cli as exports
+from cli_world.exports.test.cli import cli_interface as cli_iface
+from cli_world.imports.test.cli import cli_interface
+from lib.wit.imports.test.lib import lib_interface
 
-class CliWorld(cli_world.CliWorld):
+@cli_world.guest
+class CliWorld(cli_world.WorldExports):
     def foo(self) -> None:
         pass
 
+@cli_iface.guest
 class CliInterface(exports.CliInterface):
     def foo(self) -> None:
         lib_interface.foo()
@@ -628,30 +648,26 @@ world lib-world {
             Common {
                 wit_path: vec![lib_wit_dir.clone()],
                 world: vec!["test:lib/lib-world".into()],
-                world_module: Some("lib.wit".into()),
+                bindings_module: Some("lib.wit".into()),
                 quiet: false,
                 features: Vec::new(),
                 all_features: false,
                 import_interface_name: Vec::new(),
                 export_interface_name: Vec::new(),
-                full_names: false,
             },
-            Bindings {
-                output_dir: lib_wit_dir,
-            },
+            bindings(lib_wit_dir),
         )?;
 
         componentize(
             Common {
                 wit_path: vec![cli_wit_file],
                 world: vec!["test:cli/cli-world".into(), "test:lib/lib-world".into()],
-                world_module: Some("cli_world".into()),
+                bindings_module: Some("cli_world".into()),
                 quiet: false,
                 features: Vec::new(),
                 all_features: false,
                 import_interface_name: Vec::new(),
                 export_interface_name: Vec::new(),
-                full_names: false,
             },
             Componentize {
                 app_name: "app".into(),
@@ -667,5 +683,734 @@ world lib-world {
                 intersect_world: None,
             },
         )
+    }
+
+    fn bindings(output_dir: impl Into<PathBuf>) -> Bindings {
+        Bindings {
+            output_dir: output_dir.into(),
+            allow_existing: false,
+        }
+    }
+
+    fn common(wit_path: PathBuf, world: &str) -> Common {
+        Common {
+            wit_path: vec![wit_path],
+            world: vec![world.to_owned()],
+            bindings_module: None,
+            quiet: false,
+            features: vec![],
+            all_features: false,
+            import_interface_name: Vec::new(),
+            export_interface_name: Vec::new(),
+        }
+    }
+
+    fn bindings_error(dir: &tempfile::TempDir, wit: &str, world: &str) -> String {
+        let wit_file = dir.path().join("test.wit");
+        fs::write(&wit_file, wit).unwrap();
+        let out_dir = dir.path().join("out");
+        fs::create_dir(&out_dir).unwrap();
+
+        format!(
+            "{:?}",
+            generate_bindings(common(wit_file, world), bindings(out_dir),)
+                .expect_err("bindings generation should fail")
+        )
+    }
+
+    #[test]
+    fn function_named_guest_in_exported_interface_is_allowed() -> Result<()> {
+        // Exported functions become ABC methods and cannot clash with `guest`.
+        let dir = tempfile::tempdir()?;
+        let wit_file = dir.path().join("test.wit");
+        fs::write(
+            &wit_file,
+            r#"
+package my:root;
+world w {
+    export bad: interface {
+        guest: func();
+    }
+}
+"#,
+        )?;
+        let out_dir = dir.path().join("out");
+        fs::create_dir(&out_dir)?;
+
+        generate_bindings(common(wit_file, "w"), bindings(out_dir))
+    }
+
+    #[test]
+    fn reserved_guest_name_as_world_import() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let error = bindings_error(
+            &dir,
+            r#"
+package my:root;
+world w {
+    import guest: func();
+    export f: func();
+}
+"#,
+            "w",
+        );
+
+        assert!(error.contains("reserved `guest` decorator"), "{error}");
+
+        Ok(())
+    }
+
+    #[test]
+    fn conflicting_interface_name_overrides() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let wit_file = dir.path().join("test.wit");
+        fs::write(
+            &wit_file,
+            r#"
+package my:root;
+interface a { f: func(); }
+interface b { g: func(); }
+world w {
+    import a;
+    import b;
+}
+"#,
+        )?;
+        let out_dir = dir.path().join("out");
+        fs::create_dir(&out_dir)?;
+
+        let mut common = common(wit_file, "w");
+        common.import_interface_name = vec![
+            ("my:root/a".to_owned(), "dup".to_owned()),
+            ("my:root/b".to_owned(), "dup".to_owned()),
+        ];
+
+        let error = format!(
+            "{:?}",
+            generate_bindings(common, bindings(out_dir),)
+                .expect_err("bindings generation should fail")
+        );
+
+        assert!(error.contains("map to the module alias `dup`"), "{error}");
+
+        Ok(())
+    }
+
+    #[test]
+    fn interface_module_shadowed_by_package() -> Result<()> {
+        // `foo` would be both `imports/foo.py` and package `imports/foo/`.
+        let dir = tempfile::tempdir()?;
+        fs::create_dir_all(dir.path().join("wit/deps/dep"))?;
+        fs::write(
+            dir.path().join("wit/root.wit"),
+            r#"
+package my:root;
+world w {
+    import foo: interface { f: func(); }
+    import foo:bar/baz;
+}
+"#,
+        )?;
+        fs::write(
+            dir.path().join("wit/deps/dep/dep.wit"),
+            r#"
+package foo:bar;
+interface baz { g: func(); }
+"#,
+        )?;
+        let out_dir = dir.path().join("out");
+        fs::create_dir(&out_dir)?;
+
+        let error = format!(
+            "{:?}",
+            generate_bindings(common(dir.path().join("wit"), "w"), bindings(out_dir),)
+                .expect_err("bindings generation should fail")
+        );
+
+        assert!(
+            error.contains("would be shadowed by the package"),
+            "{error}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn canonical_version_collision_fallback() -> Result<()> {
+        // Same canonical version (`v0-1`) twice: fall back to full versions.
+        let dir = tempfile::tempdir()?;
+        fs::create_dir_all(dir.path().join("wit/deps/a"))?;
+        fs::create_dir_all(dir.path().join("wit/deps/b"))?;
+        fs::write(
+            dir.path().join("wit/root.wit"),
+            r#"
+package my:root;
+world w {
+    import foo:bar/baz@0.1.1;
+    import foo:bar/baz@0.1.2;
+}
+"#,
+        )?;
+        fs::write(
+            dir.path().join("wit/deps/a/a.wit"),
+            "package foo:bar@0.1.1;\ninterface baz { f: func(); }",
+        )?;
+        fs::write(
+            dir.path().join("wit/deps/b/b.wit"),
+            "package foo:bar@0.1.2;\ninterface baz { g: func(); }",
+        )?;
+        let out_dir = dir.path().join("out");
+        fs::create_dir(&out_dir)?;
+
+        generate_bindings(
+            common(dir.path().join("wit"), "w"),
+            bindings(out_dir.clone()),
+        )?;
+
+        assert!(out_dir.join("wit/imports/foo/bar_v0_1_1/baz.py").is_file());
+        assert!(out_dir.join("wit/imports/foo/bar_v0_1_2/baz.py").is_file());
+
+        Ok(())
+    }
+
+    #[test]
+    fn dotted_interface_name_override() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let wit_file = dir.path().join("test.wit");
+        fs::write(
+            &wit_file,
+            r#"
+package my:root;
+interface a { f: func(); }
+world w {
+    import a;
+}
+"#,
+        )?;
+        let out_dir = dir.path().join("out");
+        fs::create_dir(&out_dir)?;
+
+        let mut common = common(wit_file, "w");
+        common.import_interface_name =
+            vec![("my:root/a".to_owned(), "my_pkg.my_module".to_owned())];
+
+        generate_bindings(common, bindings(out_dir.clone()))?;
+
+        assert!(out_dir.join("wit/imports/my_pkg/my_module.py").is_file());
+
+        Ok(())
+    }
+
+    #[test]
+    fn dotted_bindings_module() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let wit_file = dir.path().join("test.wit");
+        fs::write(
+            &wit_file,
+            r#"
+package my:root;
+world w {
+    export f: func();
+}
+"#,
+        )?;
+        let out_dir = dir.path().join("out");
+        fs::create_dir(&out_dir)?;
+
+        let mut common = common(wit_file, "w");
+        common.bindings_module = Some("my.pkg".into());
+
+        generate_bindings(common, bindings(out_dir.clone()))?;
+
+        assert!(out_dir.join("my/__init__.py").is_file());
+        assert!(out_dir.join("my/pkg/__init__.py").is_file());
+        let generated = fs::read_to_string(out_dir.join("my/pkg/__init__.py"))?;
+        assert!(generated.contains("guest ="), "{generated}");
+
+        Ok(())
+    }
+
+    #[test]
+    fn helper_placeholders_follow_the_generated_paths() -> Result<()> {
+        // Both the module and the interface paths come from what was generated.
+        let dir = tempfile::tempdir()?;
+        let out_dir = dir.path().join("out");
+        fs::create_dir(&out_dir)?;
+
+        let mut common = common("wit".into(), "wasi:http/proxy@0.2.0");
+        common.bindings_module = Some("my.pkg".into());
+
+        generate_bindings(common, bindings(out_dir.clone()))?;
+
+        let generated = fs::read_to_string(out_dir.join("poll_loop.py"))?;
+        for expected in [
+            "import my.pkg.imports.wasi.http_v0_2.types as types",
+            "import my.pkg.imports.wasi.io_v0_2.poll as poll",
+            "from my.pkg.imports.wasi.io_v0_2.streams import StreamError_Closed, InputStream",
+        ] {
+            assert!(generated.contains(expected), "{generated}");
+        }
+        assert!(!generated.contains("WASI_HTTP_TYPES_MODULE"), "{generated}");
+
+        Ok(())
+    }
+
+    #[test]
+    fn helper_placeholders_kept_when_interfaces_are_absent() -> Result<()> {
+        // Nothing to point the helpers at, so leave the names greppable.
+        let dir = tempfile::tempdir()?;
+        let wit_file = dir.path().join("test.wit");
+        fs::write(
+            &wit_file,
+            r#"
+package my:root;
+world w {
+    export f: func();
+}
+"#,
+        )?;
+        let out_dir = dir.path().join("out");
+        fs::create_dir(&out_dir)?;
+
+        generate_bindings(common(wit_file, "w"), bindings(out_dir.clone()))?;
+
+        let generated = fs::read_to_string(out_dir.join("poll_loop.py"))?;
+        assert!(
+            generated.contains("import WASI_HTTP_TYPES_MODULE as types"),
+            "{generated}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn export_resource_classvar_uses_export_side() -> Result<()> {
+        // The resource `ClassVar` must reference the export-side class.
+        let dir = tempfile::tempdir()?;
+        let wit_file = dir.path().join("test.wit");
+        fs::write(
+            &wit_file,
+            r#"
+package my:root;
+interface i {
+    resource r {
+        constructor();
+    }
+    f: func(v: r);
+}
+world w {
+    import i;
+    export i;
+}
+"#,
+        )?;
+        let out_dir = dir.path().join("out");
+        fs::create_dir(&out_dir)?;
+
+        generate_bindings(common(wit_file, "w"), bindings(out_dir.clone()))?;
+
+        let generated = fs::read_to_string(out_dir.join("wit/exports/my/root/__init__.py"))?;
+        assert!(
+            generated.contains("from .i import R as _my_root_i_r"),
+            "{generated}"
+        );
+        assert!(
+            generated.contains("r: ClassVar[type[_my_root_i_r]]"),
+            "{generated}"
+        );
+        // Packages expose their own submodules.
+        assert!(generated.contains("from . import i"), "{generated}");
+
+        Ok(())
+    }
+
+    #[test]
+    fn cross_direction_alias_collision() -> Result<()> {
+        // Flat aliases share one namespace across directions.
+        let dir = tempfile::tempdir()?;
+        let error = bindings_error(
+            &dir,
+            r#"
+package my:root;
+interface b { g: func(); }
+world w {
+    import b;
+    export my-root-b: interface {
+        f: func();
+    }
+}
+"#,
+            "w",
+        );
+
+        assert!(error.contains("module alias `my_root_b`"), "{error}");
+
+        Ok(())
+    }
+
+    #[test]
+    fn reserved_world_exports_name() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let error = bindings_error(
+            &dir,
+            r#"
+package my:root;
+interface x {
+    record world-exports { x: u32 }
+}
+world w {
+    use x.{world-exports};
+    export f: func(v: world-exports);
+}
+"#,
+            "w",
+        );
+
+        assert!(error.contains("reserved `WorldExports` class"), "{error}");
+
+        Ok(())
+    }
+
+    #[test]
+    fn cross_direction_version_fallback() -> Result<()> {
+        // Cross-direction canonical ties fall back instead of erroring.
+        let dir = tempfile::tempdir()?;
+        fs::create_dir_all(dir.path().join("wit/deps/a"))?;
+        fs::create_dir_all(dir.path().join("wit/deps/b"))?;
+        fs::write(
+            dir.path().join("wit/root.wit"),
+            r#"
+package my:root;
+world w {
+    import foo:bar/baz@0.1.1;
+    export foo:bar/baz@0.1.2;
+}
+"#,
+        )?;
+        fs::write(
+            dir.path().join("wit/deps/a/a.wit"),
+            "package foo:bar@0.1.1;\ninterface baz { f: func(); }",
+        )?;
+        fs::write(
+            dir.path().join("wit/deps/b/b.wit"),
+            "package foo:bar@0.1.2;\ninterface baz { g: func(); }",
+        )?;
+        let out_dir = dir.path().join("out");
+        fs::create_dir(&out_dir)?;
+
+        generate_bindings(
+            common(dir.path().join("wit"), "w"),
+            bindings(out_dir.clone()),
+        )?;
+
+        assert!(out_dir.join("wit/imports/foo/bar_v0_1_1/baz.py").is_file());
+        assert!(out_dir.join("wit/exports/foo/bar_v0_1_2/baz.py").is_file());
+
+        Ok(())
+    }
+
+    #[test]
+    fn reserved_guest_name_as_interface_alias() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let error = bindings_error(
+            &dir,
+            r#"
+package my:root;
+world w {
+    import guest: interface {
+        f: func();
+    }
+}
+"#,
+            "w",
+        );
+
+        assert!(error.contains("reserved `guest` decorator"), "{error}");
+
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_interface_name_override() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let wit_file = dir.path().join("test.wit");
+        fs::write(
+            &wit_file,
+            r#"
+package my:root;
+interface a { f: func(); }
+world w {
+    import a;
+}
+"#,
+        )?;
+        let out_dir = dir.path().join("out");
+        fs::create_dir(&out_dir)?;
+
+        let mut common = common(wit_file, "w");
+        common.import_interface_name = vec![("my:root/a".to_owned(), "1foo".to_owned())];
+
+        let error = format!(
+            "{:?}",
+            generate_bindings(common, bindings(out_dir),)
+                .expect_err("bindings generation should fail")
+        );
+
+        assert!(error.contains("not a valid Python identifier"), "{error}");
+
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_bindings_module() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let wit_file = dir.path().join("test.wit");
+        fs::write(
+            &wit_file,
+            r#"
+package my:root;
+world w {
+    export f: func();
+}
+"#,
+        )?;
+        let out_dir = dir.path().join("out");
+        fs::create_dir(&out_dir)?;
+
+        let mut common = common(wit_file, "w");
+        common.bindings_module = Some("my-module".into());
+
+        let error = format!(
+            "{:?}",
+            generate_bindings(common, bindings(out_dir),)
+                .expect_err("bindings generation should fail")
+        );
+
+        assert!(error.contains("not a valid Python module path"), "{error}");
+
+        Ok(())
+    }
+
+    #[test]
+    fn exported_interface_named_after_bindings_module() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let error = bindings_error(
+            &dir,
+            r#"
+package my:root;
+world w {
+    export wit: interface {
+        f: func();
+    }
+}
+"#,
+            "w",
+        );
+
+        assert!(
+            error.contains("collides with the bindings module name"),
+            "{error}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn world_level_export_named_guest_is_allowed() -> Result<()> {
+        // Only world-level *imports* clash with the root `guest` decorator.
+        let dir = tempfile::tempdir()?;
+        let wit_file = dir.path().join("test.wit");
+        fs::write(
+            &wit_file,
+            r#"
+package my:root;
+world w {
+    export guest: func();
+}
+"#,
+        )?;
+        let out_dir = dir.path().join("out");
+        fs::create_dir(&out_dir)?;
+
+        generate_bindings(common(wit_file, "w"), bindings(out_dir))
+    }
+
+    #[test]
+    fn keyword_bindings_module() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let wit_file = dir.path().join("test.wit");
+        fs::write(&wit_file, "package my:root;\nworld w { export f: func(); }")?;
+        let out_dir = dir.path().join("out");
+        fs::create_dir(&out_dir)?;
+
+        let mut common = common(wit_file, "w");
+        common.bindings_module = Some("class".into());
+
+        let error = format!(
+            "{:?}",
+            generate_bindings(common, bindings(out_dir),)
+                .expect_err("bindings generation should fail")
+        );
+
+        assert!(error.contains("not a valid Python module path"), "{error}");
+
+        Ok(())
+    }
+
+    #[test]
+    fn refuses_to_write_into_existing_directory() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        fs::create_dir(dir.path().join("wit"))?;
+        fs::write(
+            dir.path().join("wit/app.wit"),
+            "package my:root;\nworld w { export f: func(); }",
+        )?;
+
+        let error = format!(
+            "{:?}",
+            generate_bindings(common(dir.path().join("wit"), "w"), bindings(dir.path()))
+                .expect_err("bindings generation should fail")
+        );
+
+        assert!(error.contains("already exists"), "{error}");
+        // Nothing was touched.
+        assert!(dir.path().join("wit/app.wit").is_file());
+
+        Ok(())
+    }
+
+    #[test]
+    fn override_used_verbatim() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let wit_file = dir.path().join("test.wit");
+        fs::write(
+            &wit_file,
+            "package my:root;\ninterface a { f: func(); }\nworld w { import a; }",
+        )?;
+        let out_dir = dir.path().join("out");
+        fs::create_dir(&out_dir)?;
+
+        let mut common = common(wit_file, "w");
+        common.import_interface_name = vec![("my:root/a".to_owned(), "myPkg.myModule".to_owned())];
+
+        generate_bindings(common, bindings(out_dir.clone()))?;
+
+        assert!(out_dir.join("wit/imports/myPkg/myModule.py").is_file());
+
+        Ok(())
+    }
+
+    #[test]
+    fn rerun_into_same_directory() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let wit_file = dir.path().join("test.wit");
+        fs::write(
+            &wit_file,
+            "package my:root;\ninterface a { f: func(); }\nworld w { import a; export a; }",
+        )?;
+        let out_dir = dir.path().join("out");
+        fs::create_dir(&out_dir)?;
+
+        generate_bindings(common(wit_file.clone(), "w"), bindings(out_dir.clone()))?;
+
+        // Rename the interface and regenerate into the same directory.
+        fs::write(
+            &wit_file,
+            "package my:root;\ninterface b { f: func(); }\nworld w { import b; export b; }",
+        )?;
+        generate_bindings(
+            common(wit_file, "w"),
+            Bindings {
+                output_dir: out_dir.clone(),
+                allow_existing: true,
+            },
+        )?;
+
+        // No duplicate submodule imports.  The renamed module is left behind,
+        // which is why `--allow-existing` has to be asked for.
+        let generated = fs::read_to_string(out_dir.join("wit/imports/my/__init__.py"))?;
+        assert_eq!(
+            1,
+            generated.matches("from . import root").count(),
+            "{generated}"
+        );
+        assert!(out_dir.join("wit/imports/my/root/a.py").is_file());
+        assert!(out_dir.join("wit/imports/my/root/b.py").is_file());
+
+        Ok(())
+    }
+
+    #[test]
+    fn allow_existing_writes_alongside_wit_sources() -> Result<()> {
+        // A WIT directory may legitimately hold generated Python too.
+        let dir = tempfile::tempdir()?;
+        let wit_file = dir.path().join("test.wit");
+        fs::write(&wit_file, "package my:root;\nworld w { export f: func(); }")?;
+        let out_dir = dir.path().join("out");
+        fs::create_dir_all(out_dir.join("wit/deps/dep"))?;
+        fs::write(
+            out_dir.join("wit/deps/dep/dep.wit"),
+            "package other:dep;\ninterface x { f: func(); }",
+        )?;
+
+        generate_bindings(
+            common(wit_file, "w"),
+            Bindings {
+                output_dir: out_dir.clone(),
+                allow_existing: true,
+            },
+        )?;
+
+        assert!(out_dir.join("wit/__init__.py").is_file());
+        assert!(out_dir.join("wit/deps/dep/dep.wit").is_file());
+
+        Ok(())
+    }
+
+    #[test]
+    fn world_import_named_exports_is_usable() -> Result<()> {
+        // The import shadows the subpackage attribute, not vice versa.
+        let dir = tempfile::tempdir()?;
+        let wit_file = dir.path().join("test.wit");
+        fs::write(
+            &wit_file,
+            "package my:root;\ninterface i { g: func(); }\nworld w { import exports: func(); import i; export i; }",
+        )?;
+        let out_dir = dir.path().join("out");
+        fs::create_dir(&out_dir)?;
+
+        generate_bindings(common(wit_file, "w"), bindings(out_dir.clone()))?;
+
+        let generated = fs::read_to_string(out_dir.join("wit/__init__.py"))?;
+        let bind = generated.find("from . import exports").unwrap();
+        let def = generated.find("def exports").unwrap();
+        assert!(bind < def, "{generated}");
+
+        Ok(())
+    }
+
+    #[test]
+    fn camel_case_export_override_rejected() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let wit_file = dir.path().join("test.wit");
+        fs::write(
+            &wit_file,
+            "package my:root;\ninterface a { f: func(); }\nworld w { export a; }",
+        )?;
+        let out_dir = dir.path().join("out");
+        fs::create_dir(&out_dir)?;
+
+        let mut common = common(wit_file, "w");
+        common.export_interface_name = vec![("my:root/a".to_owned(), "Foo".to_owned())];
+
+        let error = format!(
+            "{:?}",
+            generate_bindings(common, bindings(out_dir),)
+                .expect_err("bindings generation should fail")
+        );
+
+        assert!(error.contains("abstract base class"), "{error}");
+
+        Ok(())
     }
 }

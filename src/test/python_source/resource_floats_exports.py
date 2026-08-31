@@ -12,3 +12,7 @@ class Float(resource_floats_exports.Float):
     @staticmethod
     def add(a: Self, b: float) -> Self:
         return Float(HostFloat.add(a.value, b).get() + 5)
+
+@resource_floats_exports.guest
+class ResourceFloatsExports:
+    float = Float

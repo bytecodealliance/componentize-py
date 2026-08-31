@@ -1,5 +1,5 @@
-from tests.exports import resource_import_and_export
-from tests.imports.resource_import_and_export import Thing as HostThing
+from tests.exports.componentize_py.test import resource_import_and_export
+from tests.imports.componentize_py.test.resource_import_and_export import Thing as HostThing
 from typing import Self
 
 class Thing(resource_import_and_export.Thing):

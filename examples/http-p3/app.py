@@ -8,15 +8,15 @@ to thread I/O through coroutines.
 import asyncio
 import hashlib
 import componentize_py_async_support
-import wit_world
+import wit
 
 from typing import Optional
 from componentize_py_types import Ok, Result
 from componentize_py_async_support.streams import ByteStreamWriter
 from componentize_py_async_support.futures import FutureReader
-from wit_world import exports
-from wit_world.imports import client
-from wit_world.imports.wasi_http_types import (
+from wit.exports.wasi.http_v0_3 import handler, Handler
+from wit.imports.wasi.http_v0_3 import client
+from wit.imports.wasi.http_v0_3.types import (
     Method_Get,
     Method_Post,
     Scheme,
@@ -31,7 +31,8 @@ from wit_world.imports.wasi_http_types import (
 from urllib import parse
 
 
-class Handler(exports.Handler):
+@handler.guest
+class HttpHandler(Handler):
     """Implements the `export`ed portion of the `wasi-http` `proxy` world."""
 
     async def handle(self, request: Request) -> Response:
@@ -52,7 +53,7 @@ class Handler(exports.Handler):
                 filter(lambda pair: pair[0] == "url", headers),
             ))
 
-            tx, rx = wit_world.byte_stream()
+            tx, rx = wit.byte_stream()
             componentize_py_async_support.spawn(hash_all(urls, tx))
 
             return Response.new(
@@ -127,8 +128,8 @@ async def sha256(url: str) -> tuple[str, str]:
 
 
 def trailers_future() -> FutureReader[Result[Optional[Fields], ErrorCode]]:
-    return wit_world.result_option_wasi_http_types_fields_wasi_http_types_error_code_future(lambda: Ok(None))[1]
+    return wit.result_option_wasi_http_v0_3_types_fields_wasi_http_v0_3_types_error_code_future(lambda: Ok(None))[1]
 
 
 def unit_future() -> FutureReader[Result[None, ErrorCode]]:
-    return wit_world.result_unit_wasi_http_types_error_code_future(lambda: Ok(None))[1]
+    return wit.result_unit_wasi_http_v0_3_types_error_code_future(lambda: Ok(None))[1]

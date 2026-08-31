@@ -10,9 +10,9 @@ import hashlib
 import poll_loop
 
 from componentize_py_types import Ok
-from wit_world import exports
-from wit_world.imports import types
-from wit_world.imports.types import (
+from wit.exports.wasi.http_v0_2 import incoming_handler, IncomingHandler
+from wit.imports.wasi.http_v0_2 import types
+from wit.imports.wasi.http_v0_2.types import (
     Method_Get,
     Method_Post,
     Scheme,
@@ -31,7 +31,8 @@ from typing import Tuple
 from urllib import parse
 
 
-class IncomingHandler(exports.IncomingHandler):
+@incoming_handler.guest
+class Handler(IncomingHandler):
     """Implements the `export`ed portion of the `wasi-http` `proxy` world."""
 
     def handle(self, request: IncomingRequest, response_out: ResponseOutparam) -> None:

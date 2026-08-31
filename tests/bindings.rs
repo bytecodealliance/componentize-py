@@ -22,7 +22,7 @@ fn lint_cli_bindings() -> anyhow::Result<()> {
 
     generate_bindings(&path, "wasi:cli/command@0.2.0")?;
 
-    assert!(predicate::path::is_dir().eval(&path.join("wit_world")));
+    assert!(predicate::path::is_dir().eval(&path.join("wit")));
 
     mypy_check(&path, ["--strict", "-m", "app"]);
 
@@ -41,7 +41,7 @@ fn lint_cli_p3_bindings() -> anyhow::Result<()> {
 
     generate_bindings(&path, "wasi:cli/command@0.3.0")?;
 
-    assert!(predicate::path::is_dir().eval(&path.join("wit_world")));
+    assert!(predicate::path::is_dir().eval(&path.join("wit")));
 
     _ = dir.keep();
 
@@ -65,7 +65,7 @@ fn lint_http_bindings() -> anyhow::Result<()> {
     // poll_loop.py has many errors that might not be worth adjusting at the moment, so ignore for now
     fs::remove_file(path.join("poll_loop.py")).unwrap();
 
-    assert!(predicate::path::is_dir().eval(&path.join("wit_world")));
+    assert!(predicate::path::is_dir().eval(&path.join("wit")));
 
     mypy_check(
         &path,
@@ -93,7 +93,7 @@ fn lint_http_p3_bindings() -> anyhow::Result<()> {
 
     generate_bindings(&path, "wasi:http/service@0.3.0")?;
 
-    assert!(predicate::path::is_dir().eval(&path.join("wit_world")));
+    assert!(predicate::path::is_dir().eval(&path.join("wit")));
 
     _ = dir.keep();
 
@@ -116,7 +116,7 @@ fn lint_matrix_math_bindings() -> anyhow::Result<()> {
 
     generate_bindings(&path, "matrix-math")?;
 
-    assert!(predicate::path::is_dir().eval(&path.join("wit_world")));
+    assert!(predicate::path::is_dir().eval(&path.join("wit")));
 
     mypy_check(
         &path,
@@ -145,7 +145,7 @@ fn lint_sandbox_bindings() -> anyhow::Result<()> {
         .assert()
         .success();
 
-    assert!(predicate::path::is_dir().eval(&path.join("wit_world")));
+    assert!(predicate::path::is_dir().eval(&path.join("wit")));
 
     mypy_check(&path, ["--strict", "-m", "guest"]);
 
@@ -164,7 +164,7 @@ fn lint_tcp_bindings() -> anyhow::Result<()> {
 
     generate_bindings(&path, "wasi:cli/command@0.2.0")?;
 
-    assert!(predicate::path::is_dir().eval(&path.join("wit_world")));
+    assert!(predicate::path::is_dir().eval(&path.join("wit")));
 
     mypy_check(&path, ["--strict", "-m", "app"]);
 
@@ -183,7 +183,7 @@ fn lint_tcp_p3_bindings() -> anyhow::Result<()> {
 
     generate_bindings(&path, "wasi:cli/command@0.3.0")?;
 
-    assert!(predicate::path::is_dir().eval(&path.join("wit_world")));
+    assert!(predicate::path::is_dir().eval(&path.join("wit")));
 
     mypy_check(&path, ["--strict", "-m", "app"]);
 
@@ -219,7 +219,7 @@ world example {
         .assert()
         .success();
 
-    assert!(predicate::path::is_dir().eval(&dir.path().join("wit_world")));
+    assert!(predicate::path::is_dir().eval(&dir.path().join("wit")));
 
     Command::new("python3")
         .current_dir(dir.path())

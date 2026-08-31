@@ -11,15 +11,20 @@ import socket
 import subprocess
 
 from componentize_py_types import Ok, Err
-from wit_world.imports import types, streams, poll, outgoing_handler
-from wit_world.imports.types import (
+
+# Placeholders replaced at build time; see `HELPER_INTERFACES` in summary.rs.
+import WASI_HTTP_TYPES_MODULE as types
+import WASI_HTTP_OUTGOING_HANDLER_MODULE as outgoing_handler
+import WASI_IO_STREAMS_MODULE as streams
+import WASI_IO_POLL_MODULE as poll
+from WASI_HTTP_TYPES_MODULE import (
     IncomingBody,
     OutgoingBody,
     OutgoingRequest,
     IncomingResponse,
 )
-from wit_world.imports.streams import StreamError_Closed, InputStream
-from wit_world.imports.poll import Pollable
+from WASI_IO_STREAMS_MODULE import StreamError_Closed, InputStream
+from WASI_IO_POLL_MODULE import Pollable
 from typing import Optional, cast
 
 # Maximum number of bytes to read at a time
