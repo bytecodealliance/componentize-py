@@ -26,7 +26,12 @@ pub fn link_stub_modules(libraries: Vec<Library>) -> Result<LinkedStubModules, E
         linker.library(name, module, *dl_openable)?;
     }
 
-    for (module, imports) in &wasi_imports {
+    // Sorted: `HashMap` iteration order differs per process, and the adapter modules are emitted
+    // straight into the component, so two runs over the same inputs would otherwise produce
+    // different (permuted) bytes.
+    let mut sorted_imports: Vec<_> = wasi_imports.iter().collect();
+    sorted_imports.sort_by_key(|(module, _)| *module);
+    for (module, imports) in sorted_imports {
         linker
             .encoder()
             .adapter(module, &make_stub_adapter(module, imports))?;
@@ -118,7 +123,11 @@ fn make_stub_adapter(_module: &str, stubs: &HashMap<&str, FuncType>) -> Vec<u8> 
 
     use wasm_encoder::reencode::{Reencode, RoundtripReencoder as R};
 
-    for (index, (name, ty)) in stubs.iter().enumerate() {
+    // Sorted for the same reason as the adapter loop in `link_stub_modules`: the function order
+    // inside each stub module must not depend on `HashMap` iteration order.
+    let mut sorted_stubs: Vec<_> = stubs.iter().collect();
+    sorted_stubs.sort_by_key(|(name, _)| *name);
+    for (index, (name, ty)) in sorted_stubs.into_iter().enumerate() {
         let index = u32::try_from(index).unwrap();
         types.ty().function(
             ty.params().iter().map(|&v| R.val_type(v).unwrap()),
