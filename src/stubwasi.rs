@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use anyhow::{Error, bail};
 use wasm_encoder::{
@@ -12,7 +12,7 @@ use crate::Library;
 type LinkedStubModules = Option<(Vec<u8>, Box<dyn Fn(u32) -> u32>)>;
 
 pub fn link_stub_modules(libraries: Vec<Library>) -> Result<LinkedStubModules, Error> {
-    let mut wasi_imports = HashMap::new();
+    let mut wasi_imports = BTreeMap::new();
     let mut linker = wit_component::Linker::default();
     linker.use_built_in_libdl(true).encoder().validate(true);
 
@@ -69,7 +69,7 @@ pub fn link_stub_modules(libraries: Vec<Library>) -> Result<LinkedStubModules, E
 
 fn add_wasi_imports<'a>(
     module: &'a [u8],
-    imports: &mut HashMap<&'a str, HashMap<&'a str, FuncType>>,
+    imports: &mut BTreeMap<&'a str, BTreeMap<&'a str, FuncType>>,
 ) -> Result<(), Error> {
     let mut types = Vec::new();
     for payload in Parser::new(0).parse_all(module) {
@@ -110,7 +110,7 @@ fn add_wasi_imports<'a>(
     Ok(())
 }
 
-fn make_stub_adapter(_module: &str, stubs: &HashMap<&str, FuncType>) -> Vec<u8> {
+fn make_stub_adapter(_module: &str, stubs: &BTreeMap<&str, FuncType>) -> Vec<u8> {
     let mut types = TypeSection::new();
     let mut functions = FunctionSection::new();
     let mut exports = ExportSection::new();
@@ -139,4 +139,33 @@ fn make_stub_adapter(_module: &str, stubs: &HashMap<&str, FuncType>) -> Vec<u8> 
     module.section(&code);
 
     module.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wasmparser::ValType;
+
+    #[test]
+    fn stub_adapter_exports_are_lexically_ordered() -> Result<(), Error> {
+        let mut stubs = BTreeMap::new();
+        stubs.insert("zeta", FuncType::new([ValType::I32], []));
+        stubs.insert("alpha", FuncType::new([], [ValType::I64]));
+
+        let adapter = make_stub_adapter("wasi:test/example", &stubs);
+        let mut exports = Vec::new();
+        for payload in Parser::new(0).parse_all(&adapter) {
+            if let Payload::ExportSection(reader) = payload? {
+                exports.extend(
+                    reader
+                        .into_iter()
+                        .map(|export| export.map(|export| export.name.to_owned()))
+                        .collect::<Result<Vec<_>, _>>()?,
+                );
+            }
+        }
+
+        assert_eq!(exports, ["alpha", "zeta"]);
+        Ok(())
+    }
 }
