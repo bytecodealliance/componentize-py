@@ -29,7 +29,7 @@ class FutureReader(Generic[T]):
 
         """
         self.type_ = type_
-        self.handle: int | None = handle
+        self.handle: int = handle
         self.finalizer = weakref.finalize(self, componentize_py_runtime.future_drop_readable, type_, handle)
 
     async def read(self) -> T:
@@ -45,8 +45,8 @@ class FutureReader(Generic[T]):
         
         self.finalizer.detach()
         handle = self.handle
-        self.handle = None
-        if handle is not None:
+        self.handle = 0
+        if handle != 0:
             result = await componentize_py_async_support.await_result(
                 componentize_py_runtime.future_read(self.type_, handle)
             )
@@ -62,10 +62,10 @@ class FutureReader(Generic[T]):
                  exc_type: type[BaseException] | None,
                  exc_value: BaseException | None,
                  traceback: TracebackType | None) -> bool | None:
-        if self.handle is not None:
+        if self.handle != 0:
             self.finalizer.detach()
             handle = self.handle
-            self.handle = None
+            self.handle = 0
             componentize_py_runtime.future_drop_readable(self.type_, handle)
 
         return None
@@ -100,7 +100,7 @@ class FutureWriter(Generic[T]):
 
         """
         self.type_ = type_
-        self.handle: int | None = handle
+        self.handle: int = handle
         self.default = default
         self.finalizer = weakref.finalize(self, _write_default, type_, handle, default)
 
@@ -117,8 +117,8 @@ class FutureWriter(Generic[T]):
         """
         self.finalizer.detach()
         handle = self.handle
-        self.handle = None
-        if handle is not None:
+        self.handle = 0
+        if handle != 0:
             code, _ = await componentize_py_async_support.await_result(
                 componentize_py_runtime.future_write(self.type_, handle, value)
             )
@@ -143,7 +143,7 @@ class FutureWriter(Generic[T]):
                  exc_type: type[BaseException] | None,
                  exc_value: BaseException | None,
                  traceback: TracebackType | None) -> bool | None:
-        if self.handle is not None:
+        if self.handle != 0:
             componentize_py_async_support.spawn(self.write(self.default()))
 
         return None

@@ -217,6 +217,18 @@ world tests {
 
   export test-refcounts: func();
 
+  export trap-on-empty-resource: func(thing: thing);
+
+  import take-thing: func(thing: thing);
+
+  export trap-on-empty-future: func();
+
+  import take-future: func(v: future);
+  
+  export trap-on-empty-stream: func();
+
+  import take-stream: func(v: stream);
+
   record frame {
     id: s32,
   }

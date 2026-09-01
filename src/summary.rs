@@ -1941,7 +1941,7 @@ class {camel}(Flag):
                                             "{enter}
     def __exit__(self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None) -> bool | None:
         {docs}(_, func, args, _) = self.finalizer.detach()
-        self.handle = None
+        self.handle = 0
         func(args[0], args[1])
 "
                                         )

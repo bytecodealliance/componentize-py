@@ -28,7 +28,7 @@ class ByteStreamReader:
         """
         self.writer_dropped = False
         self.type_ = type_
-        self.handle: int | None = handle
+        self.handle: int = handle
         self.finalizer = weakref.finalize(self, componentize_py_runtime.stream_drop_readable, type_, handle)
 
     async def read(self, max_count: int) -> bytes:
@@ -48,7 +48,7 @@ class ByteStreamReader:
             return bytes()
         
         handle = self.handle
-        self.handle = None
+        self.handle = 0
         code, values = await self._read(max_count, handle)
         self.handle = handle
 
@@ -57,8 +57,8 @@ class ByteStreamReader:
         
         return values
         
-    async def _read(self, max_count: int, handle: int | None) -> tuple[int, bytes]:
-        if handle is not None:
+    async def _read(self, max_count: int, handle: int) -> tuple[int, bytes]:
+        if handle != 0:
             return cast(tuple[int, bytes], await componentize_py_async_support.await_result(
                 componentize_py_runtime.stream_read(self.type_, handle, max_count)
             ))
@@ -74,8 +74,8 @@ class ByteStreamReader:
                  traceback: TracebackType | None) -> bool | None:
         self.finalizer.detach()
         handle = self.handle
-        self.handle = None
-        if handle is not None:
+        self.handle = 0
+        if handle != 0:
             componentize_py_runtime.stream_drop_readable(self.type_, handle)
         return None
 
@@ -101,7 +101,7 @@ class ByteStreamWriter:
         """
         self.reader_dropped = False
         self.type_ = type_
-        self.handle: int | None = handle
+        self.handle: int = handle
         self.finalizer = weakref.finalize(self, componentize_py_runtime.stream_drop_writable, type_, handle)
 
     async def write(self, source: bytes) -> int:
@@ -125,7 +125,7 @@ class ByteStreamWriter:
             return 0
         
         handle = self.handle
-        self.handle = None
+        self.handle = 0
         code, count = await self._write(source, handle)
         self.handle = handle
 
@@ -134,8 +134,8 @@ class ByteStreamWriter:
         
         return count
 
-    async def _write(self, source: bytes, handle: int | None) -> tuple[int, int]:
-        if handle is not None:
+    async def _write(self, source: bytes, handle: int) -> tuple[int, int]:
+        if handle != 0:
             return await componentize_py_async_support.await_result(
                 componentize_py_runtime.stream_write(self.type_, handle, source)
             )
@@ -169,8 +169,8 @@ class ByteStreamWriter:
                  traceback: TracebackType | None) -> bool | None:
         self.finalizer.detach()
         handle = self.handle
-        self.handle = None
-        if handle is not None:
+        self.handle = 0
+        if handle != 0:
             componentize_py_runtime.stream_drop_writable(self.type_, handle)
         return None
 
@@ -198,7 +198,7 @@ class StreamReader(Generic[T]):
         """
         self.writer_dropped = False
         self.type_ = type_
-        self.handle: int | None = handle
+        self.handle: int = handle
         self.finalizer = weakref.finalize(self, componentize_py_runtime.stream_drop_readable, type_, handle)
 
     async def read(self, max_count: int) -> list[T]:
@@ -218,7 +218,7 @@ class StreamReader(Generic[T]):
             return []
         
         handle = self.handle
-        self.handle = None
+        self.handle = 0
         code, values = await self._read(max_count, handle)
         self.handle = handle
 
@@ -227,8 +227,8 @@ class StreamReader(Generic[T]):
         
         return values
         
-    async def _read(self, max_count: int, handle: int | None) -> tuple[int, list[T]]:
-        if handle is not None:
+    async def _read(self, max_count: int, handle: int) -> tuple[int, list[T]]:
+        if handle != 0:
             return cast(tuple[int, list[T]], await componentize_py_async_support.await_result(
                 componentize_py_runtime.stream_read(self.type_, handle, max_count)
             ))
@@ -244,8 +244,8 @@ class StreamReader(Generic[T]):
                  traceback: TracebackType | None) -> bool | None:
         self.finalizer.detach()
         handle = self.handle
-        self.handle = None
-        if handle is not None:
+        self.handle = 0
+        if handle != 0:
             componentize_py_runtime.stream_drop_readable(self.type_, handle)
         return None
 
@@ -271,7 +271,7 @@ class StreamWriter(Generic[T]):
         """
         self.reader_dropped = False
         self.type_ = type_
-        self.handle: int | None = handle
+        self.handle: int = handle
         self.finalizer = weakref.finalize(self, componentize_py_runtime.stream_drop_writable, type_, handle)
 
     async def write(self, source: list[T]) -> int:
@@ -295,7 +295,7 @@ class StreamWriter(Generic[T]):
             return 0
         
         handle = self.handle
-        self.handle = None
+        self.handle = 0
         code, count = await self._write(source, handle)
         self.handle = handle
 
@@ -304,8 +304,8 @@ class StreamWriter(Generic[T]):
         
         return count
 
-    async def _write(self, source: list[T], handle: int | None) -> tuple[int, int]:
-        if handle is not None:
+    async def _write(self, source: list[T], handle: int) -> tuple[int, int]:
+        if handle != 0:
             return await componentize_py_async_support.await_result(
                 componentize_py_runtime.stream_write(self.type_, handle, source)
             )
@@ -339,7 +339,7 @@ class StreamWriter(Generic[T]):
                  traceback: TracebackType | None) -> bool | None:
         self.finalizer.detach()
         handle = self.handle
-        self.handle = None
-        if handle is not None:
+        self.handle = 0
+        if handle != 0:
             componentize_py_runtime.stream_drop_writable(self.type_, handle)
         return None
