@@ -258,7 +258,7 @@ class Tests(tests.WorldExports):
     def add(self, a: imports.resource_floats.Float, b: imports.resource_floats.Float) -> imports.resource_floats.Float:
         return imports.resource_floats.Float(a.get() + b.get() + 5)
 
-    def read_file(self, path: str) -> bytes:
+    async def read_file(self, path: str) -> bytes:
         try:
             with open(file=path, mode="rb") as f:
                 return f.read()

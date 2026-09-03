@@ -38,8 +38,13 @@ const CLANG_EXECUTABLE: &str = "clang";
 
 // TODO: switch to upstream release per
 // https://github.com/bytecodealliance/componentize-py/issues/215
-const CPYTHON_TARBALL_URL: &str = "https://github.com/dicej/cpython/tarball/v3.14.0-wasi-sdk-30";
-const CPYTHON_TARBALL_BASE_DIR: &str = "dicej-cpython-0e13686";
+const CPYTHON_SOURCE_TARBALL_URL: &str =
+    "https://github.com/dicej/cpython/tarball/v3.14.0-wasi-sdk-34";
+const CPYTHON_SOURCE_TARBALL_BASE_DIR: &str = "dicej-cpython-1cf1514";
+
+const CPYTHON_BINARY_TARBALL_URL: &str = "https://github.com/dicej/cpython/releases/download/v3.14.0-wasi-sdk-34/cpython-wasi-v3.14.0-wasi-sdk-34.tar.zst";
+
+static TARGETS: &[&str] = &["wasip2", "wasip3"];
 
 fn main() -> Result<()> {
     println!("cargo:rerun-if-changed=build.rs");
@@ -61,13 +66,10 @@ fn main() -> Result<()> {
 }
 
 fn stubs_for_clippy(out_dir: &Path) -> Result<()> {
-    println!(
-        "cargo:warning=using stubbed runtime, core library, and adapter for static analysis purposes..."
-    );
+    println!("cargo:warning=using dummy embedded files for static analysis purposes...");
 
-    let files = [
-        "libcomponentize_py_runtime_sync.so.zst",
-        "libcomponentize_py_runtime_async.so.zst",
+    let libraries = [
+        "libcomponentize_py_runtime.so.zst",
         "libpython3.14.so.zst",
         "libc.so.zst",
         "libwasi-emulated-mman.so.zst",
@@ -76,10 +78,24 @@ fn stubs_for_clippy(out_dir: &Path) -> Result<()> {
         "libwasi-emulated-signal.so.zst",
         "libc++.so.zst",
         "libc++abi.so.zst",
-        "wasi_snapshot_preview1.reactor.wasm.zst",
     ];
 
-    for file in files {
+    for file in libraries {
+        for target in TARGETS {
+            let target_dir = out_dir.join(target);
+            fs::create_dir_all(&target_dir)?;
+
+            let path = target_dir.join(file);
+
+            if !path.exists() {
+                Encoder::new(File::create(path)?, ZSTD_COMPRESSION_LEVEL)?.do_finish()?;
+            }
+        }
+    }
+
+    let adapters = ["wasi_snapshot_preview1.reactor.wasm.zst"];
+
+    for file in adapters {
         let path = out_dir.join(file);
 
         if !path.exists() {
@@ -87,20 +103,16 @@ fn stubs_for_clippy(out_dir: &Path) -> Result<()> {
         }
     }
 
-    let path = out_dir.join("python-lib.tar.zst");
+    let tarballs = ["python-lib.tar.zst", "bundled.tar.zst"];
 
-    if !path.exists() {
-        Builder::new(Encoder::new(File::create(path)?, ZSTD_COMPRESSION_LEVEL)?)
-            .into_inner()?
-            .do_finish()?;
-    }
+    for file in tarballs {
+        let path = out_dir.join(file);
 
-    let path = out_dir.join("bundled.tar.zst");
-
-    if !path.exists() {
-        Builder::new(Encoder::new(File::create(path)?, ZSTD_COMPRESSION_LEVEL)?)
-            .into_inner()?
-            .do_finish()?;
+        if !path.exists() {
+            Builder::new(Encoder::new(File::create(path)?, ZSTD_COMPRESSION_LEVEL)?)
+                .into_inner()?
+                .do_finish()?;
+        }
     }
 
     Ok(())
@@ -154,7 +166,7 @@ fn find_wasi_sdk(out_dir: &Path) -> Result<PathBuf> {
         url,
         wasi_sdk.display()
     );
-    fetch_extract(&url, out_dir)?;
+    fetch_extract_gzip(&url, out_dir)?;
 
     Ok(wasi_sdk)
 }
@@ -164,60 +176,56 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
 
     let wasi_sdk = find_wasi_sdk(out_dir)?;
 
-    maybe_make_cpython(&repo_dir, &wasi_sdk)?;
+    for target in TARGETS {
+        maybe_make_cpython(target, &repo_dir, &wasi_sdk)?;
 
-    let cpython_wasi_dir = repo_dir.join("cpython/builddir/wasi");
+        let cpython_wasi_dir = repo_dir.join("cpython/builddir").join(target);
 
-    make_pyo3_config(&repo_dir)?;
+        let library_dir = out_dir.join(target);
+        fs::create_dir_all(&library_dir)?;
 
-    make_runtime(
-        &repo_dir,
-        out_dir,
-        &wasi_sdk,
-        &cpython_wasi_dir,
-        false,
-        "libcomponentize_py_runtime_sync.so",
-    )?;
-    make_runtime(
-        &repo_dir,
-        out_dir,
-        &wasi_sdk,
-        &cpython_wasi_dir,
-        true,
-        "libcomponentize_py_runtime_async.so",
-    )?;
+        make_pyo3_config(target, &repo_dir)?;
 
-    let libraries = [
-        "libc.so",
-        "libwasi-emulated-mman.so",
-        "libwasi-emulated-process-clocks.so",
-        "libwasi-emulated-getpid.so",
-        "libwasi-emulated-signal.so",
-    ];
-
-    for library in libraries {
-        compress(
-            &wasi_sdk.join("share/wasi-sysroot/lib/wasm32-wasip2"),
-            library,
-            out_dir,
-            true,
+        make_runtime(
+            target,
+            &repo_dir,
+            &library_dir,
+            &wasi_sdk,
+            &cpython_wasi_dir,
         )?;
+
+        let libraries = [
+            "libc.so",
+            "libwasi-emulated-mman.so",
+            "libwasi-emulated-process-clocks.so",
+            "libwasi-emulated-getpid.so",
+            "libwasi-emulated-signal.so",
+        ];
+
+        for library in libraries {
+            compress(
+                &wasi_sdk.join(format!("share/wasi-sysroot/lib/wasm32-{target}")),
+                library,
+                &library_dir,
+                true,
+            )?;
+        }
+
+        let libraries = ["libc++.so", "libc++abi.so"];
+
+        for library in libraries {
+            compress(
+                &wasi_sdk.join(format!("share/wasi-sysroot/lib/wasm32-{target}/noeh")),
+                library,
+                &library_dir,
+                true,
+            )?;
+        }
+
+        compress(&cpython_wasi_dir, "libpython3.14.so", &library_dir, true)?;
     }
 
-    let libraries = ["libc++.so", "libc++abi.so"];
-
-    for library in libraries {
-        compress(
-            &wasi_sdk.join("share/wasi-sysroot/lib/wasm32-wasip2/noeh"),
-            library,
-            out_dir,
-            true,
-        )?;
-    }
-
-    compress(&cpython_wasi_dir, "libpython3.14.so", out_dir, true)?;
-
-    let path = repo_dir.join("cpython/builddir/wasi/install/lib/python3.14");
+    let path = repo_dir.join("cpython/builddir/wasip2/install/lib/python3.14");
 
     if path.exists() {
         let mut builder = Builder::new(Encoder::new(
@@ -305,18 +313,29 @@ fn add(builder: &mut Builder<impl Write>, root: &Path, path: &Path) -> Result<()
     Ok(())
 }
 
-fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
+fn maybe_make_cpython(target: &str, repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
     let cpython_dir = repo_dir.join("cpython");
     if !cpython_dir.exists() {
-        let url = &env::var("CPYTHON_TARBALL_URL").unwrap_or_else(|_| CPYTHON_TARBALL_URL.into());
-        let base_dir = &env::var_os("CPYTHON_TARBALL_BASE_DIR")
-            .unwrap_or_else(|| CPYTHON_TARBALL_BASE_DIR.into());
-        println!("cargo:warning=downloading CPython source code from {url}");
-        fetch_extract(url, repo_dir)?;
-        fs::rename(repo_dir.join(base_dir), &cpython_dir)?;
+        if env::var_os("CPYTHON_BUILD_FROM_SOURCE").is_some() {
+            let url = &env::var("CPYTHON_SOURCE_TARBALL_URL")
+                .unwrap_or_else(|_| CPYTHON_SOURCE_TARBALL_URL.into());
+            let base_dir = &env::var_os("CPYTHON_SOURCE_TARBALL_BASE_DIR")
+                .unwrap_or_else(|| CPYTHON_SOURCE_TARBALL_BASE_DIR.into());
+            println!("cargo:warning=downloading CPython source code from {url}");
+            fetch_extract_gzip(url, repo_dir)?;
+            fs::rename(repo_dir.join(base_dir), &cpython_dir)?;
+        } else {
+            let url = &env::var("CPYTHON_BINARY_TARBALL_URL")
+                .unwrap_or_else(|_| CPYTHON_BINARY_TARBALL_URL.into());
+            println!("cargo:warning=downloading CPython build from {url}");
+            let dir = cpython_dir.join("builddir");
+            fs::create_dir_all(&dir)?;
+            fetch_extract_zstd(url, &dir)?;
+            return Ok(());
+        }
     }
 
-    let cpython_wasi_dir = cpython_dir.join("builddir/wasi");
+    let cpython_wasi_dir = cpython_dir.join("builddir").join(target);
     if !cpython_wasi_dir.join("libpython3.14.so").exists() {
         fs::create_dir_all(&cpython_wasi_dir)?;
         if !cpython_wasi_dir.join("libpython3.14.a").exists() {
@@ -338,9 +357,9 @@ fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
             }
 
             let lib_install_dir = cpython_wasi_dir.join("deps");
-            build_zlib(wasi_sdk, &lib_install_dir)?;
+            build_zlib(target, wasi_sdk, &lib_install_dir)?;
 
-            build_sqlite(wasi_sdk, &lib_install_dir)?;
+            build_sqlite(target, wasi_sdk, &lib_install_dir)?;
 
             let config_guess =
                 run(Command::new("../../config.guess").current_dir(&cpython_wasi_dir))?;
@@ -358,12 +377,12 @@ fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
                 )
                 .env(
                     "CFLAGS",
-                    format!("--target=wasm32-wasip2 -fPIC -I{dir}/deps/include"),
+                    format!("--target=wasm32-{target} -fPIC -I{dir}/deps/include"),
                 )
                 .env("WASI_SDK_PATH", wasi_sdk)
                 .env(
                     "LDFLAGS",
-                    format!("--target=wasm32-wasip2 -L{dir}/deps/lib"),
+                    format!("--target=wasm32-{target} -L{dir}/deps/lib"),
                 )
                 .current_dir(&cpython_wasi_dir)
                 .args([
@@ -388,7 +407,7 @@ fn maybe_make_cpython(repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
 
         // Link libpython3.14.so - now includes libsqlite3.a
         run(Command::new(wasi_sdk.join("bin/clang"))
-            .arg("--target=wasm32-wasip2")
+            .arg(format!("--target=wasm32-{target}"))
             .arg("-shared")
             .arg("-o")
             .arg(cpython_wasi_dir.join("libpython3.14.so"))
@@ -475,9 +494,9 @@ fn run(command: &mut Command) -> Result<Vec<u8>> {
     }
 }
 
-fn make_pyo3_config(repo_dir: &Path) -> Result<()> {
+fn make_pyo3_config(target: &str, repo_dir: &Path) -> Result<()> {
     let out_dir = env::var("OUT_DIR")?;
-    let mut cpython_wasi_dir = repo_dir.join("cpython/builddir/wasi");
+    let mut cpython_wasi_dir = repo_dir.join("cpython/builddir").join(target);
     let mut cygpath = Command::new("cygpath");
     cygpath.arg("-w").arg(&cpython_wasi_dir);
     if let Ok(output) = cygpath.output() {
@@ -497,7 +516,10 @@ fn make_pyo3_config(repo_dir: &Path) -> Result<()> {
         "lib_dir={}",
         cpython_wasi_dir.to_str().unwrap()
     )?;
-    fs::write(Path::new(&out_dir).join("pyo3-config.txt"), pyo3_config)?;
+    fs::write(
+        Path::new(&out_dir).join(target).join("pyo3-config.txt"),
+        pyo3_config,
+    )?;
 
     println!("cargo:rerun-if-changed=pyo3-config.txt");
 
@@ -505,37 +527,26 @@ fn make_pyo3_config(repo_dir: &Path) -> Result<()> {
 }
 
 fn make_runtime(
+    target: &str,
     repo_dir: &Path,
     out_dir: &Path,
     wasi_sdk: &Path,
     cpython_wasi_dir: &Path,
-    async_: bool,
-    name: &str,
 ) -> Result<()> {
     let mut cmd = Command::new("cargo");
     cmd.current_dir(repo_dir.join("runtime"))
         .arg("build")
-        .arg("--target=wasm32-wasip2");
+        .arg(format!("--target=wasm32-{target}"));
 
     if !DEBUG_RUNTIME {
         cmd.arg("--release");
     }
 
-    if async_ {
+    if target == "wasip3" {
         cmd.arg("--features=async");
     }
 
-    for (key, _) in env::vars_os() {
-        if key
-            .to_str()
-            .map(|key| key.starts_with("RUST") || key.starts_with("CARGO"))
-            .unwrap_or(false)
-        {
-            cmd.env_remove(&key);
-        }
-    }
-
-    let target = if async_ { "async" } else { "sync" };
+    cmd.env_remove("CARGO_ENCODED_RUSTFLAGS");
 
     let clang = wasi_sdk.join(format!("bin/{CLANG_EXECUTABLE}"));
     cmd.env(
@@ -543,6 +554,7 @@ fn make_runtime(
         format!(
             "--cfg pyo3_disable_reference_pool \
              -Clink-args=-Wl,--skip-wit-component \
+             -Clink-args=-Wl,--export-if-defined=__wasm_library_tls_info \
              -Clink-args=-shared \
              -Clink-args=-L{} \
              -Clink-args=-lpython3.14 \
@@ -550,7 +562,10 @@ fn make_runtime(
             cpython_wasi_dir.to_str().unwrap()
         ),
     )
-    .env("CARGO_TARGET_WASM32_WASIP2_LINKER", clang)
+    .env(
+        format!("CARGO_TARGET_WASM32_{}_LINKER", target.to_uppercase()),
+        clang,
+    )
     .env("CARGO_TARGET_DIR", out_dir.join(target))
     .env("PYO3_CONFIG_FILE", out_dir.join("pyo3-config.txt"));
 
@@ -562,10 +577,11 @@ fn make_runtime(
 
     let build = if DEBUG_RUNTIME { "debug" } else { "release" };
     let path = out_dir.join(target).join(format!(
-        "wasm32-wasip2/{build}/componentize_py_runtime.wasm"
+        "wasm32-{target}/{build}/componentize_py_runtime.wasm"
     ));
 
     if path.exists() {
+        let name = "libcomponentize_py_runtime.so";
         fs::copy(&path, out_dir.join(name))?;
         compress(out_dir, name, out_dir, false)?;
     } else {
@@ -575,7 +591,7 @@ fn make_runtime(
     Ok(())
 }
 
-fn fetch_extract(url: &str, out_dir: &Path) -> Result<()> {
+fn fetch_extract_gzip(url: &str, out_dir: &Path) -> Result<()> {
     let response = reqwest::blocking::get(url)?;
     let decoder = flate2::read::GzDecoder::new(response);
     let mut archive = tar::Archive::new(decoder);
@@ -583,7 +599,15 @@ fn fetch_extract(url: &str, out_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn add_compile_envs(wasi_sdk: &Path, command: &mut Command) {
+fn fetch_extract_zstd(url: &str, out_dir: &Path) -> Result<()> {
+    let response = reqwest::blocking::get(url)?;
+    let decoder = zstd::Decoder::new(response)?;
+    let mut archive = tar::Archive::new(decoder);
+    archive.unpack(out_dir)?;
+    Ok(())
+}
+
+fn add_compile_envs(target: &str, wasi_sdk: &Path, command: &mut Command) {
     let sysroot = wasi_sdk.join("share/wasi-sysroot");
     let sysroot = sysroot.to_string_lossy();
     command
@@ -592,17 +616,17 @@ fn add_compile_envs(wasi_sdk: &Path, command: &mut Command) {
         .env("RANLIB", wasi_sdk.join("bin/ranlib"))
         .env(
             "CFLAGS",
-            format!("--target=wasm32-wasip2 --sysroot={sysroot} -I{sysroot}/include/wasm32-wasip2 -D_WASI_EMULATED_SIGNAL -fPIC"),
+            format!("--target=wasm32-{target} --sysroot={sysroot} -I{sysroot}/include/wasm32-{target} -D_WASI_EMULATED_SIGNAL -fPIC"),
         )
         .env(
             "LDFLAGS",
-            format!("--target=wasm32-wasip2 --sysroot={sysroot} -L{sysroot}/lib -lwasi-emulated-signal")
+            format!("--target=wasm32-{target} --sysroot={sysroot} -L{sysroot}/lib -lwasi-emulated-signal")
         );
 }
 
-fn build_zlib(wasi_sdk: &Path, install_dir: &Path) -> Result<()> {
+fn build_zlib(target: &str, wasi_sdk: &Path, install_dir: &Path) -> Result<()> {
     let out_dir = PathBuf::from(env::var("OUT_DIR")?);
-    fetch_extract(
+    fetch_extract_gzip(
         "https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz",
         &out_dir,
     )?;
@@ -613,7 +637,7 @@ fn build_zlib(wasi_sdk: &Path, install_dir: &Path) -> Result<()> {
         .ok_or_else(|| anyhow!("non-UTF8 path: {}", install_dir.display()))?;
 
     let mut configure = Command::new("./configure");
-    add_compile_envs(wasi_sdk, &mut configure);
+    add_compile_envs(target, wasi_sdk, &mut configure);
     configure
         .current_dir(&src_dir)
         .arg("--static")
@@ -631,7 +655,7 @@ fn build_zlib(wasi_sdk: &Path, install_dir: &Path) -> Result<()> {
         .ok_or_else(|| anyhow!("non-UTF8 path: {}", clang_dir.display()))?;
 
     let mut make = Command::new("make");
-    add_compile_envs(wasi_sdk, &mut make);
+    add_compile_envs(target, wasi_sdk, &mut make);
     make.current_dir(src_dir)
         .arg(format!("AR={ar_dir}"))
         .arg("ARFLAGS=rcs")
@@ -650,7 +674,7 @@ fn build_zlib(wasi_sdk: &Path, install_dir: &Path) -> Result<()> {
 /// - SQLITE_OMIT_WAL: WAL requires mmap which isn't available in WASI preview1
 /// - SQLITE_OMIT_LOAD_EXTENSION: No dlopen in WASI
 /// - SQLITE_THREADSAFE=0: Single-threaded for WASM
-fn build_sqlite(wasi_sdk: &Path, install_dir: &Path) -> Result<()> {
+fn build_sqlite(target: &str, wasi_sdk: &Path, install_dir: &Path) -> Result<()> {
     let out_dir = PathBuf::from(env::var("OUT_DIR")?);
 
     // Check if already built
@@ -661,11 +685,17 @@ fn build_sqlite(wasi_sdk: &Path, install_dir: &Path) -> Result<()> {
 
     println!("cargo:warning=Building SQLite {SQLITE_VERSION} for WASI...");
 
-    // Download SQLite amalgamation
-    let url = format!("https://sqlite.org/{SQLITE_YEAR}/sqlite-autoconf-{SQLITE_VERSION}.tar.gz");
-    fetch_extract(&url, &out_dir)?;
-
     let src_dir = out_dir.join(format!("sqlite-autoconf-{SQLITE_VERSION}"));
+
+    if !src_dir.exists() {
+        // Download SQLite amalgamation
+        let url =
+            format!("https://sqlite.org/{SQLITE_YEAR}/sqlite-autoconf-{SQLITE_VERSION}.tar.gz");
+        fetch_extract_gzip(&url, &out_dir)?;
+    }
+
+    let build_dir = src_dir.join(target);
+    fs::create_dir_all(&build_dir)?;
 
     // Ensure install directories exist
     fs::create_dir_all(install_dir.join("lib"))?;
@@ -687,9 +717,9 @@ fn build_sqlite(wasi_sdk: &Path, install_dir: &Path) -> Result<()> {
     // Note: Don't set SQLITE_THREADSAFE here - let --disable-threadsafe handle it
     // to avoid macro redefinition warnings
     let sqlite_cflags = format!(
-        "--target=wasm32-wasip2 \
+        "--target=wasm32-{target} \
          --sysroot={sysroot_str} \
-         -I{sysroot_str}/include/wasm32-wasip2 \
+         -I{sysroot_str}/include/wasm32-{target} \
          -D_WASI_EMULATED_SIGNAL \
          -D_WASI_EMULATED_PROCESS_CLOCKS \
          -fPIC \
@@ -702,18 +732,18 @@ fn build_sqlite(wasi_sdk: &Path, install_dir: &Path) -> Result<()> {
     );
 
     // Configure SQLite
-    let mut configure = Command::new("./configure");
+    let mut configure = Command::new("../configure");
     configure
-        .current_dir(&src_dir)
+        .current_dir(&build_dir)
         .env("AR", wasi_sdk.join("bin/ar"))
         .env("CC", wasi_sdk.join("bin/clang"))
         .env("RANLIB", wasi_sdk.join("bin/ranlib"))
         .env("CFLAGS", &sqlite_cflags)
         .env(
             "LDFLAGS",
-            format!("--target=wasm32-wasip2 --sysroot={sysroot_str} -L{sysroot_str}/lib",),
+            format!("--target=wasm32-{target} --sysroot={sysroot_str} -L{sysroot_str}/lib",),
         )
-        .arg("--host=wasm32-wasip2")
+        .arg(format!("--host=wasm32-{target}"))
         .arg(format!("--prefix={install_dir_str}"))
         .arg("--disable-shared")
         .arg("--enable-static")
@@ -725,7 +755,7 @@ fn build_sqlite(wasi_sdk: &Path, install_dir: &Path) -> Result<()> {
 
     // Build only the static library (not the shell, which fails to link on WASI)
     let mut make = Command::new("make");
-    make.current_dir(&src_dir)
+    make.current_dir(&build_dir)
         .env("AR", wasi_sdk.join("bin/ar"))
         .env("CC", wasi_sdk.join("bin/clang"))
         .env("RANLIB", wasi_sdk.join("bin/ranlib"))
@@ -738,7 +768,7 @@ fn build_sqlite(wasi_sdk: &Path, install_dir: &Path) -> Result<()> {
     // Manual install since we didn't build everything
     // Copy the library
     fs::copy(
-        src_dir.join("libsqlite3.a"),
+        build_dir.join("libsqlite3.a"),
         install_dir.join("lib/libsqlite3.a"),
     )?;
     // Copy the headers

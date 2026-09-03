@@ -213,7 +213,7 @@ world tests {
 
   export add: func(a: borrow<float>, b: borrow<float>) -> own<float>;
 
-  export read-file: func(path: string) -> result<list<u8>, string>;
+  export read-file: async func(path: string) -> result<list<u8>, string>;
 
   export test-refcounts: func();
 

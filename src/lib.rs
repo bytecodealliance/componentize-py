@@ -50,6 +50,7 @@ mod test;
 mod util;
 
 const DEBUG_PYTHON_BINDINGS: bool = false;
+const DEBUG_PRE_INIT: bool = false;
 
 /// Default bindings module name, overridable via `--bindings-module`.
 static DEFAULT_BINDINGS_MODULE: &str = "wit";
@@ -74,7 +75,14 @@ impl WasiView for Ctx {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Target {
+    Wasip2,
+    Wasip3,
+}
+
 pub struct Library {
+    target: Target,
     name: String,
     module: Vec<u8>,
     dl_openable: bool,
@@ -665,13 +673,49 @@ impl ComponentGenerator<'_> {
         // Extract relevant metadata from the `Resolve` into a `Summary` instance,
         // which we'll use to generate Wasm- and Python-level bindings.
 
+        // Determine whether to use the WASIp2 or WASIp3 target based on whether
+        // the world uses any async features.
+        //
+        // TODO: Allow the user to explicitly specify the target instead of
+        // inferring it here, e.g. if they want to use WASIp3 despite the target
+        // world not using any async features.
+        //
+        // TODO #2: Creating a temporary `Summary` is a heavyweight way to
+        // determine whether the world uses async features, especially since we
+        // will create the real one down below, but otherwise we'd have an
+        // ordering problem because we need to know the target before we call
+        // `wit_dylib::create_with_metadata` (which produces the metadata we'll
+        // need to create the real `Summary`), and we can't call that until we
+        // know the target.  We should be able to extract the code that
+        // `Summary::try_new` uses to check for async features and use it
+        // without the rest of the things `Summary::try_new` does.
+        let need_async = Summary::try_new(
+            &resolve,
+            &iter::once(world).collect(),
+            &import_interface_names,
+            &export_interface_names,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        )?
+        .need_async();
+
+        let target = if need_async {
+            Target::Wasip3
+        } else {
+            Target::Wasip2
+        };
+
         let (mut bindings, metadata) = wit_dylib::create_with_metadata(
             &resolve,
             world,
             Some(&mut DylibOpts {
-                stack_pointer: wit_dylib::StackPointer::Global,
                 interpreter: Some("libcomponentize_py_runtime.so".into()),
                 async_: Default::default(),
+                stack_pointer: match target {
+                    Target::Wasip2 => wit_dylib::StackPointer::Global,
+                    Target::Wasip3 => wit_dylib::StackPointer::TaskContext,
+                },
             }),
         );
 
@@ -737,29 +781,18 @@ impl ComponentGenerator<'_> {
             &stream_and_future_indexes,
         )?;
 
-        let need_async = summary.need_async();
-
-        // Now that we know whether to use the sync or async version of
-        // `libcomponentize_py_runtime.so`, update `libraries` accordingly.
+        // Now that we know which target to use, update `libraries` accordingly.
         //
-        // Note that we have two separate versions because older runtimes don't
-        // understand the new async ABI, so we only use the async version if it's
-        // actually needed.
+        // Note that we must only use libraries which match the target because
+        // the targets have mutually incompatible ABIs, plus users may wish to
+        // target runtimes which do not support WASIp3 or async features.
         let mut libraries = libraries
             .into_iter()
-            .filter_map(|library| match (need_async, library.name.as_str()) {
-                (true, "libcomponentize_py_runtime_sync.so")
-                | (false, "libcomponentize_py_runtime_async.so") => None,
-                (true, "libcomponentize_py_runtime_async.so")
-                | (false, "libcomponentize_py_runtime_sync.so") => Some(Library {
-                    name: "libcomponentize_py_runtime.so".into(),
-                    ..library
-                }),
-                _ => Some(library),
-            })
+            .filter(|library| library.target == target)
             .collect::<Vec<_>>();
 
         libraries.push(Library {
+            target,
             name: "libcomponentize_py_bindings.so".into(),
             module: bindings,
             dl_openable: false,
@@ -783,10 +816,14 @@ impl ComponentGenerator<'_> {
         let stderr = MemoryOutputPipe::new(10000);
 
         let mut wasi = WasiCtxBuilder::new();
-        wasi.stdin(MemoryInputPipe::new(Bytes::new()))
-            .stdout(stdout.clone())
-            .stderr(stderr.clone())
-            .env("PYTHONUNBUFFERED", "1")
+        if DEBUG_PRE_INIT {
+            wasi.inherit_stdio();
+        } else {
+            wasi.stdin(MemoryInputPipe::new(Bytes::new()))
+                .stdout(stdout.clone())
+                .stderr(stderr.clone());
+        }
+        wasi.env("PYTHONUNBUFFERED", "1")
             .env("PYTHONHOME", "/python")
             .preopened_dir(
                 embedded_python_standard_lib.path(),
@@ -944,10 +981,16 @@ impl ComponentGenerator<'_> {
                     let instance = pre.instance_pre.instantiate_async(&mut store).await?;
                     let guest = pre.indices.interface0.load(&mut store, &instance)?;
 
-                    guest
-                        .call_init(&mut store, &app_name, &symbols, stub_wasi)
-                        .await?
-                        .map_err(|e| anyhow!("{e}"))?;
+                    store
+                        .run_concurrent(async |store| {
+                            guest
+                                .call_init(store, app_name, symbols, stub_wasi)
+                                .await?
+                                .map_err(|e| anyhow!("{e}"))?;
+
+                            anyhow::Ok(())
+                        })
+                        .await??;
 
                     Ok(Box::new(MyInvoker { store, instance }) as Box<dyn Invoker>)
                 }
@@ -1133,6 +1176,7 @@ fn add_wasi_and_stubs(
     linker: &mut Linker<Ctx>,
 ) -> Result<()> {
     wasmtime_wasi::p2::add_to_linker_async(linker)?;
+    wasmtime_wasi::p3::add_to_linker(linker)?;
 
     enum Stub<'a> {
         Function(&'a String, &'a FunctionKind),
@@ -1188,10 +1232,10 @@ fn add_wasi_and_stubs(
     for (interface_name, stubs) in stubs {
         if let Some(interface_name) = interface_name {
             // Note that we do _not_ stub interfaces which appear to be part of
-            // WASIp2 since those should be provided by the
-            // `wasmtime_wasi::add_to_linker_async` call above, and adding stubs
-            // to those same interfaces would just cause trouble.
-            if !is_wasip2_cli(&interface_name)
+            // WASIp2/p3 since those should be provided by the
+            // `add_to_linker{_async}` calls above, and adding stubs to those
+            // same interfaces would just cause trouble.
+            if !is_wasi_cli(&interface_name)
                 && let Ok(mut instance) = linker.instance(&interface_name)
             {
                 for stub in stubs {
@@ -1273,12 +1317,12 @@ fn add_wasi_and_stubs(
     Ok(())
 }
 
-fn is_wasip2_cli(interface_name: &str) -> bool {
+fn is_wasi_cli(interface_name: &str) -> bool {
     (interface_name.starts_with("wasi:cli/")
         || interface_name.starts_with("wasi:clocks/")
         || interface_name.starts_with("wasi:random/")
         || interface_name.starts_with("wasi:io/")
         || interface_name.starts_with("wasi:filesystem/")
         || interface_name.starts_with("wasi:sockets/"))
-        && interface_name.contains("@0.2.")
+        && (interface_name.contains("@0.2.") || interface_name.contains("@0.3."))
 }

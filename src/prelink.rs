@@ -14,7 +14,7 @@ use tar::Archive;
 use tempfile::TempDir;
 use zstd::Decoder;
 
-use crate::{ComponentizePyConfig, ConfigContext, Library, RawComponentizePyConfig};
+use crate::{ComponentizePyConfig, ConfigContext, Library, RawComponentizePyConfig, Target};
 
 static NATIVE_EXTENSION_SUFFIXES: &[&str] = &[".cpython-314-wasm32-wasi.so", ".abi3.so"];
 
@@ -60,82 +60,164 @@ pub fn embedded_helper_utils() -> Result<TempDir> {
 pub fn bundle_libraries(library_path: Vec<(&str, Vec<PathBuf>)>) -> Result<Vec<Library>> {
     let mut libraries = vec![
         Library {
-            name: "libcomponentize_py_runtime_sync.so".into(),
+            target: Target::Wasip2,
+            name: "libcomponentize_py_runtime.so".into(),
             module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
                 env!("OUT_DIR"),
-                "/libcomponentize_py_runtime_sync.so.zst"
+                "/wasip2/libcomponentize_py_runtime.so.zst"
             ))))?,
             dl_openable: false,
         },
         Library {
-            name: "libcomponentize_py_runtime_async.so".into(),
+            target: Target::Wasip3,
+            name: "libcomponentize_py_runtime.so".into(),
             module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
                 env!("OUT_DIR"),
-                "/libcomponentize_py_runtime_async.so.zst"
+                "/wasip3/libcomponentize_py_runtime.so.zst"
             ))))?,
             dl_openable: false,
         },
         Library {
+            target: Target::Wasip2,
             name: "libpython3.14.so".into(),
             module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
                 env!("OUT_DIR"),
-                "/libpython3.14.so.zst"
+                "/wasip2/libpython3.14.so.zst"
             ))))?,
             dl_openable: false,
         },
         Library {
+            target: Target::Wasip3,
+            name: "libpython3.14.so".into(),
+            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/wasip3/libpython3.14.so.zst"
+            ))))?,
+            dl_openable: false,
+        },
+        Library {
+            target: Target::Wasip2,
             name: "libc.so".into(),
             module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
                 env!("OUT_DIR"),
-                "/libc.so.zst"
+                "/wasip2/libc.so.zst"
             ))))?,
             dl_openable: false,
         },
         Library {
+            target: Target::Wasip3,
+            name: "libc.so".into(),
+            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/wasip3/libc.so.zst"
+            ))))?,
+            dl_openable: false,
+        },
+        Library {
+            target: Target::Wasip2,
             name: "libwasi-emulated-mman.so".into(),
             module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
                 env!("OUT_DIR"),
-                "/libwasi-emulated-mman.so.zst"
+                "/wasip2/libwasi-emulated-mman.so.zst"
             ))))?,
             dl_openable: false,
         },
         Library {
+            target: Target::Wasip3,
+            name: "libwasi-emulated-mman.so".into(),
+            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/wasip3/libwasi-emulated-mman.so.zst"
+            ))))?,
+            dl_openable: false,
+        },
+        Library {
+            target: Target::Wasip2,
             name: "libwasi-emulated-process-clocks.so".into(),
             module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
                 env!("OUT_DIR"),
-                "/libwasi-emulated-process-clocks.so.zst"
+                "/wasip2/libwasi-emulated-process-clocks.so.zst"
             ))))?,
             dl_openable: false,
         },
         Library {
+            target: Target::Wasip3,
+            name: "libwasi-emulated-process-clocks.so".into(),
+            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/wasip3/libwasi-emulated-process-clocks.so.zst"
+            ))))?,
+            dl_openable: false,
+        },
+        Library {
+            target: Target::Wasip2,
             name: "libwasi-emulated-getpid.so".into(),
             module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
                 env!("OUT_DIR"),
-                "/libwasi-emulated-getpid.so.zst"
+                "/wasip2/libwasi-emulated-getpid.so.zst"
             ))))?,
             dl_openable: false,
         },
         Library {
+            target: Target::Wasip3,
+            name: "libwasi-emulated-getpid.so".into(),
+            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/wasip3/libwasi-emulated-getpid.so.zst"
+            ))))?,
+            dl_openable: false,
+        },
+        Library {
+            target: Target::Wasip2,
             name: "libwasi-emulated-signal.so".into(),
             module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
                 env!("OUT_DIR"),
-                "/libwasi-emulated-signal.so.zst"
+                "/wasip2/libwasi-emulated-signal.so.zst"
             ))))?,
             dl_openable: false,
         },
         Library {
+            target: Target::Wasip3,
+            name: "libwasi-emulated-signal.so".into(),
+            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/wasip3/libwasi-emulated-signal.so.zst"
+            ))))?,
+            dl_openable: false,
+        },
+        Library {
+            target: Target::Wasip2,
             name: "libc++.so".into(),
             module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
                 env!("OUT_DIR"),
-                "/libc++.so.zst"
+                "/wasip2/libc++.so.zst"
             ))))?,
             dl_openable: false,
         },
         Library {
+            target: Target::Wasip3,
+            name: "libc++.so".into(),
+            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/wasip3/libc++.so.zst"
+            ))))?,
+            dl_openable: false,
+        },
+        Library {
+            target: Target::Wasip2,
             name: "libc++abi.so".into(),
             module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
                 env!("OUT_DIR"),
-                "/libc++abi.so.zst"
+                "/wasip2/libc++abi.so.zst"
+            ))))?,
+            dl_openable: false,
+        },
+        Library {
+            target: Target::Wasip3,
+            name: "libc++abi.so".into(),
+            module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/wasip3/libc++abi.so.zst"
             ))))?,
             dl_openable: false,
         },
@@ -152,6 +234,7 @@ pub fn bundle_libraries(library_path: Vec<(&str, Vec<PathBuf>)>) -> Result<Vec<L
                 .replace('\\', "/");
 
             libraries.push(Library {
+                target: Target::Wasip2,
                 name: format!("/{index}/{path}"),
                 module: fs::read(library).with_context(|| library.display().to_string())?,
                 dl_openable: true,

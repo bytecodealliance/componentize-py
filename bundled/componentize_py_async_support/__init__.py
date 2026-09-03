@@ -10,6 +10,7 @@ import asyncio
 import componentize_py_runtime
 import subprocess
 
+from threading import local
 from os import PathLike
 from socket import AddressFamily, AddressInfo, SocketKind, socket
 from concurrent.futures import Executor
@@ -67,7 +68,7 @@ _ProtocolT = TypeVar("_ProtocolT", bound=BaseProtocol)
 
 async def _noop() -> None:
     pass
-    
+
 class _Loop(asyncio.AbstractEventLoop):
     def __init__(self) -> None:
         self.running: bool = False
@@ -80,13 +81,13 @@ class _Loop(asyncio.AbstractEventLoop):
             for handle in handles:
                 if not handle._cancelled:
                     handle._run()
-                
+
             if self.exception is not None:
                 raise self.exception
 
             if len(handles) == 0 and len(future_state.handles) == 0:
                 return
-    
+
     def get_debug(self) -> bool:
         return False
 
@@ -187,7 +188,7 @@ class _Loop(asyncio.AbstractEventLoop):
                           sockaddr: tuple[str, int] | tuple[str, int, int, int],
                           flags: int = 0) -> tuple[str, str]:
         raise NotImplementedError
-    
+
     async def create_connection(
             self,
             protocol_factory: Callable[[], _ProtocolT],
@@ -207,7 +208,7 @@ class _Loop(asyncio.AbstractEventLoop):
             interleave: int | None = None,
     ) -> tuple[Transport, _ProtocolT]:
         raise NotImplementedError
-    
+
     async def create_server(
             self,
             protocol_factory: Callable[[], BaseProtocol],
@@ -420,12 +421,9 @@ class _Loop(asyncio.AbstractEventLoop):
 
     def set_debug(self, enabled: bool) -> None:
         raise NotImplementedError
-        
+
 _future_state: ContextVar[_FutureState] = ContextVar("_future_state")
 _loop = _Loop()
-asyncio.set_event_loop(_loop)
-_loop.running = True
-asyncio.events._set_running_loop(_loop)
 
 def _set_future_state(future_state: _FutureState) -> None:
     global _future_state
@@ -448,12 +446,17 @@ async def _return_result(export_index: int, borrows: int, coroutine: Any) -> Non
     assert _future_state.get().pending_count > 0
     _future_state.get().pending_count -= 1
 
+_thread_local = local()
+
 def first_poll(export_index: int, borrows: int, coroutine: Any) -> int:
     """Internal function called by generated code for exported functions.
 
     This is not meant to be called by application code.
 
     """
+    asyncio.set_event_loop(_loop)
+    _loop.running = True
+    asyncio.events._set_running_loop(_loop)
     context = Context()
     future_state = _FutureState(None, {}, [], 1)
     context.run(_set_future_state, future_state)
@@ -468,12 +471,12 @@ def _poll(future_state: _FutureState) -> int:
     if future_state.pending_count == 0:
         if future_state.waitable_set is not None:
             componentize_py_runtime.waitable_set_drop(future_state.waitable_set)
-        
+
         return _CallbackCode.EXIT
     else:
         waitable_set = future_state.waitable_set
         assert waitable_set is not None
-        componentize_py_runtime.context_set(future_state)
+        _thread_local.state = future_state
         return _CallbackCode.WAIT | (waitable_set << 4)
 
 def callback(event0: int, event1: int, event2: int) -> int:
@@ -482,9 +485,9 @@ def callback(event0: int, event1: int, event2: int) -> int:
     This is not meant to be called by application code.
 
     """
-    future_state = componentize_py_runtime.context_get()
-    componentize_py_runtime.context_set(None)
-    
+    future_state = _thread_local.state
+    _thread_local.state = None
+
     match event0:
         case _Event.NONE:
             pass
@@ -509,7 +512,7 @@ def callback(event0: int, event1: int, event2: int) -> int:
             raise NotImplementedError
 
     return _poll(future_state)
-    
+
 async def await_result[T](result: Result[T, tuple[int, int]]) -> T:
     """Internal function called by generated code for imported functions.
 
@@ -518,7 +521,7 @@ async def await_result[T](result: Result[T, tuple[int, int]]) -> T:
     """
     global _loop
     global _future_state
-    
+
     if isinstance(result, Ok):
         return result.value
     else:
@@ -526,11 +529,11 @@ async def await_result[T](result: Result[T, tuple[int, int]]) -> T:
         waitable, promise = result.value
         future = _loop.create_future()
         future_state.futures[waitable] = future
-        
+
         if future_state.waitable_set is None:
             future_state.waitable_set = componentize_py_runtime.waitable_set_new()
         componentize_py_runtime.waitable_join(waitable, future_state.waitable_set)
-        
+
         return cast(T, componentize_py_runtime.promise_get_result(await future, promise))
 
 async def _wrap_spawned(coroutine: Any) -> None:
@@ -566,5 +569,5 @@ def spawn(coroutine: Any) -> None:
     global _future_state
 
     _future_state.get().pending_count += 1
-    
+
     asyncio.create_task(_wrap_spawned(coroutine))

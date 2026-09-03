@@ -1,7 +1,7 @@
 #![deny(warnings)]
 
 use {
-    anyhow::{Result, anyhow},
+    anyhow::{anyhow, Result},
     proptest::{
         strategy::{Just, Strategy, ValueTree},
         test_runner::{Config, TestRng, TestRunner},
@@ -60,10 +60,28 @@ enum Type {
     },
     Tuple(Vec<Type>),
     List(Box<Type>),
+    Map(Box<Type>, Box<Type>),
+}
+
+fn any_key_type() -> impl Strategy<Value = Type> {
+    (0..11).prop_flat_map(move |index| match index {
+        0 => Just(Type::Bool).boxed(),
+        1 => Just(Type::U8).boxed(),
+        2 => Just(Type::S8).boxed(),
+        3 => Just(Type::U16).boxed(),
+        4 => Just(Type::S16).boxed(),
+        5 => Just(Type::U32).boxed(),
+        6 => Just(Type::S32).boxed(),
+        7 => Just(Type::U64).boxed(),
+        8 => Just(Type::S64).boxed(),
+        9 => Just(Type::Char).boxed(),
+        10 => Just(Type::String).boxed(),
+        _ => unreachable!(),
+    })
 }
 
 fn any_type(max_size: usize, next_id: Rc<Cell<usize>>) -> impl Strategy<Value = Type> {
-    (0..21).prop_flat_map(move |index| match index {
+    (0..22).prop_flat_map(move |index| match index {
         0 => Just(Type::Bool).boxed(),
         1 => Just(Type::U8).boxed(),
         2 => Just(Type::S8).boxed(),
@@ -141,6 +159,9 @@ fn any_type(max_size: usize, next_id: Rc<Cell<usize>>) -> impl Strategy<Value = 
         }
         20 => any_type(max_size, next_id.clone())
             .prop_map(|ty| Type::List(Box::new(ty)))
+            .boxed(),
+        21 => (any_key_type(), any_type(max_size, next_id.clone()))
+            .prop_map(|(k, v)| Type::Map(Box::new(k), Box::new(v)))
             .boxed(),
         _ => unreachable!(),
     })
@@ -271,6 +292,9 @@ fn wit_type_name(wit: &mut String, ty: &Type) -> String {
         Type::List(ty) => {
             format!("list<{}>", wit_type_name(wit, ty))
         }
+        Type::Map(k, v) => {
+            format!("map<{}, {}>", wit_type_name(wit, k), wit_type_name(wit, v))
+        }
     }
 }
 
@@ -325,6 +349,9 @@ fn rust_type_name(ty: &Type) -> String {
         }
         Type::List(ty) => {
             format!("Vec<{}>", rust_type_name(ty))
+        }
+        Type::Map(k, v) => {
+            format!("HashMap<{}, {}>", rust_type_name(k), rust_type_name(v))
         }
     }
 }
@@ -417,6 +444,12 @@ fn equality(a: &str, b: &str, ty: &Type) -> String {
         Type::List(ty) => format!(
             "{a}.len() == {b}.len() && {a}.iter().zip({b}.iter()).all(|(a, b)| {})",
             equality("a", "b", ty)
+        ),
+        Type::Map(k, v) => format!(
+            "{a}.len() == {b}.len() && {a}.iter().collect::<BTreeMap<_, _>>().into_iter()\
+             .zip({b}.iter().collect::<BTreeMap<_, _>>().into_iter()).all(|((ak, av), (bk, bv))| {} && {})",
+            equality("ak", "bk", k),
+            equality("av", "bv", v)
         ),
     }
 }
@@ -545,6 +578,13 @@ fn strategy(ty: &Type, max_list_size: usize) -> String {
             format!(
                 "proptest::collection::vec({}, 0..{max_list_size}.max(1))",
                 strategy(ty, max_list_size / 2)
+            )
+        }
+        Type::Map(k, v) => {
+            format!(
+                "proptest::collection::hash_map({}, {}, 0..{max_list_size}.max(1))",
+                strategy(k, max_list_size / 2),
+                strategy(v, max_list_size / 2)
             )
         }
     }
@@ -814,6 +854,7 @@ use {{
         component::{{Instance, InstancePre, Linker, TypedFunc, HasSelf}},
         Store,
     }},
+    std::collections::{{HashMap, BTreeMap}},
 }};
 
 wasmtime::component::bindgen!({{
@@ -838,6 +879,7 @@ impl super::Host for Host {{
 
     fn add_to_linker(linker: &mut Linker<Ctx>) -> Result<()> {{
         wasmtime_wasi::p2::add_to_linker_async(&mut *linker)?;
+        wasmtime_wasi::p3::add_to_linker(&mut *linker)?;
         {PREFIX}::add_to_linker::<_, HasSelf<_>>(linker, |ctx| ctx)?;
         Ok(())
     }}

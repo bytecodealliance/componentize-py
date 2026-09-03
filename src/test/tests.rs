@@ -133,6 +133,7 @@ impl super::Host for Host {
 
     fn add_to_linker(linker: &mut Linker<Ctx>) -> Result<()> {
         wasmtime_wasi::p2::add_to_linker_async(linker)?;
+        wasmtime_wasi::p3::add_to_linker(linker)?;
         Tests::add_to_linker::<_, HasSelf<_>>(linker, |ctx| ctx)?;
         foo_sdk::FooWorldUnion::add_to_linker::<_, HasSelf<_>>(linker, |ctx| ctx)?;
         Ok(())
@@ -1206,14 +1207,18 @@ fn filesystem() -> Result<()> {
 
     TESTER.test_with_wasi::<Host>(wasi, |world, store, runtime| {
         runtime.block_on(async {
-            let value = world
-                .call_read_file(store, filename)
+            store
+                .run_concurrent(async |store| {
+                    let value = world
+                        .call_read_file(store, filename.to_string())
+                        .await?
+                        .map_err(|s| anyhow!("{s}"))?;
+
+                    assert_eq!(&value, message);
+
+                    Ok(())
+                })
                 .await?
-                .map_err(|s| anyhow!("{s}"))?;
-
-            assert_eq!(&value, message);
-
-            Ok(())
         })
     })
 }
@@ -2005,14 +2010,14 @@ fn guest_instance_shared_across_functions() -> Result<()> {
 "#,
         )
         .replace(
-            r#"    def read_file(self, path: str) -> bytes:
+            r#"    async def read_file(self, path: str) -> bytes:
         try:
             with open(file=path, mode="rb") as f:
                 return f.read()
         except:
             raise Err(traceback.format_exc())
 "#,
-            r#"    def read_file(self, path: str) -> bytes:
+            r#"    async def read_file(self, path: str) -> bytes:
         return self.stash
 "#,
         )
@@ -2024,14 +2029,18 @@ fn guest_instance_shared_across_functions() -> Result<()> {
                 .call_test_resource_borrow_import(&mut *store, 42)
                 .await?;
 
-            let value = world
-                .call_read_file(&mut *store, "unused")
+            store
+                .run_concurrent(async |store| {
+                    let value = world
+                        .call_read_file(store, "unused".into())
+                        .await?
+                        .map_err(|s| anyhow!("{s}"))?;
+
+                    assert_eq!(b"42".as_slice(), &value);
+
+                    Ok(())
+                })
                 .await?
-                .map_err(|s| anyhow!("{s}"))?;
-
-            assert_eq!(b"42".as_slice(), &value);
-
-            Ok(())
         })
     })
 }
