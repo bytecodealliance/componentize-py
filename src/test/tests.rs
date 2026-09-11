@@ -1400,6 +1400,33 @@ fn test_echo_stream_u8(delay: bool) -> Result<()> {
     })
 }
 
+#[test]
+fn test_similar_streams_and_futures() -> Result<()> {
+    // Previously, `componentize-py` would coalesce stream and future
+    // constructor functions whose payloads were structurally (but not
+    // nominally) equivalent, making the names unpredictable.  This test ensures
+    // we don't do that anymore.
+    TESTER.test(|world, store, runtime| {
+        runtime.block_on(async {
+            store
+                .run_concurrent(async |store| {
+                    // Just call the function and make sure the stream and
+                    // future constructor functions are resolved in the Python
+                    // code:
+                    world
+                        .componentize_py_test_similar_streams_and_futures()
+                        .call_baz(store)
+                        .await?;
+
+                    anyhow::Ok(())
+                })
+                .await?
+        })?;
+
+        Ok(())
+    })
+}
+
 struct OptionProducer<T> {
     source: Option<T>,
     sleep: Pin<Box<dyn Future<Output = ()> + Send>>,

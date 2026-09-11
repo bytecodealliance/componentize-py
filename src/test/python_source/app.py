@@ -19,6 +19,7 @@ from tests.imports.componentize_py.test import simple_async_import_and_export
 from tests.imports.componentize_py.test import host_thing_interface
 from tests.exports.componentize_py.test import resource_alias2
 from tests.exports.componentize_py.test import streams_and_futures
+from tests.exports.componentize_py.test import similar_streams_and_futures
 from typing import Tuple, List, Optional
 from foo_sdk.wit.exports.foo import sdk as foo_exports
 from foo_sdk.wit.exports.foo.sdk import foo_interface as foo_iface
@@ -297,3 +298,11 @@ class FooInterface(foo_exports.FooInterface):
 class BarInterface(bar_exports.BarInterface):
     def test(self, s: str) -> str:
         return bar_test(f"{s} BarInterface.test")
+
+@exports.similar_streams_and_futures.guest
+class SimilarStreamsAndFutures(exports.SimilarStreamsAndFutures):
+    async def baz(self) -> tuple[StreamReader[similar_streams_and_futures.Foo], StreamReader[similar_streams_and_futures.Bar], FutureReader[similar_streams_and_futures.Foo], FutureReader[similar_streams_and_futures.Bar]]:
+        return (tests.componentize_py_test_similar_streams_and_futures_foo_stream()[1],
+                tests.componentize_py_test_similar_streams_and_futures_bar_stream()[1],
+                tests.componentize_py_test_similar_streams_and_futures_foo_future(lambda: similar_streams_and_futures.Foo_A())[1],
+                tests.componentize_py_test_similar_streams_and_futures_bar_future(lambda: similar_streams_and_futures.Bar_A())[1])

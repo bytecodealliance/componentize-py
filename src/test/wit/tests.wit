@@ -165,6 +165,18 @@ interface streams-and-futures {
   dropped-future-reader-host: async func(value: string) -> tuple<future<host-thing>, future<host-thing>>;
 }
 
+interface similar-streams-and-futures {
+  variant foo {
+    a, b, c
+  }
+
+  variant bar {
+    a, b, c
+  }
+
+  baz: async func() -> tuple<stream<foo>, stream<bar>, future<foo>, future<bar>>;
+}
+
 world tests {
   use resource-alias1.{thing};
   use resource-floats.{float};
@@ -190,6 +202,7 @@ world tests {
   import resource-borrow-in-record;
   export resource-borrow-in-record;
   export streams-and-futures;
+  export similar-streams-and-futures;
 
   export resource-floats-exports: interface {
     resource float {

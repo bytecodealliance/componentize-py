@@ -2019,11 +2019,13 @@ class {camel}(Protocol):
                     | TypeDefKind::Result(_)
                     | TypeDefKind::Handle(_) => (None, Vec::new()),
                     TypeDefKind::Stream(ty) => {
-                        let canonical = canonical_payload(self.resolve, &mut types, ty);
-                        let code = if stream_payloads.contains(&canonical) {
+                        let snake = ty
+                            .map(|ty| names.mangle_name(ty))
+                            .unwrap_or_else(|| "unit".into());
+                        let code = if stream_payloads.contains(&snake) {
                             None
                         } else {
-                            stream_payloads.insert(canonical);
+                            stream_payloads.insert(snake.clone());
 
                             Some(if let Some(Type::U8 | Type::S8) = ty {
                                 if stub_runtime_calls {
@@ -2044,9 +2046,6 @@ def byte_stream() -> tuple[ByteStreamWriter, ByteStreamReader]:
                                     )
                                 }
                             } else {
-                                let snake = ty
-                                    .map(|ty| names.mangle_name(ty))
-                                    .unwrap_or_else(|| "unit".into());
                                 let camel = ty
                                     .map(|ty| names.type_name(ty, &seen, None))
                                     .unwrap_or_else(|| "None".into());
@@ -2073,15 +2072,14 @@ def {snake}_stream() -> tuple[StreamWriter[{camel}], StreamReader[{camel}]]:
                         (code.map(Code::Shared), Vec::new())
                     }
                     TypeDefKind::Future(ty) => {
-                        let canonical = canonical_payload(self.resolve, &mut types, ty);
-                        let code = if future_payloads.contains(&canonical) {
+                        let snake = ty
+                            .map(|ty| names.mangle_name(ty))
+                            .unwrap_or_else(|| "unit".into());
+                        let code = if future_payloads.contains(&snake) {
                             None
                         } else {
-                            future_payloads.insert(canonical);
+                            future_payloads.insert(snake.clone());
 
-                            let snake = ty
-                                .map(|ty| names.mangle_name(ty))
-                                .unwrap_or_else(|| "unit".into());
                             let camel = ty
                                 .map(|ty| names.type_name(ty, &seen, None))
                                 .unwrap_or_else(|| "None".into());
@@ -3257,19 +3255,6 @@ fn docstring(docs: Option<&str>, indent_level: usize, error: Option<&str>) -> St
         format!("{quote}{newline}{docs}{indent}{quote}{newline}{indent}")
     } else {
         String::new()
-    }
-}
-
-fn canonical_payload(resolve: &Resolve, types: &mut Types, ty: &Option<Type>) -> Option<Type> {
-    match ty {
-        Some(Type::Id(id)) => {
-            let id = types.get_representative_type(*id);
-            match resolve.types[id].kind {
-                TypeDefKind::Type(t) => Some(t),
-                _ => Some(Type::Id(id)),
-            }
-        }
-        other => *other,
     }
 }
 
