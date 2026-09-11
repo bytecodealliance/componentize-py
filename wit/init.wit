@@ -98,6 +98,6 @@ world init {
             results: list<result-record>,
         }
 
-        init: func(app-name: string, symbols: symbols, stub-wasi: bool) -> result<_, string>;
+        init: async func(app-name: string, symbols: symbols, stub-wasi: bool) -> result<_, string>;
     }
 }

@@ -22,7 +22,6 @@ wit-parser = "0.258.0"
 wit-component = "0.258.0"
 wasmparser = "0.258.0"
 indexmap = "2.6.0"
-bincode = "1.3.3"
 heck = "0.5.0"
 pyo3 = { version = "0.28.3", features = [
     "abi3-py39",
@@ -31,7 +30,7 @@ pyo3 = { version = "0.28.3", features = [
 wasmtime = "48.0.0"
 wasmtime-wasi = { version = "48.0.0", features = [ "p3" ] }
 once_cell = "1.20.2"
-component-init-transform = "0.2.0"
+component-init-transform = "0.3.0"
 async-trait = "0.1.83"
 futures = "0.3.31"
 tokio = { version = "1.41.0", features = [
@@ -42,7 +41,6 @@ tokio = { version = "1.41.0", features = [
 ] }
 bytes = "1.8.0"
 pretty_env_logger = "0.5.0"
-cap-std = "3.3.0"
 im-rc = "15.1.0"
 serde = { version = "1.0.213", features = ["derive"] }
 toml = "0.8.19"

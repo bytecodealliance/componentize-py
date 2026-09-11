@@ -15,15 +15,38 @@ use tar::Archive;
 
 #[test]
 fn cli_example() -> anyhow::Result<()> {
-    test_cli_example("cli", "wasi:cli/command@0.2.0")
+    test_cli_example("cli", "wasi:cli/command@0.2.0", "Hello, world!\n", false)
 }
 
 #[test]
 fn cli_p3_example() -> anyhow::Result<()> {
-    test_cli_example("cli-p3", "wasi:cli/command@0.3.0")
+    test_cli_example("cli-p3", "wasi:cli/command@0.3.0", "Hello, world!\n", false)
 }
 
-fn test_cli_example(name: &str, world: &str) -> anyhow::Result<()> {
+#[test]
+fn multithreading_example() -> anyhow::Result<()> {
+    test_cli_example(
+        "multithreading",
+        "wasi:cli/command@0.3.0",
+        r#"thread `a` started
+thread `b` started
+thread `c` started
+started all threads
+thread `a` finished
+thread `b` finished
+thread `c` finished
+joined all threads
+"#,
+        true,
+    )
+}
+
+fn test_cli_example(
+    name: &str,
+    world: &str,
+    stdout: &'static str,
+    threading: bool,
+) -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     fs_extra::copy_items(
         &[format!("./examples/{name}").as_str(), "./wit"],
@@ -32,28 +55,32 @@ fn test_cli_example(name: &str, world: &str) -> anyhow::Result<()> {
     )?;
     let path = dir.path().join(name);
 
-    cargo::cargo_bin_cmd!("componentize-py")
-        .current_dir(&path)
-        .args([
-            "-d",
-            "../wit",
-            "-w",
-            world,
-            "componentize",
-            "app",
-            "-o",
-            "cli.wasm",
-        ])
+    let mut command = cargo::cargo_bin_cmd!("componentize-py");
+    command.current_dir(&path).args([
+        "-d",
+        "../wit",
+        "-w",
+        world,
+        "componentize",
+        "app",
+        "-o",
+        "cli.wasm",
+    ]);
+    if threading {
+        command.arg("--target=wasm32-wasip3-threads");
+    }
+    command
         .assert()
         .success()
         .stdout("Component built successfully\n");
 
-    Command::new("wasmtime")
-        .current_dir(&path)
-        .args(["run", "-Sp3", "-Wcomponent-model-async", "cli.wasm"])
-        .assert()
-        .success()
-        .stdout("Hello, world!\n");
+    let mut command = Command::new("wasmtime");
+    command.current_dir(&path).arg("run");
+    if threading {
+        command.arg("-Wcomponent-model-threading");
+    }
+    command.arg("cli.wasm");
+    command.assert().success().stdout(stdout);
 
     Ok(())
 }
@@ -98,8 +125,7 @@ fn test_http_example(name: &str, world: &str, port: u16) -> anyhow::Result<()> {
         .args([
             "serve",
             &format!("--addr=0.0.0.0:{port}"),
-            "-Sp3,common",
-            "-Wcomponent-model-async",
+            "-Scommon",
             "http.wasm",
         ])
         .spawn()?;
@@ -270,8 +296,7 @@ fn test_tcp_example(name: &str, world: &str) -> anyhow::Result<()> {
         .current_dir(&path)
         .args([
             "run",
-            "-Sp3,inherit-network",
-            "-Wcomponent-model-async",
+            "-Sinherit-network",
             "tcp.wasm",
             &format!("127.0.0.1:{port}"),
         ])

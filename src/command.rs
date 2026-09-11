@@ -1,5 +1,5 @@
 use {
-    crate::{BindingsGenerator, ComponentGenerator},
+    crate::{BindingsGenerator, ComponentGenerator, Target},
     anyhow::{Context, Result},
     clap::Parser as _,
     std::{
@@ -7,7 +7,8 @@ use {
         ffi::OsString,
         fs,
         path::{Path, PathBuf},
-        process, str,
+        process,
+        str::{self, FromStr as _},
     },
     tokio::runtime::Runtime,
 };
@@ -197,6 +198,22 @@ pub struct Componentize {
     /// randomness is required.
     #[arg(short = 's', long)]
     pub stub_wasi: bool,
+
+    /// Set the native target explicitly.
+    ///
+    /// By default, `componentize-py` will choose the native target
+    /// automatically based on whether any of the target worlds use Component
+    /// Model async features.  If so, `wasm32-wasip3` will be used; otherwise
+    /// `wasm32-wasip2` will be used.  This option overrides that selection.
+    ///
+    /// A value of `wasm32-wasip3-threads` is also currently accepted, in which
+    /// case the Component Model cooperative multithreading feature will be
+    /// used.  That feature is experimental as of this writing; once it is
+    /// stablized, `componentize-py` will enable multithreading by default for
+    /// the `wasm32-wasip3` target, and the `wasm32-wasip3-threads` target will
+    /// be simply become an alias for `wasm32-wasip3`.
+    #[arg(long)]
+    pub target: Option<String>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -323,6 +340,11 @@ fn componentize(common: Common, componentize: Componentize) -> Result<()> {
                 .map(|(a, b)| (a.as_str(), b.as_str()))
                 .collect(),
             intersect_world: componentize.intersect_world.as_deref(),
+            target: componentize
+                .target
+                .as_deref()
+                .map(Target::from_str)
+                .transpose()?,
         }
         .generate(),
     )?;
@@ -568,6 +590,7 @@ class Bindings(bindings.WorldExports):
             output: out_dir.path().join("app.wasm"),
             stub_wasi: false,
             intersect_world: None,
+            target: None,
         };
         componentize(common, componentize_opts)
     }
@@ -681,6 +704,7 @@ world lib-world {
                 output: dir.path().join("app.wasm"),
                 stub_wasi: false,
                 intersect_world: None,
+                target: None,
             },
         )
     }
