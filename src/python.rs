@@ -18,7 +18,7 @@ use {
 #[allow(clippy::too_many_arguments)]
 #[pyo3::pyfunction]
 #[pyo3(name = "componentize")]
-#[pyo3(signature = (wit_path, worlds, features, all_features, bindings_module, python_path, module_worlds, app_name, output_path, stub_wasi, import_interface_names, export_interface_names, full_names = None, intersect_world = None, world_module = None))]
+#[pyo3(signature = (wit_path, worlds, features, all_features, bindings_module, python_path, module_worlds, app_name, output_path, stub_wasi, import_interface_names, export_interface_names, full_names = None, intersect_world = None, world_module = None, registry_config = None, no_default_registries = false))]
 fn python_componentize(
     wit_path: Vec<PathBuf>,
     worlds: Vec<String>,
@@ -35,6 +35,8 @@ fn python_componentize(
     full_names: Option<bool>,
     intersect_world: Option<&str>,
     world_module: Option<&str>,
+    registry_config: Option<PathBuf>,
+    no_default_registries: bool,
 ) -> PyResult<()> {
     let bindings_module = crate::resolve_deprecated(
         bindings_module.map(str::to_owned),
@@ -72,6 +74,8 @@ fn python_componentize(
                     .map(|(a, b)| (a.as_ref(), b.as_ref()))
                     .collect(),
                 intersect_world,
+                registry_config: registry_config.as_deref(),
+                default_registries: !no_default_registries,
             }
             .generate(),
         )
@@ -82,7 +86,7 @@ fn python_componentize(
 #[allow(clippy::too_many_arguments)]
 #[pyo3::pyfunction]
 #[pyo3(name = "generate_bindings")]
-#[pyo3(signature = (wit_path, worlds, features, all_features, bindings_module, output_dir, import_interface_names, export_interface_names, allow_existing = false, full_names = None, world_module = None))]
+#[pyo3(signature = (wit_path, worlds, features, all_features, bindings_module, output_dir, import_interface_names, export_interface_names, allow_existing = false, full_names = None, world_module = None, registry_config = None, no_default_registries = false))]
 fn python_generate_bindings(
     wit_path: Vec<PathBuf>,
     worlds: Vec<String>,
@@ -95,6 +99,8 @@ fn python_generate_bindings(
     allow_existing: bool,
     full_names: Option<bool>,
     world_module: Option<&str>,
+    registry_config: Option<PathBuf>,
+    no_default_registries: bool,
 ) -> PyResult<()> {
     let bindings_module = crate::resolve_deprecated(
         bindings_module.map(str::to_owned),
@@ -103,24 +109,30 @@ fn python_generate_bindings(
         false,
     )
     .map_err(|e| PyAssertionError::new_err(format!("{e:?}")))?;
-    BindingsGenerator {
-        wit_paths: &wit_path.iter().map(|v| v.as_path()).collect::<Vec<_>>(),
-        worlds: &worlds.iter().map(|v| v.as_str()).collect::<Vec<_>>(),
-        features: &features.iter().map(|v| v.as_str()).collect::<Vec<_>>(),
-        all_features,
-        bindings_module: bindings_module.as_deref(),
-        output_dir: &output_dir,
-        allow_existing,
-        import_interface_names: &import_interface_names
-            .iter()
-            .map(|(a, b)| (a.as_ref(), b.as_ref()))
-            .collect(),
-        export_interface_names: &export_interface_names
-            .iter()
-            .map(|(a, b)| (a.as_ref(), b.as_ref()))
-            .collect(),
-    }
-    .generate()
+    (|| {
+        Runtime::new()?.block_on(
+            BindingsGenerator {
+                wit_paths: &wit_path.iter().map(|v| v.as_path()).collect::<Vec<_>>(),
+                worlds: &worlds.iter().map(|v| v.as_str()).collect::<Vec<_>>(),
+                features: &features.iter().map(|v| v.as_str()).collect::<Vec<_>>(),
+                all_features,
+                bindings_module: bindings_module.as_deref(),
+                output_dir: &output_dir,
+                allow_existing,
+                import_interface_names: &import_interface_names
+                    .iter()
+                    .map(|(a, b)| (a.as_ref(), b.as_ref()))
+                    .collect(),
+                export_interface_names: &export_interface_names
+                    .iter()
+                    .map(|(a, b)| (a.as_ref(), b.as_ref()))
+                    .collect(),
+                registry_config: registry_config.as_deref(),
+                default_registries: !no_default_registries,
+            }
+            .generate(),
+        )
+    })()
     .map_err(|e| PyAssertionError::new_err(format!("{e:?}")))
 }
 

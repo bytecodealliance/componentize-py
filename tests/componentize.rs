@@ -1,5 +1,6 @@
 use core::net::Ipv4Addr;
 use std::{
+    fs,
     io::{Read as _, Write as _},
     path::{Path, PathBuf},
     process::Stdio,
@@ -12,6 +13,121 @@ use flate2::bufread::GzDecoder;
 use fs_extra::dir::CopyOptions;
 use predicates::prelude::predicate;
 use tar::Archive;
+
+fn write_test_registry(directory: &Path, package: &str, wit: &str) -> anyhow::Result<PathBuf> {
+    let (namespace, name) = package.split_once(':').unwrap();
+    let mut resolve = wit_parser::Resolve::new();
+    let package_id = resolve.push_str("registry.wit", wit)?;
+    let version = resolve.packages[package_id]
+        .name
+        .version
+        .as_ref()
+        .unwrap()
+        .to_string();
+    let root = directory.join("registry");
+    let package_path = root
+        .join(namespace)
+        .join(name)
+        .join(format!("{version}.wasm"));
+    fs::create_dir_all(package_path.parent().unwrap())?;
+    fs::write(package_path, wit_component::encode(&resolve, package_id)?)?;
+
+    let config = directory.join("registry.toml");
+    fs::write(
+        &config,
+        format!(
+            r#"[namespace_registries]
+test = "test.invalid"
+
+[registry."test.invalid".local]
+root = {:?}
+"#,
+            root
+        ),
+    )?;
+    Ok(config)
+}
+
+#[test]
+fn componentizes_remote_target_without_local_wit() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let config = write_test_registry(
+        dir.path(),
+        "test:registry",
+        "package test:registry@1.2.3;\nworld command { export marker: func() -> string; }",
+    )?;
+    fs::write(
+        dir.path().join("app.py"),
+        "import wit\n\n@wit.guest\nclass App(wit.WorldExports):\n    def marker(self) -> str:\n        return \"registry\"\n",
+    )?;
+
+    cargo::cargo_bin_cmd!("componentize-py")
+        .current_dir(dir.path())
+        .args([
+            "--no-default-registries",
+            "--registry-config",
+            config.to_str().unwrap(),
+            "-w",
+            "test:registry/command@1.2.3",
+            "componentize",
+            "app",
+            "-o",
+            "app.wasm",
+        ])
+        .assert()
+        .success();
+    assert!(dir.path().join("app.wasm").is_file());
+    Ok(())
+}
+
+#[test]
+fn remote_intersector_preserves_local_default_target() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let config = write_test_registry(
+        dir.path(),
+        "test:registry",
+        "package test:registry@1.2.3;\nworld limiter { export marker: func() -> u32; }",
+    )?;
+    fs::write(
+        dir.path().join("local.wit"),
+        "package test:local@1.0.0;\nworld local { export marker: func() -> string; }",
+    )?;
+    fs::write(
+        dir.path().join("app.py"),
+        "import wit\n\n@wit.guest\nclass App(wit.WorldExports):\n    def marker(self) -> str:\n        return \"local\"\n",
+    )?;
+
+    cargo::cargo_bin_cmd!("componentize-py")
+        .current_dir(dir.path())
+        .args([
+            "--no-default-registries",
+            "--registry-config",
+            config.to_str().unwrap(),
+            "-d",
+            "local.wit",
+            "componentize",
+            "app",
+            "--intersect-world",
+            "test:registry/limiter@1.2.3",
+            "-o",
+            "app.wasm",
+        ])
+        .assert()
+        .success();
+
+    let bytes = fs::read(dir.path().join("app.wasm"))?;
+    let wit_component::DecodedWasm::Component(resolve, world) = wit_component::decode(&bytes)?
+    else {
+        anyhow::bail!("expected a component");
+    };
+    let wit_parser::WorldItem::Function(marker) =
+        &resolve.worlds[world].exports[&wit_parser::WorldKey::Name("marker".into())]
+    else {
+        anyhow::bail!("expected the marker function");
+    };
+    assert_eq!(marker.result, Some(wit_parser::Type::String));
+    Ok(())
+}
 
 #[test]
 fn cli_example() -> anyhow::Result<()> {

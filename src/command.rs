@@ -104,6 +104,14 @@ pub struct Common {
     /// If this is not specified, the module name will default to "wit".
     #[arg(long)]
     pub bindings_module: Option<String>,
+
+    /// Path to a wasm package registry configuration file.
+    #[arg(long)]
+    pub registry_config: Option<PathBuf>,
+
+    /// Disable the global and built-in registry mappings.
+    #[arg(long)]
+    pub no_default_registries: bool,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -242,7 +250,7 @@ pub fn run<T: Into<OsString> + Clone, I: IntoIterator<Item = T>>(args: I) -> Res
 }
 
 fn generate_bindings(common: Common, bindings: Bindings) -> Result<()> {
-    BindingsGenerator {
+    let generator = BindingsGenerator {
         wit_paths: &common
             .wit_path
             .iter()
@@ -268,8 +276,10 @@ fn generate_bindings(common: Common, bindings: Bindings) -> Result<()> {
             .iter()
             .map(|(a, b)| (a.as_str(), b.as_str()))
             .collect(),
-    }
-    .generate()
+        registry_config: common.registry_config.as_deref(),
+        default_registries: !common.no_default_registries,
+    };
+    Runtime::new()?.block_on(generator.generate())
 }
 
 fn componentize(common: Common, componentize: Componentize) -> Result<()> {
@@ -323,6 +333,8 @@ fn componentize(common: Common, componentize: Componentize) -> Result<()> {
                 .map(|(a, b)| (a.as_str(), b.as_str()))
                 .collect(),
             intersect_world: componentize.intersect_world.as_deref(),
+            registry_config: common.registry_config.as_deref(),
+            default_registries: !common.no_default_registries,
         }
         .generate(),
     )?;
@@ -461,6 +473,8 @@ mod tests {
             all_features: false,
             import_interface_name: Vec::new(),
             export_interface_name: Vec::new(),
+            registry_config: None,
+            no_default_registries: false,
         };
         let bindings = bindings(out_dir.path());
         generate_bindings(common, bindings)?;
@@ -489,6 +503,8 @@ mod tests {
             all_features: false,
             import_interface_name: Vec::new(),
             export_interface_name: Vec::new(),
+            registry_config: None,
+            no_default_registries: false,
         };
         let bindings = bindings(out_dir.path());
         generate_bindings(common, bindings)?;
@@ -517,6 +533,8 @@ mod tests {
             all_features: true,
             import_interface_name: Vec::new(),
             export_interface_name: Vec::new(),
+            registry_config: None,
+            no_default_registries: false,
         };
         let bindings = bindings(out_dir.path());
         generate_bindings(common, bindings)?;
@@ -544,6 +562,8 @@ mod tests {
             all_features: false,
             import_interface_name: Vec::new(),
             export_interface_name: Vec::new(),
+            registry_config: None,
+            no_default_registries: false,
         };
         let bindings = bindings(out_dir.path());
         generate_bindings(common.clone(), bindings)?;
@@ -654,6 +674,8 @@ world lib-world {
                 all_features: false,
                 import_interface_name: Vec::new(),
                 export_interface_name: Vec::new(),
+                registry_config: None,
+                no_default_registries: false,
             },
             bindings(lib_wit_dir),
         )?;
@@ -668,6 +690,8 @@ world lib-world {
                 all_features: false,
                 import_interface_name: Vec::new(),
                 export_interface_name: Vec::new(),
+                registry_config: None,
+                no_default_registries: false,
             },
             Componentize {
                 app_name: "app".into(),
@@ -702,6 +726,8 @@ world lib-world {
             all_features: false,
             import_interface_name: Vec::new(),
             export_interface_name: Vec::new(),
+            registry_config: None,
+            no_default_registries: false,
         }
     }
 
