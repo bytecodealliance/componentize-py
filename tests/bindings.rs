@@ -266,6 +266,99 @@ if not any(("'''" in doc and '\\"""' in doc) for doc in backslash_docs):
     Ok(())
 }
 
+#[test]
+fn bindings_docstrings_omit_wit_line_comments() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    fs::write(
+        dir.path().join("example.wit"),
+        r#"package demo:docs;
+
+// package of named fields (line comment)
+interface documented {
+  /// documented function
+  doc-func: func();
+
+  // some comment
+  /// plus documentation
+  comment-and-doc: func();
+
+  /// documentation plus
+  // another comment.
+  doc-and-comment: func();
+
+  // only a line comment
+  plain: func();
+}
+
+world example {
+  // world line comment
+  export documented;
+}
+"#,
+    )?;
+
+    cargo::cargo_bin_cmd!("componentize-py")
+        .current_dir(dir.path())
+        .args(["-d", "example.wit", "-w", "example", "bindings", "."])
+        .assert()
+        .success();
+
+    assert!(predicate::path::is_dir().eval(&dir.path().join("wit")));
+
+    Command::new("python3")
+        .current_dir(dir.path())
+        .args([
+            "-c",
+            r#"
+import ast
+import sys
+from pathlib import Path
+
+docs_by_name = {}
+for path in Path(".").rglob("*.py"):
+    tree = ast.parse(path.read_text(), filename=str(path))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Module)):
+            doc = ast.get_docstring(node)
+            if doc:
+                key = getattr(node, "name", "<module>")
+                docs_by_name.setdefault(key, []).append(doc)
+
+all_docs = "\n".join(doc for docs in docs_by_name.values() for doc in docs)
+for forbidden in (
+    "package of named fields",
+    "some comment",
+    "another comment",
+    "only a line comment",
+    "world line comment",
+):
+    if forbidden in all_docs:
+        sys.stderr.write("line comment leaked into docstrings: %r\n%s\n" % (forbidden, all_docs))
+        sys.exit(1)
+
+def has_doc(name, text):
+    return any(text in doc for doc in docs_by_name.get(name, []))
+
+if not has_doc("doc_func", "documented function"):
+    sys.stderr.write("doc_func lost /// docs: %r\n" % docs_by_name.get("doc_func"))
+    sys.exit(1)
+if not has_doc("comment_and_doc", "plus documentation"):
+    sys.stderr.write("comment_and_doc lost /// docs: %r\n" % docs_by_name.get("comment_and_doc"))
+    sys.exit(1)
+if not has_doc("doc_and_comment", "documentation plus"):
+    sys.stderr.write("doc_and_comment lost /// docs: %r\n" % docs_by_name.get("doc_and_comment"))
+    sys.exit(1)
+if docs_by_name.get("plain"):
+    sys.stderr.write("plain unexpectedly has a docstring: %r\n" % docs_by_name.get("plain"))
+    sys.exit(1)
+"#,
+        ])
+        .assert()
+        .success();
+
+    Ok(())
+}
+
 fn generate_bindings(path: &Path, world: &str) -> Result<Assert, anyhow::Error> {
     Ok(cargo::cargo_bin_cmd!("componentize-py")
         .current_dir(path)

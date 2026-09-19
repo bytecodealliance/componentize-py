@@ -212,12 +212,15 @@ impl BindingsGenerator<'_> {
 
         let mut packages = Vec::new();
         for &path in self.wit_paths {
-            packages.push((path, resolve.push_path(path)?.0));
+            packages.push((path, push_wit_path(&mut resolve, path)?));
         }
 
         if packages.is_empty() {
             // If no WIT directory was provided as a parameter, use ./wit by default.
-            packages.push((Path::new("wit"), resolve.push_path("wit")?.0));
+            packages.push((
+                Path::new("wit"),
+                push_wit_path(&mut resolve, Path::new("wit"))?,
+            ));
         }
 
         let worlds = select_worlds(&resolve, self.worlds, &packages)?;
@@ -971,6 +974,54 @@ impl ComponentGenerator<'_> {
 
         Ok(())
     }
+}
+
+fn is_wit_file(path: &Path) -> bool {
+    path.extension().and_then(|ext| ext.to_str()) == Some("wit")
+}
+
+/// Parse WIT from `path`, omitting `//` and `/* … */` comments so generated
+/// Python docstrings only include WIT documentation comments (`///` / `/**`).
+fn push_wit_path(resolve: &mut Resolve, path: &Path) -> Result<PackageId> {
+    if path.is_file() && is_wit_file(path) {
+        let contents = fs::read_to_string(path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        resolve.push_str(path, &summary::strip_wit_non_doc_comments(&contents))
+    } else if path.is_dir() {
+        let tmp = tempfile::tempdir()?;
+        copy_dir_keeping_doc_comments(path, tmp.path())?;
+        Ok(resolve.push_path(tmp.path())?.0)
+    } else {
+        Ok(resolve.push_path(path)?.0)
+    }
+}
+
+fn copy_dir_keeping_doc_comments(src: &Path, dst: &Path) -> Result<()> {
+    fs::create_dir_all(dst).with_context(|| format!("failed to create {}", dst.display()))?;
+    for entry in
+        fs::read_dir(src).with_context(|| format!("failed to read directory {}", src.display()))?
+    {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if src_path.is_dir() {
+            copy_dir_keeping_doc_comments(&src_path, &dst_path)?;
+        } else if is_wit_file(&src_path) {
+            let contents = fs::read_to_string(&src_path)
+                .with_context(|| format!("failed to read {}", src_path.display()))?;
+            fs::write(&dst_path, summary::strip_wit_non_doc_comments(&contents))
+                .with_context(|| format!("failed to write {}", dst_path.display()))?;
+        } else {
+            fs::copy(&src_path, &dst_path).with_context(|| {
+                format!(
+                    "failed to copy {} to {}",
+                    src_path.display(),
+                    dst_path.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
 }
 
 fn parse_features(features: &[&str]) -> IndexSet<String> {

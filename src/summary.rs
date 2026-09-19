@@ -3222,6 +3222,97 @@ fn bindings_module_import(name: &str, alias: &str) -> String {
     }
 }
 
+/// Drop WIT `//` and `/* … */` comments while keeping documentation comments
+/// (`///` and `/** … */`). Newlines inside removed comments are preserved so
+/// parse error locations stay aligned with the original file.
+pub(crate) fn strip_wit_non_doc_comments(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut rest = src;
+    let mut in_string = false;
+
+    while !rest.is_empty() {
+        if in_string {
+            let c = rest.chars().next().unwrap();
+            out.push(c);
+            rest = &rest[c.len_utf8()..];
+            if c == '\\' {
+                if let Some(next) = rest.chars().next() {
+                    out.push(next);
+                    rest = &rest[next.len_utf8()..];
+                }
+            } else if c == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        if rest.starts_with("///") {
+            let end = rest.find('\n').map_or(rest.len(), |i| i + 1);
+            out.push_str(&rest[..end]);
+            rest = &rest[end..];
+            continue;
+        }
+
+        if rest.starts_with("//") {
+            if let Some(i) = rest.find('\n') {
+                out.push('\n');
+                rest = &rest[i + 1..];
+            } else {
+                rest = "";
+            }
+            continue;
+        }
+
+        if rest.starts_with("/**") && !rest.starts_with("/**/") {
+            let end = block_comment_end(rest);
+            out.push_str(&rest[..end]);
+            rest = &rest[end..];
+            continue;
+        }
+
+        if rest.starts_with("/*") {
+            let end = block_comment_end(rest);
+            out.extend(rest[..end].chars().filter(|&c| c == '\n'));
+            rest = &rest[end..];
+            continue;
+        }
+
+        let c = rest.chars().next().unwrap();
+        if c == '"' {
+            in_string = true;
+        }
+        out.push(c);
+        rest = &rest[c.len_utf8()..];
+    }
+
+    out
+}
+
+fn block_comment_end(src: &str) -> usize {
+    let mut depth = 0;
+    let mut rest = src;
+    let mut offset = 0;
+    while !rest.is_empty() {
+        if rest.starts_with("/*") {
+            depth += 1;
+            offset += 2;
+            rest = &rest[2..];
+        } else if rest.starts_with("*/") {
+            depth -= 1;
+            offset += 2;
+            rest = &rest[2..];
+            if depth == 0 {
+                return offset;
+            }
+        } else {
+            let c = rest.chars().next().unwrap();
+            offset += c.len_utf8();
+            rest = &rest[c.len_utf8()..];
+        }
+    }
+    offset
+}
+
 fn docstring(docs: Option<&str>, indent_level: usize, error: Option<&str>) -> String {
     let docs = match (
         docs,
@@ -3302,6 +3393,107 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn strip_wit_non_doc_comments_keeps_docs_only() {
+        let src = r#"package demo:docs;
+
+// package-level line comment
+interface example {
+  // plain comment
+  /// real docs
+  foo: func();
+
+  /// kept
+  // dropped
+  bar: func();
+
+  /* block comment */
+  /** block docs */
+  baz: func();
+}
+
+world example {
+  // world comment
+  export example;
+}
+"#;
+        let stripped = super::strip_wit_non_doc_comments(src);
+        assert!(
+            !stripped.contains("package-level line comment"),
+            "{stripped}"
+        );
+        assert!(!stripped.contains("plain comment"), "{stripped}");
+        assert!(!stripped.contains("dropped"), "{stripped}");
+        assert!(!stripped.contains("block comment"), "{stripped}");
+        assert!(!stripped.contains("world comment"), "{stripped}");
+        assert!(stripped.contains("/// real docs"), "{stripped}");
+        assert!(stripped.contains("/// kept"), "{stripped}");
+        assert!(stripped.contains("/** block docs */"), "{stripped}");
+
+        let url_src = r#"package demo:docs;
+world example {
+  // ignore
+  /// see "http://example.com/x"
+  export echo: func();
+}
+"#;
+        let url_stripped = super::strip_wit_non_doc_comments(url_src);
+        assert!(
+            url_stripped.contains(r#"/// see "http://example.com/x""#),
+            "{url_stripped}"
+        );
+        assert!(!url_stripped.contains("// ignore"), "{url_stripped}");
+    }
+
+    #[test]
+    fn stripped_wit_docs_exclude_line_comments() {
+        let src = r#"package demo:docs;
+
+interface types {
+  // plain comment
+  /// real docs
+  foo: func();
+
+  // some comment
+  /// plus documentation
+  comment-and-doc: func();
+
+  /// documentation plus
+  // another comment.
+  doc-and-comment: func();
+
+  // only a comment
+  plain: func();
+}
+
+world example {
+  export types;
+}
+"#;
+        let stripped = super::strip_wit_non_doc_comments(src);
+        let mut resolve = wit_parser::Resolve::default();
+        resolve.push_str("docs.wit", &stripped).unwrap();
+        let iface = resolve
+            .interfaces
+            .iter()
+            .find_map(|(_, iface)| (iface.name.as_deref() == Some("types")).then_some(iface))
+            .unwrap();
+
+        assert_eq!(
+            iface.functions["foo"].docs.contents.as_deref(),
+            Some("real docs")
+        );
+        assert_eq!(
+            iface.functions["comment-and-doc"].docs.contents.as_deref(),
+            Some("plus documentation")
+        );
+        assert_eq!(
+            iface.functions["doc-and-comment"].docs.contents.as_deref(),
+            Some("documentation plus")
+        );
+        assert_eq!(iface.functions["plain"].docs.contents, None);
     }
 
     #[test]
