@@ -43,6 +43,7 @@ mod link;
 mod prelink;
 #[cfg(feature = "pyo3")]
 mod python;
+mod registry;
 mod stubwasi;
 mod summary;
 #[cfg(test)]
@@ -183,12 +184,14 @@ pub struct BindingsGenerator<'a> {
     pub output_dir: &'a Path,
     pub import_interface_names: &'a HashMap<&'a str, &'a str>,
     pub export_interface_names: &'a HashMap<&'a str, &'a str>,
+    pub registry_config: Option<&'a Path>,
+    pub default_registries: bool,
     /// Write into `output_dir` even if the bindings module directory exists.
     pub allow_existing: bool,
 }
 
 impl BindingsGenerator<'_> {
-    pub fn generate(&self) -> Result<()> {
+    pub async fn generate(&self) -> Result<()> {
         // Here we parse the specified WIT paths and resolve the specified
         // worlds, then union them together and generate stub code for the
         // unioned world.
@@ -215,12 +218,27 @@ impl BindingsGenerator<'_> {
             packages.push((path, resolve.push_path(path)?.0));
         }
 
-        if packages.is_empty() {
+        if packages.is_empty()
+            && (Path::new("wit").exists()
+                || !self
+                    .worlds
+                    .iter()
+                    .any(|world| registry::is_qualified_world_reference(world)))
+        {
             // If no WIT directory was provided as a parameter, use ./wit by default.
             packages.push((Path::new("wit"), resolve.push_path("wit")?.0));
         }
 
-        let worlds = select_worlds(&resolve, self.worlds, &packages)?;
+        let worlds = registry::resolve_requested_worlds(
+            &mut resolve,
+            &packages,
+            self.worlds,
+            self.registry_config,
+            self.default_registries,
+        )
+        .await?
+        .into_iter()
+        .collect::<IndexSet<_>>();
         let world = match &worlds.iter().copied().collect::<Vec<_>>()[..] {
             [] => select_world(&resolve, None, &packages)?,
             &[world] => world,
@@ -395,6 +413,8 @@ pub struct ComponentGenerator<'a> {
     pub import_interface_names: &'a HashMap<&'a str, &'a str>,
     pub export_interface_names: &'a HashMap<&'a str, &'a str>,
     pub intersect_world: Option<&'a str>,
+    pub registry_config: Option<&'a Path>,
+    pub default_registries: bool,
 }
 
 impl ComponentGenerator<'_> {
@@ -550,16 +570,47 @@ impl ComponentGenerator<'_> {
             packages.push((path, resolve.push_path(path)?.0));
         }
 
-        if packages.is_empty() {
+        let registry_worlds = self
+            .worlds
+            .iter()
+            .copied()
+            .chain(self.intersect_world)
+            .collect::<Vec<_>>();
+
+        if packages.is_empty()
+            && (Path::new("wit").exists()
+                || !registry_worlds
+                    .iter()
+                    .any(|world| registry::is_qualified_world_reference(world)))
+        {
             // If no WIT directory was provided as a parameter and none were
             // referenced by Python packages, use ./wit by default.
             packages.push((Path::new("wit"), resolve.push_path("wit")?.0));
         }
 
-        let worlds = select_worlds(&resolve, self.worlds, &packages)?;
+        let default_world =
+            if self.worlds.is_empty() && configs.values().all(|(_, worlds)| worlds.is_empty()) {
+                Some(select_world(&resolve, None, &packages)?)
+            } else {
+                None
+            };
 
-        let intersector = if let Some(world) = self.intersect_world {
-            let intersector = select_world(&resolve, Some(world), &packages)?;
+        let registry_world_ids = registry::resolve_requested_worlds(
+            &mut resolve,
+            &packages,
+            &registry_worlds,
+            self.registry_config,
+            self.default_registries,
+        )
+        .await?;
+
+        let worlds = registry_world_ids[..self.worlds.len()]
+            .iter()
+            .copied()
+            .collect::<IndexSet<_>>();
+
+        let intersector = if self.intersect_world.is_some() {
+            let intersector = *registry_world_ids.last().unwrap();
 
             for &world in &worlds {
                 intersect_world(&mut resolve, intersector, world);
@@ -588,7 +639,7 @@ impl ComponentGenerator<'_> {
 
         if all_worlds.is_empty() {
             // No worlds specified; pick the default one, if available:
-            let world = select_world(&resolve, None, &packages)?;
+            let world = default_world.expect("the local default world was selected above");
 
             if let Some(intersector) = intersector {
                 intersect_world(&mut resolve, intersector, world);
@@ -1034,17 +1085,6 @@ fn select_world(
                     )
                 })
         })
-}
-
-fn select_worlds(
-    resolve: &Resolve,
-    worlds: &[&str],
-    packages: &[(&Path, PackageId)],
-) -> Result<IndexSet<WorldId>> {
-    worlds
-        .iter()
-        .map(|world| select_world(resolve, Some(world), packages))
-        .collect()
 }
 
 fn union_world(

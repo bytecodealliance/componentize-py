@@ -85,6 +85,8 @@ async fn make_component(
         import_interface_names: &HashMap::new(),
         export_interface_names: &HashMap::new(),
         intersect_world,
+        registry_config: None,
+        default_registries: true,
     }
     .generate()
     .await?;

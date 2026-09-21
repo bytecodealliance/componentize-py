@@ -62,6 +62,19 @@ And finally generate the component:
 componentize-py -d hello.wit -w hello componentize --stub-wasi app -o app.wasm
 ```
 
+An exact, versioned world can also be loaded from a WebAssembly package
+registry:
+
+```shell
+componentize-py -w wasi:cli/command@0.2.0 bindings wasi_cli
+```
+
+Use `--registry-config PATH` to merge a standard `wasm-pkg` configuration file
+with the global configuration. Use `--no-default-registries` to start with an
+empty configuration before loading that file. Registry loading is lazy, and a
+matching local WIT definition takes precedence. Remote world references must
+use the exact `namespace:package/world@version` form.
+
 To test it, you can install `wasmtime-py` and write a simple host app which uses
 it to load and run our component:
 

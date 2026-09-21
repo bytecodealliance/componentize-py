@@ -1063,6 +1063,8 @@ fn componentize_app(
             import_interface_names: &std::collections::HashMap::new(),
             export_interface_names: &std::collections::HashMap::new(),
             intersect_world: None,
+            registry_config: None,
+            default_registries: true,
         }
         .generate(),
     )
