@@ -177,6 +177,12 @@ interface similar-streams-and-futures {
   baz: async func() -> tuple<stream<foo>, stream<bar>, future<foo>, future<bar>>;
 }
 
+interface empty {}
+
+interface empty-resource {
+  resource empty;
+}
+
 world tests {
   use resource-alias1.{thing};
   use resource-floats.{float};
@@ -203,6 +209,8 @@ world tests {
   export resource-borrow-in-record;
   export streams-and-futures;
   export similar-streams-and-futures;
+  export empty;
+  export empty-resource;
 
   export resource-floats-exports: interface {
     resource float {
