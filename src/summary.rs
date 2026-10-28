@@ -1990,7 +1990,7 @@ class {camel}:
                                 )
                             };
 
-                            let methods = self
+                            let mut methods = self
                                 .functions
                                 .iter()
                                 .filter(|function| {
@@ -1999,6 +1999,10 @@ class {camel}:
                                 .map(method)
                                 .collect::<Vec<_>>()
                                 .concat();
+
+                            if methods.is_empty() {
+                                methods = "   pass".to_string();
+                            }
 
                             Some(format!(
                                 "
