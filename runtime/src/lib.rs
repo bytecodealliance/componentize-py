@@ -497,11 +497,14 @@ mod async_ {
             ReturnStyle::Result => vec![result],
         };
 
-        let mut call = MyCall::new(results);
-        func.call_task_return(&mut call);
+        // `task.return` traps while any borrow lent to this task is still
+        // outstanding, so drop them first.
         if borrows != 0 {
             release_borrows(py, *unsafe { Box::from_raw(borrows as *mut Vec<Borrow>) });
         }
+
+        let mut call = MyCall::new(results);
+        func.call_task_return(&mut call);
     }
 
     #[pyo3::pyfunction]
