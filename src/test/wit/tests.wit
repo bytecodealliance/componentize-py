@@ -186,6 +186,7 @@ interface empty-resource {
 world tests {
   use resource-alias1.{thing};
   use resource-floats.{float};
+  use resource-borrow-import.{thing as imported-thing};
 
   export simple-export;
   import simple-import-and-export;
@@ -229,6 +230,8 @@ world tests {
   }
 
   export test-resource-borrow-import: func(v: u32) -> u32;
+
+  export test-resource-borrow-import-async: async func(t: borrow<imported-thing>) -> u32;
 
   export test-resource-alias: func(things: list<thing>) -> list<thing>;
 

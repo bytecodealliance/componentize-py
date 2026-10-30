@@ -253,6 +253,9 @@ class Tests(tests.WorldExports):
     def test_resource_borrow_import(self, v: int) -> int:
         return resource_borrow_import.foo(resource_borrow_import.Thing(v + 1)) + 4
 
+    async def test_resource_borrow_import_async(self, t: resource_borrow_import.Thing) -> int:
+        return resource_borrow_import.foo(t) + 4
+
     def test_resource_alias(self, things: List[imports.resource_alias1.Thing]) -> List[imports.resource_alias1.Thing]:
         return things
 

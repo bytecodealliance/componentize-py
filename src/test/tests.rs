@@ -385,6 +385,31 @@ fn resource_borrow_import() -> Result<()> {
 }
 
 #[test]
+fn resource_borrow_import_async_export() -> Result<()> {
+    // An async export that is lent a borrow of an imported resource must release
+    // it before `task.return`, or the host traps with "borrow handles still
+    // remain at the end of the call".
+    TESTER.test(|world, store, runtime| {
+        runtime.block_on(async {
+            let thing = store.data_mut().ctx().table.push(ThingU32(42))?;
+
+            assert_eq!(
+                42 + 3 + 4,
+                store
+                    .run_concurrent(async |store| {
+                        world
+                            .call_test_resource_borrow_import_async(store, thing)
+                            .await
+                    })
+                    .await??
+            );
+
+            Ok(())
+        })
+    })
+}
+
+#[test]
 fn resource_borrow_export() -> Result<()> {
     TESTER.test(|world, store, runtime| {
         runtime.block_on(async {
