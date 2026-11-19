@@ -22,7 +22,7 @@ jobs:
       fail-fast: false
       matrix:
         config:
-          - { os: "ubuntu-latest", wasiSDK: "x86_64-linux" }
+          - { os: "ubuntu-24.04", wasiSDK: "x86_64-linux" }
           - { os: "macos-latest", wasiSDK: "arm64-macos" }
           - { os: "windows-latest", wasiSDK: "x86_64-windows" }
     runs-on: ${{ matrix.config.os }}
