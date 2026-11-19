@@ -33,8 +33,7 @@ jobs:
           submodules: "recursive"
 
       - name: Install latest Rust toolchain
-        # todo: switch back to stable once 1.100 is released:
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-wasip2 wasm32-wasip3
           components: clippy, rustfmt
