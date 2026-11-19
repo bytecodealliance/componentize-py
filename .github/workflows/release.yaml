@@ -12,65 +12,21 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  WASI_SDK_VERSION: 34
 
 permissions:
   contents: write
   pull-requests: write
 
 jobs:
-  linux:
-    name: Populate cache
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: "recursive"
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.14.0"
-
-      - name: Install latest Rust stable toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-wasip2
-          components: clippy, rustfmt
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "rust-cache-${{ hashFiles('./Cargo.lock') }}"
-          cache-on-failure: false
-
-      - name: Install WASI-SDK
-        shell: bash
-        run: |
-          cd /tmp
-          curl -LO https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz
-          tar xf wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz
-          mv wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux /opt/wasi-sdk
-
-      - name: Build
-        shell: bash
-        run: cargo build --release
-
-      - name: Upload CPython builddir
-        uses: actions/upload-artifact@v4
-        with:
-          name: cpython-wasi
-          path: cpython/builddir/wasi
-
   release:
     name: Build and release
-    needs: linux
     runs-on: ${{ matrix.config.os }}
     strategy:
       fail-fast: false
       matrix:
         config:
           - {
-              os: "ubuntu-latest",
+              os: "ubuntu-24.04",
               arch: "amd64",
               maturin_target: "x86_64",
               wasiSDK: "x86_64-linux",
@@ -80,7 +36,7 @@ jobs:
               targetDir: "target/release",
             }
           - {
-              os: "ubuntu-latest",
+              os: "ubuntu-24.04",
               arch: "aarch64",
               maturin_target: "aarch64",
               wasiSDK: "x86_64-linux",
@@ -129,13 +85,13 @@ jobs:
         with:
           python-version: "3.14.0"
 
-      - name: Install latest Rust stable toolchain
+      - name: Install latest Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-wasip2 ${{ matrix.config.target }}
+          targets: wasm32-wasip2 wasm32-wasip3 ${{ matrix.config.target }}
 
       - uses: Swatinem/rust-cache@v2
-        if: matrix.config.os == 'ubuntu-latest' && matrix.config.arch == 'amd64'
+        if: matrix.config.os == 'ubuntu-24.04' && matrix.config.arch == 'amd64'
         with:
           shared-key: "rust-cache-${{ hashFiles('./Cargo.lock') }}"
           cache-on-failure: "false"
@@ -157,36 +113,12 @@ jobs:
           OS=$(echo "${{ runner.os }}" | tr '[:upper:]' '[:lower:]')
           echo "RUNNER_OS=$OS" >> $GITHUB_ENV
 
-      - name: Download WASI-SDK
-        shell: bash
-        run: |
-          cd /tmp
-          curl -LO https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-${{ matrix.config.wasiSDK }}.tar.gz
-          tar xf wasi-sdk-${WASI_SDK_VERSION}.0-${{ matrix.config.wasiSDK }}.tar.gz
-
-      - name: Install WASI-SDK
-        if: runner.os != 'Windows'
-        shell: bash
-        run: sudo mv /tmp/wasi-sdk-${WASI_SDK_VERSION}.0-${{ matrix.config.wasiSDK }} /opt/wasi-sdk
-
-      - name: Install WASI-SDK on Windows
-        if: runner.os == 'Windows'
-        shell: bash
-        run: echo "WASI_SDK_PATH=$(cygpath -m /tmp/wasi-sdk-${WASI_SDK_VERSION}.0-${{ matrix.config.wasiSDK }})" >> ${GITHUB_ENV}
-
-      - name: Restore CPython
-        uses: actions/download-artifact@v5
-        with:
-          name: cpython-wasi
-          path: cpython/builddir/wasi
-
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.config.maturin_target }}
           args: --release --out dist --features pyo3
           manylinux: 2_28
-          docker-options: -v /opt/wasi-sdk:/opt/wasi-sdk
           before-script-linux: |
             rustup target add wasm32-wasip2
 
@@ -234,7 +166,7 @@ jobs:
 
   checksums:
     name: Generate checksums
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: release
     steps:
       - name: Set the release version (tag)
@@ -272,7 +204,7 @@ jobs:
 
   sdist:
     name: Build Python sdist
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -294,7 +226,7 @@ jobs:
     name: Update canary release
     needs: [checksums, sdist]
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4

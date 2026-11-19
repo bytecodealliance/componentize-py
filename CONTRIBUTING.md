@@ -16,41 +16,35 @@ channel](https://bytecodealliance.zulipchat.com/#narrow/stream/394175-SIG-Guest-
 
 ### Prerequisites
 
-- Tools needed to build [CPython](https://github.com/python/cpython) (Make, Clang, etc.)
-- [Rust](https://rustup.rs/) stable 1.94 or later, including the `wasm32-wasip2` target
+- (optional) Tools needed to build [CPython](https://github.com/python/cpython)
+  (Make, Clang, etc.)
+- [Rust](https://rustup.rs/) stable 1.100 or later, including the
+  `wasm32-wasip2` and `wasm32-wasip3` targets
 
 For Rust, something like this should work once you have `rustup`:
 
 ```shell
 rustup update
-rustup target add wasm32-wasip2
+rustup target add wasm32-wasip2 wasm32-wasip3
 ```
 
-### Building and Running
+### Building and Running Tests
 
-First, make sure you've got all the submodules cloned.
+To build the project and run the tests, use:
 
 ```shell
-git submodule update --init --recursive
+cargo test --release
 ```
 
-Next, install WASI-SDK 33 to `/opt/wasi-sdk` (alternatively, you can specify a
-different location and reference it later using the `WASI_SDK_PATH` environment
-variable).  Replace `arm64-linux` with `x86_64-linux`, `arm64-macos`,
-`x86_64-macos`, `arm64-windows`, or `x86_64-windows` below depending on your
-architecure and OS, if necessary.
+By default, `build.rs` will download and use pre-built WASI-SDK and Cpython
+binaries.  If you'd like to supply your own version of WASI-SDK and use it to
+build CPython from source, install
+[WASI-SDK](https://github.com/WebAssembly/wasi-sdk/releases) 34 or later, then
+run:
 
 ```shell
-curl -LO https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-33/wasi-sdk-33.0-arm64-linux.tar.gz
-tar xf wasi-sdk-33.0-arm64-linux.tar.gz
-sudo mv wasi-sdk-33.0-arm64-linux /opt/wasi-sdk
-export WASI_SDK_PATH=/opt/wasi-sdk
-```
-
-Finally, build and run `componentize-py`.
-
-```shell
-cargo run --release -- --help
+rm -rf cpython
+CPYTHON_BUILD_FROM_SOURCE=1 cargo test --release
 ```
 
 ## Publishing Releases

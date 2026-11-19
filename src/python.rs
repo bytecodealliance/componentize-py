@@ -4,21 +4,21 @@
 )]
 
 use {
-    crate::{BindingsGenerator, ComponentGenerator},
+    crate::{BindingsGenerator, ComponentGenerator, Target},
     pyo3::{
         Bound, PyResult, Python,
         exceptions::PyAssertionError,
         pybacked::PyBackedStr,
         types::{PyAnyMethods, PyModule, PyModuleMethods},
     },
-    std::{ffi::OsString, path::PathBuf},
+    std::{ffi::OsString, path::PathBuf, str::FromStr as _},
     tokio::runtime::Runtime,
 };
 
 #[allow(clippy::too_many_arguments)]
 #[pyo3::pyfunction]
 #[pyo3(name = "componentize")]
-#[pyo3(signature = (wit_path, worlds, features, all_features, bindings_module, python_path, module_worlds, app_name, output_path, stub_wasi, import_interface_names, export_interface_names, full_names = None, intersect_world = None, world_module = None, registry_config = None, no_default_registries = false))]
+#[pyo3(signature = (wit_path, worlds, features, all_features, bindings_module, python_path, module_worlds, app_name, output_path, stub_wasi, import_interface_names, export_interface_names, full_names = None, intersect_world = None, world_module = None, registry_config = None, no_default_registries = false, target = None))]
 fn python_componentize(
     wit_path: Vec<PathBuf>,
     worlds: Vec<String>,
@@ -37,6 +37,7 @@ fn python_componentize(
     world_module: Option<&str>,
     registry_config: Option<PathBuf>,
     no_default_registries: bool,
+    target: Option<&str>,
 ) -> PyResult<()> {
     let bindings_module = crate::resolve_deprecated(
         bindings_module.map(str::to_owned),
@@ -76,6 +77,7 @@ fn python_componentize(
                 intersect_world,
                 registry_config: registry_config.as_deref(),
                 default_registries: !no_default_registries,
+                target: target.map(Target::from_str).transpose()?,
             }
             .generate(),
         )

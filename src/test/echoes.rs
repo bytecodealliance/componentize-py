@@ -204,6 +204,7 @@ impl super::Host for Host {
 
     fn add_to_linker(linker: &mut Linker<Ctx>) -> Result<()> {
         wasmtime_wasi::p2::add_to_linker_async(&mut *linker)?;
+        wasmtime_wasi::p3::add_to_linker(&mut *linker)?;
         componentize_py::test::echoes::add_to_linker::<_, HasSelf<_>>(linker, |ctx| ctx)?;
         Ok(())
     }
