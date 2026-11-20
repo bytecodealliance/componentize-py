@@ -304,6 +304,8 @@ fn matrix_math_example() -> anyhow::Result<()> {
             "-w",
             "matrix-math",
             "componentize",
+            "--target",
+            "wasm32-wasip3",
             "app",
             "-o",
             "matrix-math.wasm",
@@ -466,7 +468,7 @@ fn venv_path(path: &Path) -> PathBuf {
 
 fn install_numpy(path: &Path) -> anyhow::Result<()> {
     let bytes = reqwest::blocking::get(
-        "https://github.com/dicej/wasi-wheels/releases/download/v0.0.2/numpy-wasi.tar.gz",
+        "https://github.com/dicej/wasi-wheels/releases/download/v0.0.3/numpy-wasi.tar.gz",
     )?
     .error_for_status()?
     .bytes()?;

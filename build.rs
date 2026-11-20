@@ -326,25 +326,7 @@ fn add(builder: &mut Builder<impl Write>, root: &Path, path: &Path) -> Result<()
 fn maybe_make_cpython(target: &str, repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
     let cpython_dir = repo_dir.join("cpython");
     if !cpython_dir.exists() {
-        let build_from_source = if env::var_os("CPYTHON_BUILD_FROM_SOURCE").is_some() {
-            true
-        } else {
-            let url = &env::var("CPYTHON_BINARY_TARBALL_URL")
-                .unwrap_or_else(|_| CPYTHON_BINARY_TARBALL_URL.into());
-            println!("cargo:warning=downloading CPython build from {url}");
-            let dir = cpython_dir.join("builddir");
-            fs::create_dir_all(&dir)?;
-            if fetch_extract_zstd(url, &dir).is_ok() {
-                return Ok(());
-            }
-            fs::remove_dir_all(&cpython_dir)?;
-            println!(
-                "cargo:warning=prebuilt CPython build not available at {url}; building from source"
-            );
-            true
-        };
-
-        if build_from_source {
+        if env::var_os("CPYTHON_BUILD_FROM_SOURCE").is_some() {
             let url = &env::var("CPYTHON_SOURCE_TARBALL_URL")
                 .unwrap_or_else(|_| CPYTHON_SOURCE_TARBALL_URL.into());
             let base_dir = &env::var_os("CPYTHON_SOURCE_TARBALL_BASE_DIR")
@@ -352,6 +334,14 @@ fn maybe_make_cpython(target: &str, repo_dir: &Path, wasi_sdk: &Path) -> Result<
             println!("cargo:warning=downloading CPython source code from {url}");
             fetch_extract_gzip(url, repo_dir)?;
             fs::rename(repo_dir.join(base_dir), &cpython_dir)?;
+        } else {
+            let url = &env::var("CPYTHON_BINARY_TARBALL_URL")
+                .unwrap_or_else(|_| CPYTHON_BINARY_TARBALL_URL.into());
+            println!("cargo:warning=downloading CPython build from {url}");
+            let dir = cpython_dir.join("builddir");
+            fs::create_dir_all(&dir)?;
+            fetch_extract_zstd(url, &dir)?;
+            return Ok(());
         }
     }
 

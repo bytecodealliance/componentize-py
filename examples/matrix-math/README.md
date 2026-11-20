@@ -24,14 +24,14 @@ https://github.com/bytecodealliance/wasmtime/releases/tag/v38.0.0.
 ```
 cargo install --version 38.0.0 wasmtime-cli
 pip install componentize-py==0.25.0
-curl -OL https://github.com/dicej/wasi-wheels/releases/download/v0.0.2/numpy-wasi.tar.gz
+curl -OL https://github.com/dicej/wasi-wheels/releases/download/v0.0.3/numpy-wasi.tar.gz
 tar xf numpy-wasi.tar.gz
 ```
 
 ## Running the demo
 
 ```
-componentize-py -d ../../wit -w matrix-math componentize app -o matrix-math.wasm
+componentize-py -d ../../wit -w matrix-math componentize --target wasm32-wasip3 app -o matrix-math.wasm
 wasmtime run matrix-math.wasm '[[1, 2], [4, 5], [6, 7]]' '[[1, 2, 3], [4, 5, 6]]'
 ```
 
