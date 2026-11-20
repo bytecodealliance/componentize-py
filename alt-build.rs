@@ -22,7 +22,7 @@ fn main() {
         "libc.so.zst",
         "libcomponentize_py_runtime_async.so.zst",
         "libcomponentize_py_runtime_sync.so.zst",
-        "libpython3.14.so.zst",
+        "libpython3.15.so.zst",
         "libwasi-emulated-getpid.so.zst",
         "libwasi-emulated-mman.so.zst",
         "libwasi-emulated-process-clocks.so.zst",

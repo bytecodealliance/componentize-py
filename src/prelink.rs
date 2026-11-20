@@ -18,7 +18,7 @@ use crate::{
     ComponentizePyConfig, ConfigContext, Library, Multithreading, RawComponentizePyConfig, Target,
 };
 
-static NATIVE_EXTENSION_SUFFIXES: &[&str] = &[".cpython-314-wasm32-wasi.so", ".abi3.so"];
+static NATIVE_EXTENSION_SUFFIXES: &[&str] = &[".cpython-315-wasm32-wasi.so", ".abi3.so"];
 
 /// Check if a file starts with the WASM magic bytes (`\0asm`).
 fn is_wasm_file(path: &Path) -> bool {
@@ -71,10 +71,10 @@ pub fn bundled_libraries(target: Target) -> Result<Vec<Library>> {
                 dl_openable: false,
             },
             Library {
-                name: "libpython3.14.so".into(),
+                name: "libpython3.15.so".into(),
                 module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
                     env!("OUT_DIR"),
-                    "/wasip2/libpython3.14.so.zst"
+                    "/wasip2/libpython3.15.so.zst"
                 ))))?,
                 dl_openable: false,
             },
@@ -153,10 +153,10 @@ pub fn bundled_libraries(target: Target) -> Result<Vec<Library>> {
                 dl_openable: false,
             },
             Library {
-                name: "libpython3.14.so".into(),
+                name: "libpython3.15.so".into(),
                 module: zstd::decode_all(Cursor::new(include_bytes!(concat!(
                     env!("OUT_DIR"),
-                    "/wasip3/libpython3.14.so.zst"
+                    "/wasip3/libpython3.15.so.zst"
                 ))))?,
                 dl_openable: false,
             },
