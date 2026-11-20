@@ -23,7 +23,7 @@ wit-component = "0.258.0"
 wasmparser = "0.258.0"
 indexmap = "2.6.0"
 heck = "0.5.0"
-pyo3 = { version = "0.28.3", features = [
+pyo3 = { version = "0.30.1", features = [
     "abi3-py39",
     "extension-module",
 ], optional = true }

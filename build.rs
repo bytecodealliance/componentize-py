@@ -36,13 +36,11 @@ const CLANG_EXECUTABLE: &str = "clang.exe";
 #[cfg(not(target_os = "windows"))]
 const CLANG_EXECUTABLE: &str = "clang";
 
-// TODO: switch to upstream release per
-// https://github.com/bytecodealliance/componentize-py/issues/215
 const CPYTHON_SOURCE_TARBALL_URL: &str =
-    "https://github.com/dicej/cpython/tarball/v3.14.0-wasi-sdk-34-v2";
-const CPYTHON_SOURCE_TARBALL_BASE_DIR: &str = "dicej-cpython-ff50203";
+    "https://www.python.org/ftp/python/3.15.2/Python-3.15.2.tgz";
+const CPYTHON_SOURCE_TARBALL_BASE_DIR: &str = "Python-3.15.2";
 
-const CPYTHON_BINARY_TARBALL_URL: &str = "https://github.com/dicej/cpython/releases/download/v3.14.0-wasi-sdk-34-v2/cpython-v3.14.0-wasi-sdk-34-v2.tar.zst";
+const CPYTHON_BINARY_TARBALL_URL: &str = "https://github.com/dicej/cpython/releases/download/v3.15.2-wasi-sdk-34/cpython-v3.15.2-wasi-sdk-34.tar.zst";
 
 static TARGETS: &[&str] = &["wasip2", "wasip3"];
 
@@ -70,7 +68,7 @@ fn stubs_for_clippy(out_dir: &Path) -> Result<()> {
 
     let libraries = [
         "libcomponentize_py_runtime.so.zst",
-        "libpython3.14.so.zst",
+        "libpython3.15.so.zst",
         "libc.so.zst",
         "threads/libc.so.zst",
         "libwasi-emulated-mman.so.zst",
@@ -234,10 +232,10 @@ fn package_all_the_things(out_dir: &Path) -> Result<()> {
             true,
         )?;
 
-        compress(&cpython_wasi_dir, "libpython3.14.so", &library_dir, true)?;
+        compress(&cpython_wasi_dir, "libpython3.15.so", &library_dir, true)?;
     }
 
-    let path = repo_dir.join("cpython/builddir/wasip2/install/lib/python3.14");
+    let path = repo_dir.join("cpython/builddir/wasip2/install/lib/python3.15");
 
     if path.exists() {
         let mut builder = Builder::new(Encoder::new(
@@ -328,7 +326,25 @@ fn add(builder: &mut Builder<impl Write>, root: &Path, path: &Path) -> Result<()
 fn maybe_make_cpython(target: &str, repo_dir: &Path, wasi_sdk: &Path) -> Result<()> {
     let cpython_dir = repo_dir.join("cpython");
     if !cpython_dir.exists() {
-        if env::var_os("CPYTHON_BUILD_FROM_SOURCE").is_some() {
+        let build_from_source = if env::var_os("CPYTHON_BUILD_FROM_SOURCE").is_some() {
+            true
+        } else {
+            let url = &env::var("CPYTHON_BINARY_TARBALL_URL")
+                .unwrap_or_else(|_| CPYTHON_BINARY_TARBALL_URL.into());
+            println!("cargo:warning=downloading CPython build from {url}");
+            let dir = cpython_dir.join("builddir");
+            fs::create_dir_all(&dir)?;
+            if fetch_extract_zstd(url, &dir).is_ok() {
+                return Ok(());
+            }
+            fs::remove_dir_all(&cpython_dir)?;
+            println!(
+                "cargo:warning=prebuilt CPython build not available at {url}; building from source"
+            );
+            true
+        };
+
+        if build_from_source {
             let url = &env::var("CPYTHON_SOURCE_TARBALL_URL")
                 .unwrap_or_else(|_| CPYTHON_SOURCE_TARBALL_URL.into());
             let base_dir = &env::var_os("CPYTHON_SOURCE_TARBALL_BASE_DIR")
@@ -336,21 +352,13 @@ fn maybe_make_cpython(target: &str, repo_dir: &Path, wasi_sdk: &Path) -> Result<
             println!("cargo:warning=downloading CPython source code from {url}");
             fetch_extract_gzip(url, repo_dir)?;
             fs::rename(repo_dir.join(base_dir), &cpython_dir)?;
-        } else {
-            let url = &env::var("CPYTHON_BINARY_TARBALL_URL")
-                .unwrap_or_else(|_| CPYTHON_BINARY_TARBALL_URL.into());
-            println!("cargo:warning=downloading CPython build from {url}");
-            let dir = cpython_dir.join("builddir");
-            fs::create_dir_all(&dir)?;
-            fetch_extract_zstd(url, &dir)?;
-            return Ok(());
         }
     }
 
     let cpython_wasi_dir = cpython_dir.join("builddir").join(target);
-    if !cpython_wasi_dir.join("libpython3.14.so").exists() {
+    if !cpython_wasi_dir.join("libpython3.15.so").exists() {
         fs::create_dir_all(&cpython_wasi_dir)?;
-        if !cpython_wasi_dir.join("libpython3.14.a").exists() {
+        if !cpython_wasi_dir.join("libpython3.15.a").exists() {
             let cpython_native_dir = repo_dir.join("cpython/builddir/build");
             if !cpython_native_dir.join(PYTHON_EXECUTABLE).exists() {
                 fs::create_dir_all(&cpython_native_dir)?;
@@ -385,8 +393,9 @@ fn maybe_make_cpython(target: &str, repo_dir: &Path, wasi_sdk: &Path) -> Result<
             run(Command::new("../../Tools/wasm/wasi-env")
                 .env(
                     "CONFIG_SITE",
-                    "../../Tools/wasm/wasi/config.site-wasm32-wasi",
+                    "../../Platforms/WASI/config.site-wasm32-wasi",
                 )
+                .env("HOSTRUNNER", "wasmtime")
                 .env(
                     "CFLAGS",
                     format!("--target=wasm32-{target} -fPIC -I{dir}/deps/include"),
@@ -406,6 +415,8 @@ fn maybe_make_cpython(target: &str, repo_dir: &Path, wasi_sdk: &Path) -> Result<
                     &format!("--prefix={dir}/install"),
                     "--disable-test-modules",
                     "--enable-ipv6",
+                    "--enable-wasm-dynamic-linking",
+                    "--without-system-libmpdec",
                 ]))?;
 
             // Write Modules/Setup.local to force-enable _sqlite3
@@ -417,14 +428,14 @@ fn maybe_make_cpython(target: &str, repo_dir: &Path, wasi_sdk: &Path) -> Result<
                 .args(["build_all", "install"]))?;
         }
 
-        // Link libpython3.14.so - now includes libsqlite3.a
+        // Link libpython3.15.so - now includes libsqlite3.a
         run(Command::new(wasi_sdk.join("bin/clang"))
             .arg(format!("--target=wasm32-{target}"))
             .arg("-shared")
             .arg("-o")
-            .arg(cpython_wasi_dir.join("libpython3.14.so"))
+            .arg(cpython_wasi_dir.join("libpython3.15.so"))
             .arg("-Wl,--whole-archive")
-            .arg(cpython_wasi_dir.join("libpython3.14.a"))
+            .arg(cpython_wasi_dir.join("libpython3.15.a"))
             .arg("-Wl,--no-whole-archive")
             .arg(cpython_wasi_dir.join("Modules/_hacl/libHacl_HMAC.a"))
             .arg(cpython_wasi_dir.join("Modules/_hacl/libHacl_Hash_BLAKE2.a"))
@@ -454,7 +465,7 @@ fn write_setup_local(cpython_wasi_dir: &Path) -> Result<()> {
     let deps_dir = cpython_wasi_dir.join("deps");
 
     // The _sqlite3 module source files (relative to Modules/)
-    // These are the files that make up the _sqlite3 extension in CPython 3.14
+    // These are the files that make up the _sqlite3 extension in CPython 3.15
     // Note: blob.c is required - it defines pysqlite_close_all_blobs and pysqlite_blob_setup_types
     let include_dir = deps_dir.join("include");
     let lib_dir = deps_dir.join("lib");
@@ -569,7 +580,7 @@ fn make_runtime(
              -Clink-args=-Wl,--export-if-defined=__wasm_library_tls_info \
              -Clink-args=-shared \
              -Clink-args=-L{} \
-             -Clink-args=-lpython3.14 \
+             -Clink-args=-lpython3.15 \
              -Clink-self-contained=n",
             cpython_wasi_dir.to_str().unwrap()
         ),
@@ -604,7 +615,7 @@ fn make_runtime(
 }
 
 fn fetch_extract_gzip(url: &str, out_dir: &Path) -> Result<()> {
-    let response = reqwest::blocking::get(url)?;
+    let response = reqwest::blocking::get(url)?.error_for_status()?;
     let decoder = flate2::read::GzDecoder::new(response);
     let mut archive = tar::Archive::new(decoder);
     archive.unpack(out_dir)?;
@@ -612,7 +623,7 @@ fn fetch_extract_gzip(url: &str, out_dir: &Path) -> Result<()> {
 }
 
 fn fetch_extract_zstd(url: &str, out_dir: &Path) -> Result<()> {
-    let response = reqwest::blocking::get(url)?;
+    let response = reqwest::blocking::get(url)?.error_for_status()?;
     let decoder = zstd::Decoder::new(response)?;
     let mut archive = tar::Archive::new(decoder);
     archive.unpack(out_dir)?;

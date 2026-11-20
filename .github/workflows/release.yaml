@@ -26,7 +26,7 @@ jobs:
       matrix:
         config:
           - {
-              os: "ubuntu-24.04",
+              os: "ubuntu-latest",
               arch: "amd64",
               maturin_target: "x86_64",
               wasiSDK: "x86_64-linux",
@@ -36,7 +36,7 @@ jobs:
               targetDir: "target/release",
             }
           - {
-              os: "ubuntu-24.04",
+              os: "ubuntu-latest",
               arch: "aarch64",
               maturin_target: "aarch64",
               wasiSDK: "x86_64-linux",
@@ -83,7 +83,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.14.0"
+          python-version: "3.15"
 
       - name: Install latest Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -91,7 +91,7 @@ jobs:
           targets: wasm32-wasip2 wasm32-wasip3 ${{ matrix.config.target }}
 
       - uses: Swatinem/rust-cache@v2
-        if: matrix.config.os == 'ubuntu-24.04' && matrix.config.arch == 'amd64'
+        if: matrix.config.os == 'ubuntu-latest' && matrix.config.arch == 'amd64'
         with:
           shared-key: "rust-cache-${{ hashFiles('./Cargo.lock') }}"
           cache-on-failure: "false"
@@ -166,7 +166,7 @@ jobs:
 
   checksums:
     name: Generate checksums
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     needs: release
     steps:
       - name: Set the release version (tag)
@@ -204,7 +204,7 @@ jobs:
 
   sdist:
     name: Build Python sdist
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -226,7 +226,7 @@ jobs:
     name: Update canary release
     needs: [checksums, sdist]
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
