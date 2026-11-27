@@ -7,11 +7,14 @@ use wasm_encoder::{
 };
 use wasmparser::{FuncType, Imports, Parser, Payload, TypeRef};
 
-use crate::Library;
+use crate::{Library, Target};
 
 type LinkedStubModules = Option<(Vec<u8>, Box<dyn Fn(u32) -> u32>)>;
 
-pub fn link_stub_modules(libraries: Vec<Library>) -> Result<LinkedStubModules, Error> {
+pub fn link_stub_modules(
+    libraries: Vec<Library>,
+    target: Target,
+) -> Result<LinkedStubModules, Error> {
     let mut wasi_imports = BTreeMap::new();
     let mut linker = wit_component::Linker::default();
     linker.use_built_in_libdl(true).encoder().validate(true);
@@ -46,7 +49,10 @@ pub fn link_stub_modules(libraries: Vec<Library>) -> Result<LinkedStubModules, E
     // `wit_component::Linker`'s implementation changes.  Can we make it more
     // robust?
 
-    let old_adapter_count = 1;
+    let old_adapter_count = match target {
+        Target::Wasip2 => 1,
+        Target::Wasip3(_) => 0,
+    };
     let new_adapter_count = u32::try_from(wasi_imports.len())?;
     assert!(new_adapter_count >= old_adapter_count);
 
@@ -57,8 +63,8 @@ pub fn link_stub_modules(libraries: Vec<Library>) -> Result<LinkedStubModules, E
                 // `main` module
                 0
             } else if index <= new_adapter_count {
-                // adapter module
-                old_adapter_count
+                // stub adapter module (no stage-1 memory or globals)
+                u32::MAX
             } else {
                 // one of the other kinds of module
                 index + old_adapter_count - new_adapter_count

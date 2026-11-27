@@ -1,8 +1,6 @@
 package componentize-py:init;
 
 world init {
-    import wasi:cli/environment@0.2.0;
-    
     export exports: interface {
         // `scope`: registry key -- interface name, bindings module for
         // world-level exports, or `<scope>#<resource>` for a resource.
@@ -100,4 +98,14 @@ world init {
 
         init: async func(app-name: string, symbols: symbols, stub-wasi: bool) -> result<_, string>;
     }
+}
+
+world init-p2 {
+    include init;
+    import wasi:cli/environment@0.2.0;
+}
+
+world init-p3 {
+    include init;
+    import wasi:cli/environment@0.3.0;
 }

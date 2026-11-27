@@ -11,11 +11,11 @@
 use {
     anyhow::{Error, Result},
     bindings::{
+        environment,
         exports::exports::{
             self as exp, Constructor, FunctionExportKind, Guest, OptionKind, ResultRecord,
             ReturnStyle, Static, Symbols,
         },
-        wasi::cli0_2_0::environment,
     },
     num_bigint::BigUint,
     once_cell::sync::OnceCell,
@@ -42,12 +42,30 @@ use {
     },
 };
 
+#[cfg(not(feature = "async"))]
 mod bindings {
     wit_bindgen::generate!({
-        world: "init",
+        world: "init-p2",
         path: "../wit",
         generate_all,
     });
+
+    pub use wasi::cli0_2_0::environment;
+
+    use super::MyExports;
+
+    export!(MyExports);
+}
+
+#[cfg(feature = "async")]
+mod bindings {
+    wit_bindgen::generate!({
+        world: "init-p3",
+        path: "../wit",
+        generate_all,
+    });
+
+    pub use wasi::cli0_3_0::environment;
 
     use super::MyExports;
 
@@ -1197,10 +1215,17 @@ impl Guest for MyExports {
         // In particular, we want it to forget about any open handles and
         // re-request the stdio handles at runtime since we'll be running under
         // a brand new host.
-        #[link(wasm_import_module = "wasi_snapshot_preview1")]
-        unsafe extern "C" {
-            #[link_name = "reset_adapter_state"]
-            fn reset_adapter_state();
+        #[cfg(not(feature = "async"))]
+        {
+            #[link(wasm_import_module = "wasi_snapshot_preview1")]
+            unsafe extern "C" {
+                #[link_name = "reset_adapter_state"]
+                fn reset_adapter_state();
+            }
+
+            unsafe {
+                reset_adapter_state();
+            }
         }
 
         // This tells wasi-libc to reset its preopen state, forcing
@@ -1212,7 +1237,6 @@ impl Guest for MyExports {
         }
 
         unsafe {
-            reset_adapter_state();
             wasilibc_reset_preopens();
         }
 
