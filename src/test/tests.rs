@@ -132,7 +132,6 @@ impl super::Host for Host {
     type World = Tests;
 
     fn add_to_linker(linker: &mut Linker<Ctx>) -> Result<()> {
-        wasmtime_wasi::p2::add_to_linker_async(linker)?;
         wasmtime_wasi::p3::add_to_linker(linker)?;
         Tests::add_to_linker::<_, HasSelf<_>>(linker, |ctx| ctx)?;
         foo_sdk::FooWorldUnion::add_to_linker::<_, HasSelf<_>>(linker, |ctx| ctx)?;
@@ -2117,6 +2116,139 @@ class ResourceAggregates(_AggregatesBase, exports.ResourceAggregates):
 "#,
         )
     })?;
+
+    Ok(())
+}
+
+#[test]
+fn pure_wasip3_sync_world_and_stub_wasi() -> Result<()> {
+    use std::{fs, path::Path};
+
+    let tempdir = tempfile::tempdir()?;
+    fs::write(
+        tempdir.path().join("app.py"),
+        r#"import wit
+from wit.imports.wasi.random_v0_3 import random as wasi_random
+
+@wit.guest
+class App(wit.WorldExports):
+    def run(self) -> int:
+        return len(wasi_random.get_random_bytes(4))
+"#,
+    )?;
+    fs::write(
+        tempdir.path().join("stub_app.py"),
+        r#"import wit
+
+@wit.guest
+class App(wit.WorldExports):
+    def run(self) -> int:
+        return 42
+"#,
+    )?;
+
+    let wit_dir = Path::new("wit");
+    fs::write(
+        tempdir.path().join("test.wit"),
+        r#"package test:pure-p3;
+
+world sync-p3 {
+    import wasi:random/random@0.3.0;
+    export run: func() -> u32;
+}
+
+world stub-p3 {
+    export run: func() -> u32;
+}
+"#,
+    )?;
+    fs::create_dir_all(tempdir.path().join("deps"))?;
+    fs_extra::dir::copy(
+        wit_dir.join("deps/random-0.3.0"),
+        tempdir.path().join("deps"),
+        &fs_extra::dir::CopyOptions::new(),
+    )?;
+
+    let runtime = tokio::runtime::Runtime::new()?;
+    let py_dir = tempdir.path().to_str().unwrap();
+
+    // 1. Sync world importing a WASI 0.3 interface auto-selects `wasip3` and
+    // instantiates against a pure WASIp3 linker (no WASIp2 bindings registered).
+    let sync_wasm = tempdir.path().join("sync.wasm");
+    runtime.block_on(
+        crate::ComponentGenerator {
+            wit_paths: &[tempdir.path()],
+            worlds: &["sync-p3"],
+            features: &[],
+            all_features: false,
+            bindings_module: None,
+            python_path: &[py_dir],
+            module_worlds: &[],
+            app_name: "app",
+            output_path: &sync_wasm,
+            add_to_linker: None,
+            stub_wasi: false,
+            import_interface_names: &std::collections::HashMap::new(),
+            export_interface_names: &std::collections::HashMap::new(),
+            intersect_world: None,
+            registry_config: None,
+            default_registries: false,
+            target: None,
+        }
+        .generate(),
+    )?;
+
+    let mut p3_linker = Linker::<Ctx>::new(&super::ENGINE);
+    wasmtime_wasi::p3::add_to_linker(&mut p3_linker)?;
+    let component = wasmtime::component::Component::new(&super::ENGINE, fs::read(&sync_wasm)?)?;
+    let mut store = Store::new(
+        &super::ENGINE,
+        Ctx {
+            wasi: WasiCtxBuilder::new().build(),
+            table: wasmtime::component::ResourceTable::new(),
+        },
+    );
+    let instance = runtime.block_on(p3_linker.instantiate_async(&mut store, &component))?;
+    let func = instance.get_typed_func::<(), (u32,)>(&mut store, "run")?;
+    let (len,) = runtime
+        .block_on(store.run_concurrent(async |store| func.call_concurrent(store, ()).await))??;
+    assert_eq!(len, 4);
+
+    // 2. `--stub-wasi` with `--target=wasm32-wasip3` builds and instantiates on an empty linker.
+    let stub_wasm = tempdir.path().join("stub.wasm");
+    runtime.block_on(
+        crate::ComponentGenerator {
+            wit_paths: &[tempdir.path()],
+            worlds: &["stub-p3"],
+            features: &[],
+            all_features: false,
+            bindings_module: None,
+            python_path: &[py_dir],
+            module_worlds: &[],
+            app_name: "stub_app",
+            output_path: &stub_wasm,
+            add_to_linker: None,
+            stub_wasi: true,
+            import_interface_names: &std::collections::HashMap::new(),
+            export_interface_names: &std::collections::HashMap::new(),
+            intersect_world: None,
+            registry_config: None,
+            default_registries: false,
+            target: Some(crate::Target::Wasip3(crate::Multithreading::Disabled)),
+        }
+        .generate(),
+    )?;
+
+    let empty_linker = Linker::<Ctx>::new(&super::ENGINE);
+    let stub_component =
+        wasmtime::component::Component::new(&super::ENGINE, fs::read(&stub_wasm)?)?;
+    let stub_instance =
+        runtime.block_on(empty_linker.instantiate_async(&mut store, &stub_component))?;
+    let stub_func = stub_instance.get_typed_func::<(), (u32,)>(&mut store, "run")?;
+    let (ans,) = runtime.block_on(
+        store.run_concurrent(async |store| stub_func.call_concurrent(store, ()).await),
+    )??;
+    assert_eq!(ans, 42);
 
     Ok(())
 }

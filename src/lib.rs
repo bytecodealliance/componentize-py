@@ -786,7 +786,23 @@ impl ComponentGenerator<'_> {
             )?
             .need_async();
 
-            if need_async {
+            let has_wasip3_world = resolve.worlds[world]
+                .imports
+                .keys()
+                .chain(resolve.worlds[world].exports.keys())
+                .any(|key| match key {
+                    WorldKey::Interface(id) => resolve.interfaces[*id].package.is_some_and(|pkg| {
+                        let name = &resolve.packages[pkg].name;
+                        name.namespace == "wasi"
+                            && name
+                                .version
+                                .as_ref()
+                                .is_some_and(|v| v.major == 0 && v.minor == 3)
+                    }),
+                    WorldKey::Name(_) => false,
+                });
+
+            if need_async || has_wasip3_world {
                 Target::Wasip3(Multithreading::Disabled)
             } else {
                 Target::Wasip2
@@ -886,10 +902,10 @@ impl ComponentGenerator<'_> {
             &stream_and_future_indexes,
         )?;
 
-        let component = link::link_libraries(&libraries)?;
+        let component = link::link_libraries(&libraries, target)?;
 
         let stubbed_component = if self.stub_wasi {
-            stubwasi::link_stub_modules(libraries)?
+            stubwasi::link_stub_modules(libraries, target)?
         } else {
             None
         };
