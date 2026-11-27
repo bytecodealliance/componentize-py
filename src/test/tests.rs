@@ -148,8 +148,10 @@ struct FooHost;
 impl super::Host for FooHost {
     type World = foo_sdk::FooWorldUnion;
 
-    fn add_to_linker(_linker: &mut Linker<Ctx>) -> Result<()> {
-        unreachable!()
+    fn add_to_linker(linker: &mut Linker<Ctx>) -> Result<()> {
+        wasmtime_wasi::p2::add_to_linker_async(linker)?;
+        foo_sdk::FooWorldUnion::add_to_linker::<_, HasSelf<_>>(linker, |ctx| ctx)?;
+        Ok(())
     }
 
     async fn instantiate_pre(store: &mut Store<Ctx>, pre: InstancePre<Ctx>) -> Result<Self::World> {
@@ -928,7 +930,7 @@ fn multiworld_intersect() -> Result<()> {
         }
     }
 
-    let tester = Tester::<Host>::new(
+    let tester = Tester::<FooHost>::new(
         "package dummy:dummy;",
         &[],
         None,
